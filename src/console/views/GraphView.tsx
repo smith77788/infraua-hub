@@ -99,10 +99,10 @@ export function GraphView() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Knowledge graph</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Граф знань</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Everything your clearance permits. Drag to reposition, scroll to zoom, click a node to
-            inspect it.
+            Усе, що дозволяє ваш допуск. Тягніть, щоб пересунути, крутіть для масштабу, клацніть
+            вузол, щоб оглянути.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -112,7 +112,7 @@ export function GraphView() {
             onClick={() => downloadJson("palanter-graph.json", graph.data)}
             disabled={nodes.length === 0}
           >
-            <Download className="h-3.5 w-3.5" /> Export
+            <Download className="h-3.5 w-3.5" /> Експорт
           </Button>
           <Button
             variant="outline"
@@ -120,25 +120,25 @@ export function GraphView() {
             onClick={() => graph.refetch()}
             loading={graph.isFetching}
           >
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            <RefreshCw className="h-3.5 w-3.5" /> Оновити
           </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="Entities" value={formatNumber(nodes.length)} />
-        <StatTile label="Relations" value={formatNumber(edges.length)} />
+        <StatTile label="Сутності" value={formatNumber(nodes.length)} />
+        <StatTile label="Звʼязки" value={formatNumber(edges.length)} />
         <StatTile
-          label="Shown"
+          label="Показано"
           value={formatNumber(filtered.nodes.length)}
-          hint={filtered.nodes.length !== nodes.length ? "filtered" : "all"}
+          hint={filtered.nodes.length !== nodes.length ? "відфільтровано" : "усі"}
         />
         <StatTile
-          label="Isolated"
+          label="Ізольовані"
           value={formatNumber(
             nodes.filter((n) => !edges.some((e) => e.source === n.id || e.target === n.id)).length,
           )}
-          hint="no relations"
+          hint="без звʼязків"
         />
       </div>
 
@@ -148,19 +148,19 @@ export function GraphView() {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-9"
-              placeholder="Filter by label or id…"
+              placeholder="Фільтр за назвою або id…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              aria-label="Filter entities"
+              aria-label="Фільтр сутностей"
             />
           </div>
           <Select
             className="w-auto"
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value as NodeType | "all")}
-            aria-label="Filter by entity type"
+            aria-label="Фільтр за типом сутності"
           >
-            <option value="all">All types</option>
+            <option value="all">Усі типи</option>
             {NODE_TYPES.map((t) => (
               <option key={t} value={t}>
                 {t} ({typeCounts.get(t) ?? 0})
@@ -171,18 +171,18 @@ export function GraphView() {
             className="w-auto"
             value={colorBy}
             onChange={(e) => setColorBy(e.target.value as "type" | "clearance")}
-            aria-label="Colour nodes by"
+            aria-label="Колір вузлів за"
           >
-            <option value="type">Colour: entity type</option>
-            <option value="clearance">Colour: clearance</option>
+            <option value="type">Колір: тип сутності</option>
+            <option value="clearance">Колір: допуск</option>
           </Select>
         </div>
 
         {nodes.length === 0 ? (
           <EmptyState
             icon={Network}
-            title="The graph is empty"
-            description="Nothing has been ingested yet, or everything in it sits above your clearance. Start from the Ingest view."
+            title="Граф порожній"
+            description="Ще нічого не завантажено, або все в ньому вище вашого допуску. Почніть з розділу «Завантаження»."
           />
         ) : (
           <div className="grid lg:grid-cols-[1fr_280px]">
@@ -208,7 +208,7 @@ export function GraphView() {
                     <button
                       onClick={() => setSelected(null)}
                       className="text-muted-foreground hover:text-foreground"
-                      aria-label="Clear selection"
+                      aria-label="Зняти вибір"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -221,7 +221,7 @@ export function GraphView() {
 
                   {Object.keys(selected.properties).length > 0 && (
                     <div>
-                      <p className="field-label">Properties</p>
+                      <p className="field-label">Властивості</p>
                       <dl className="space-y-1">
                         {Object.entries(selected.properties).map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-2 text-xs">
@@ -234,9 +234,9 @@ export function GraphView() {
                   )}
 
                   <div>
-                    <p className="field-label">Relations ({neighbours.length})</p>
+                    <p className="field-label">Звʼязки ({neighbours.length})</p>
                     {neighbours.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">None at your clearance.</p>
+                      <p className="text-xs text-muted-foreground">Немає на вашому допуску.</p>
                     ) : (
                       <ul className="space-y-1">
                         {neighbours.map(({ edge, direction, other, otherId }, i) => (
@@ -264,7 +264,7 @@ export function GraphView() {
 
                   {selected.source_doc_ids.length > 0 && (
                     <div>
-                      <p className="field-label">Provenance</p>
+                      <p className="field-label">Походження</p>
                       <p className="text-xs text-muted-foreground">
                         Asserted by {selected.source_doc_ids.length} source document
                         {selected.source_doc_ids.length === 1 ? "" : "s"}.
@@ -275,10 +275,10 @@ export function GraphView() {
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Select a node to inspect its properties, relations and provenance.
+                    Оберіть вузол, щоб оглянути його властивості, звʼязки та походження.
                   </p>
                   <div>
-                    <p className="field-label">Legend</p>
+                    <p className="field-label">Легенда</p>
                     <div className="flex flex-wrap gap-1.5">
                       {colorBy === "type"
                         ? NODE_TYPES.map((t) => (

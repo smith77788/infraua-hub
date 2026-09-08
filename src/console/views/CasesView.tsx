@@ -81,7 +81,7 @@ function CaseList({ cases, onOpen }: { cases: AnalystCase[]; onOpen: (id: string
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Cases</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Справи</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           A case keeps the question, the findings gathered against it, and what you concluded. Its
           classification rises to cover whatever you attach, and never falls.
@@ -98,13 +98,13 @@ function CaseList({ cases, onOpen }: { cases: AnalystCase[]; onOpen: (id: string
         >
           <Input
             className="flex-1"
-            placeholder="New case title — e.g. Q3 vendor affiliations"
+            placeholder="Назва нової справи — напр. Афіліації постачальників за III квартал"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            aria-label="New case title"
+            aria-label="Назва нової справи"
           />
           <Button type="submit" loading={create.isPending} disabled={!title.trim()}>
-            <FolderPlus className="h-3.5 w-3.5" /> Create
+            <FolderPlus className="h-3.5 w-3.5" /> Створити
           </Button>
         </form>
         {create.isError && (
@@ -118,13 +118,13 @@ function CaseList({ cases, onOpen }: { cases: AnalystCase[]; onOpen: (id: string
         <Panel>
           <EmptyState
             icon={Folders}
-            title="No cases at your clearance"
-            description="Create one above. If a colleague raised a shared case above your level by attaching a sensitive finding, it will have dropped out of this list."
+            title="Справ на вашому допуску немає"
+            description="Створіть її вище. Якщо колега підняв класифікацію спільної справи вище вашого рівня, долучивши чутливий висновок, вона зникла з цього списку."
           />
         </Panel>
       ) : (
         <Panel>
-          <PanelHeader title="Open cases" description={`${cases.length}`} />
+          <PanelHeader title="Відкриті справи" description={`${cases.length}`} />
           <ul className="divide-y divide-border">
             {cases.map((c) => (
               <li key={c.id}>
@@ -198,7 +198,7 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
     return (
       <div className="mx-auto max-w-4xl space-y-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
+          <ArrowLeft className="h-3.5 w-3.5" /> Назад
         </Button>
         <ErrorNote>{(detail.error as Error).message}</ErrorNote>
       </div>
@@ -210,7 +210,7 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <Button variant="ghost" size="sm" onClick={onBack}>
-        <ArrowLeft className="h-3.5 w-3.5" /> All cases
+        <ArrowLeft className="h-3.5 w-3.5" /> Усі справи
       </Button>
 
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -242,8 +242,8 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
 
       <Panel>
         <PanelHeader
-          title="Add a finding"
-          description="Runs the investigation and attaches the result, so what is stored is what the audit log holds"
+          title="Додати висновок"
+          description="Запускає розслідування і долучає результат, тож збережене збігається з тим, що в журналі аудиту"
         />
         <form
           className="flex flex-col gap-2 p-4 sm:flex-row"
@@ -256,14 +256,14 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-9"
-              placeholder="Ask a question to attach its answer…"
+              placeholder="Поставте питання, щоб долучити відповідь…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              aria-label="Investigation query to attach"
+              aria-label="Запит розслідування для долучення"
             />
           </div>
           <Button type="submit" loading={attach.isPending} disabled={!query.trim()}>
-            Investigate &amp; attach
+            Дослідити й долучити
           </Button>
         </form>
         {attach.isError && (
@@ -274,11 +274,11 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
       </Panel>
 
       <Panel>
-        <PanelHeader title="Findings" description={`${c.findings.length}`} />
+        <PanelHeader title="Висновки" description={`${c.findings.length}`} />
         {c.findings.length === 0 ? (
           <EmptyState
-            title="Nothing attached yet"
-            description="Every finding carries the audit sequence of the investigation that produced it, so it stays checkable later."
+            title="Ще нічого не долучено"
+            description="Кожен висновок несе номер аудиту розслідування, яке його дало, тож його можна перевірити пізніше."
           />
         ) : (
           <ul className="divide-y divide-border">
@@ -290,7 +290,7 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
                     <ClearanceBadge level={f.clearance} />
                     <span
                       className="font-mono text-[11px] text-muted-foreground"
-                      title="Audit sequence — replay the full chain from here"
+                      title="Номер аудиту — відтворити повний ланцюжок звідси"
                     >
                       #{f.auditSeq}
                     </span>
@@ -308,7 +308,7 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
       </Panel>
 
       <Panel>
-        <PanelHeader title="Notes" description={`${c.notes.length}`} />
+        <PanelHeader title="Нотатки" description={`${c.notes.length}`} />
         <form
           className="space-y-2 p-4"
           onSubmit={(e) => {
@@ -318,13 +318,13 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
         >
           <Textarea
             className="min-h-[72px]"
-            placeholder="What did you conclude, and what still needs checking?"
+            placeholder="До чого ви дійшли і що ще треба перевірити?"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            aria-label="Case note"
+            aria-label="Нотатка до справи"
           />
           <Button type="submit" size="sm" loading={addNote.isPending} disabled={!note.trim()}>
-            <MessageSquarePlus className="h-3.5 w-3.5" /> Add note
+            <MessageSquarePlus className="h-3.5 w-3.5" /> Додати нотатку
           </Button>
           {addNote.isError && <ErrorNote>{(addNote.error as Error).message}</ErrorNote>}
         </form>
@@ -345,7 +345,7 @@ function CaseDetail({ id, onBack }: { id: string; onBack: () => void }) {
 
       {c.pinnedEntityIds.length > 0 && (
         <Panel>
-          <PanelHeader title="Pinned entities" description={`${c.pinnedEntityIds.length}`} />
+          <PanelHeader title="Закріплені сутності" description={`${c.pinnedEntityIds.length}`} />
           <div className="flex flex-wrap gap-1.5 p-4">
             {c.pinnedEntityIds.map((entityId) => (
               <Badge

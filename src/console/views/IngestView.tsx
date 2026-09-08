@@ -18,7 +18,12 @@ import { useSession } from "@/console/hooks/useSession";
 import { CLEARANCE_NAMES, CLEARANCE_ORDER, type StructuredMapping } from "@/console/lib/types";
 import { clearanceName } from "@/console/lib/format";
 
-const SECTORS = ["Corporate", "Defense"] as const;
+// The value is what the server and the ontology expect and stays English; only
+// the label is translated.
+const SECTORS = [
+  { value: "Corporate", label: "Корпоративний" },
+  { value: "Defense", label: "Оборонний (тільки аналіз, не цілевказання)" },
+] as const;
 
 const SAMPLE_TEXT =
   "Compliance audit: Director John Doe approved a no-bid contract worth $1,500,000 with Shell Consulting LLC, a hidden beneficiary vendor.";
@@ -57,17 +62,17 @@ export function IngestView() {
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Ingest</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Завантаження</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Free text goes through entity extraction; already-tabular data maps straight onto the
-          ontology. Both write to the same graph and the same audit chain.
+          Вільний текст проходить через видобування сутностей; уже табличні дані лягають прямо на
+          онтологію. Обидва шляхи пишуть в один граф і один ланцюжок аудиту.
         </p>
       </div>
 
       <Tabs
         tabs={[
-          { id: "text" as const, label: "Free text" },
-          { id: "structured" as const, label: "Structured / CSV" },
+          { id: "text" as const, label: "Вільний текст" },
+          { id: "structured" as const, label: "Структуровані / CSV" },
         ]}
         value={tab}
         onChange={setTab}
@@ -93,7 +98,7 @@ function ClearanceSelect({
 }) {
   return (
     <Field
-      label="Classification"
+      label="Класифікація"
       hint={`You can classify at or below your own clearance (${clearanceName(maxClearance)}). The server clamps this regardless of what the console sends.`}
     >
       <Select value={value} onChange={(e) => onChange(Number(e.target.value))}>
@@ -121,14 +126,14 @@ function ResultSummary({
   return (
     <div className="space-y-3 rounded-md border border-clearance-public/40 bg-clearance-public/5 p-3">
       <p className="flex items-center gap-2 text-sm font-medium text-clearance-public">
-        <CheckCircle2 className="h-4 w-4" /> Ingested
+        <CheckCircle2 className="h-4 w-4" /> Завантажено
       </p>
       <div className="flex flex-wrap gap-1.5">
         <Badge className="border-border bg-muted text-muted-foreground">
-          {nodesCreated.length} entities
+          {nodesCreated.length} сутностей
         </Badge>
         <Badge className="border-border bg-muted text-muted-foreground">
-          {edgesCreated.length} relations
+          {edgesCreated.length} звʼязків
         </Badge>
         {extra}
       </div>
@@ -148,8 +153,8 @@ function ResultSummary({
             ))}
           </ul>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
-            Rejections are shown rather than silently dropped: a relation the ontology refuses is
-            usually a mapping mistake worth seeing.
+            Відхилення показуються, а не зникають мовчки: звʼязок, який онтологія не прийняла, — це
+            зазвичай помилка зіставлення, яку варто побачити.
           </p>
         </div>
       )}
@@ -168,7 +173,7 @@ function TextIngestForm({
 }) {
   const [text, setText] = React.useState("");
   const [source, setSource] = React.useState("");
-  const [sector, setSector] = React.useState<string>(SECTORS[0]);
+  const [sector, setSector] = React.useState<string>(SECTORS[0].value);
   const [level, setLevel] = React.useState(Math.min(1, maxClearance));
 
   const mutation = useMutation({
@@ -187,10 +192,10 @@ function TextIngestForm({
       <PanelHeader
         title={
           <span className="flex items-center gap-2">
-            <FileText className="h-4 w-4" /> Free-text document
+            <FileText className="h-4 w-4" /> Документ вільним текстом
           </span>
         }
-        description="Entities and relations are extracted, then validated against config/ontology.json"
+        description="Сутності та звʼязки видобуваються, потім перевіряються за config/ontology.json"
         actions={
           <Button
             variant="ghost"
@@ -200,7 +205,7 @@ function TextIngestForm({
               setSource("Audit_Report.txt");
             }}
           >
-            Use example
+            Приклад
           </Button>
         }
       />
@@ -212,7 +217,7 @@ function TextIngestForm({
         }}
       >
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Source" hint="Where this came from — kept as provenance.">
+          <Field label="Джерело" hint="Звідки це — зберігається як походження.">
             <Input
               placeholder="Audit_Report.txt"
               value={source}
@@ -220,11 +225,11 @@ function TextIngestForm({
               required
             />
           </Field>
-          <Field label="Sector">
+          <Field label="Сектор">
             <Select value={sector} onChange={(e) => setSector(e.target.value)}>
-              {SECTORS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+              {SECTORS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </Select>
@@ -232,10 +237,10 @@ function TextIngestForm({
           <ClearanceSelect value={level} onChange={setLevel} maxClearance={maxClearance} />
         </div>
 
-        <Field label="Document text">
+        <Field label="Текст документа">
           <Textarea
             className="min-h-[160px]"
-            placeholder="Paste the document…"
+            placeholder="Вставте документ…"
             value={text}
             onChange={(e) => setText(e.target.value)}
             required
@@ -256,7 +261,7 @@ function TextIngestForm({
           loading={mutation.isPending}
           disabled={!text.trim() || !source.trim()}
         >
-          <Upload className="h-3.5 w-3.5" /> Ingest document
+          <Upload className="h-3.5 w-3.5" /> Завантажити документ
         </Button>
       </form>
     </Panel>
@@ -275,7 +280,7 @@ function StructuredIngestForm({
   const [csv, setCsv] = React.useState("");
   const [mappingText, setMappingText] = React.useState(JSON.stringify(SAMPLE_MAPPING, null, 2));
   const [source, setSource] = React.useState("");
-  const [sector, setSector] = React.useState<string>(SECTORS[0]);
+  const [sector, setSector] = React.useState<string>(SECTORS[0].value);
   const [level, setLevel] = React.useState(Math.min(1, maxClearance));
   const [mappingError, setMappingError] = React.useState<string | null>(null);
 
@@ -328,10 +333,10 @@ function StructuredIngestForm({
       <PanelHeader
         title={
           <span className="flex items-center gap-2">
-            <FileSpreadsheet className="h-4 w-4" /> Structured records
+            <FileSpreadsheet className="h-4 w-4" /> Структуровані записи
           </span>
         }
-        description="A field mapping projects rows straight onto the ontology — no regex over prose"
+        description="Зіставлення полів проєктує рядки прямо на онтологію — жодних регулярок по прозі"
         actions={
           <Button
             variant="ghost"
@@ -342,7 +347,7 @@ function StructuredIngestForm({
               setMappingText(JSON.stringify(SAMPLE_MAPPING, null, 2));
             }}
           >
-            Use example
+            Приклад
           </Button>
         }
       />
@@ -359,7 +364,7 @@ function StructuredIngestForm({
         }}
       >
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Source">
+          <Field label="Джерело">
             <Input
               placeholder="roster.csv"
               value={source}
@@ -367,11 +372,11 @@ function StructuredIngestForm({
               required
             />
           </Field>
-          <Field label="Sector">
+          <Field label="Сектор">
             <Select value={sector} onChange={(e) => setSector(e.target.value)}>
-              {SECTORS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+              {SECTORS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </Select>
@@ -407,8 +412,8 @@ function StructuredIngestForm({
         </Field>
 
         <Field
-          label="Field mapping"
-          hint="idField / fromField / toField must name columns present in the CSV above."
+          label="Зіставлення полів"
+          hint="idField / fromField / toField мають називати колонки з CSV вище."
         >
           <Textarea
             className="min-h-[180px] font-mono text-xs"
@@ -419,7 +424,7 @@ function StructuredIngestForm({
         </Field>
 
         {!parsedMapping.ok && (
-          <ErrorNote>Mapping is not valid JSON: {parsedMapping.error}</ErrorNote>
+          <ErrorNote>Зіставлення не є коректним JSON: {parsedMapping.error}</ErrorNote>
         )}
         {mappingError && <ErrorNote>{mappingError}</ErrorNote>}
         {mutation.isError && <ErrorNote>{(mutation.error as Error).message}</ErrorNote>}
@@ -441,7 +446,7 @@ function StructuredIngestForm({
           loading={mutation.isPending}
           disabled={!csv.trim() || !source.trim() || !parsedMapping.ok}
         >
-          <Upload className="h-3.5 w-3.5" /> Ingest records
+          <Upload className="h-3.5 w-3.5" /> Завантажити записи
         </Button>
       </form>
     </Panel>

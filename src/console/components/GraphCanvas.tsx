@@ -425,7 +425,7 @@ export function GraphCanvas({
         onClick={resetView}
         className="absolute bottom-2 right-2 rounded border border-border bg-card/90 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
       >
-        Reset view
+        Скинути вигляд
       </button>
     </div>
   );

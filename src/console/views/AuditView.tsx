@@ -90,10 +90,10 @@ export function AuditView() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Audit trail</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Журнал аудиту</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Every ingestion, investigation and blocked query, hash-chained so that altering one past
-            entry breaks verification for every entry after it.
+            Кожне завантаження, розслідування та заблокований запит — у ланцюжку хешів, тож зміна
+            одного минулого запису ламає перевірку для всіх наступних.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -103,7 +103,7 @@ export function AuditView() {
             onClick={() => downloadJson("palanter-audit.json", audit.data)}
             disabled={entries.length === 0}
           >
-            <Download className="h-3.5 w-3.5" /> Export
+            <Download className="h-3.5 w-3.5" /> Експорт
           </Button>
           <Button
             variant="outline"
@@ -111,7 +111,7 @@ export function AuditView() {
             onClick={() => audit.refetch()}
             loading={audit.isFetching}
           >
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            <RefreshCw className="h-3.5 w-3.5" /> Оновити
           </Button>
         </div>
       </div>
@@ -138,13 +138,13 @@ export function AuditView() {
               )}
             >
               {verification.valid
-                ? "Chain intact"
-                : `Chain broken at sequence #${verification.brokenAtSeq}`}
+                ? "Ланцюжок цілий"
+                : `Ланцюжок порушено на записі #${verification.brokenAtSeq}`}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {verification.valid
-                ? `All ${entries.length} entries recomputed to their recorded hashes. The full query → plan → code → result chain is replayable.`
-                : "An entry was altered or removed after it was written. Everything from that sequence onward can no longer be trusted as an unmodified record."}
+                ? `Усі ${entries.length} записів перераховано до їхніх хешів. Повний ланцюжок «запит → план → код → результат» можна відтворити.`
+                : "Запис змінили або видалили після написання. Усе від цього номера далі більше не можна вважати незміненим."}
             </p>
           </div>
         </div>
@@ -154,18 +154,18 @@ export function AuditView() {
         <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
           <Input
             className="min-w-[180px] flex-1"
-            placeholder="Search actor, action or details…"
+            placeholder="Пошук за виконавцем, дією чи деталями…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search audit entries"
+            aria-label="Пошук записів аудиту"
           />
           <Select
             className="w-auto"
             value={actionFilter}
             onChange={(e) => setActionFilter(e.target.value)}
-            aria-label="Filter by action"
+            aria-label="Фільтр за дією"
           >
-            <option value="all">All actions</option>
+            <option value="all">Усі дії</option>
             {actions.map((a) => (
               <option key={a} value={a}>
                 {a}
@@ -173,18 +173,18 @@ export function AuditView() {
             ))}
           </Select>
           <span className="text-xs text-muted-foreground">
-            {filtered.length} of {entries.length}
+            {filtered.length} з {entries.length}
           </span>
         </div>
 
         {filtered.length === 0 ? (
           <EmptyState
             icon={ScrollText}
-            title={entries.length === 0 ? "Nothing logged yet" : "No entries match"}
+            title={entries.length === 0 ? "Записів ще немає" : "Нічого не збіглося"}
             description={
               entries.length === 0
-                ? "The log fills as soon as you ingest a document or run an investigation."
-                : "Try a broader search or a different action filter."
+                ? "Журнал наповнюється щойно ви завантажите документ або запустите розслідування."
+                : "Спробуйте ширший пошук або інший фільтр дій."
             }
           />
         ) : (
@@ -250,19 +250,19 @@ function AuditRow({
         <div className="animate-fade-in space-y-3 border-t border-border bg-muted/20 px-4 py-3 pl-12">
           <div className="grid gap-2 text-[11px] sm:grid-cols-2">
             <div>
-              <span className="text-muted-foreground">Recorded </span>
+              <span className="text-muted-foreground">Записано </span>
               <span className="font-mono">{formatTimestamp(entry.timestamp)}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Actor </span>
+              <span className="text-muted-foreground">Виконавець </span>
               <span className="font-mono">{entry.actor}</span>
             </div>
             <div title={entry.prev_hash}>
-              <span className="text-muted-foreground">Previous hash </span>
+              <span className="text-muted-foreground">Попередній хеш </span>
               <span className="font-mono">{ellipsize(entry.prev_hash, 20)}</span>
             </div>
             <div title={entry.hash}>
-              <span className="text-muted-foreground">This hash </span>
+              <span className="text-muted-foreground">Цей хеш </span>
               <span className="font-mono">{ellipsize(entry.hash, 20)}</span>
             </div>
           </div>

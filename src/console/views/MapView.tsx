@@ -223,18 +223,18 @@ export function MapView() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Map</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Мапа</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Entities carrying coordinates, and the relations between them. Nothing is geocoded — an
-          entity appears here only if its own data says where it is.
+          Сутності з координатами та звʼязки між ними. Нічого не геокодується — обʼєкт зʼявляється
+          тут лише якщо його власні дані кажуть, де він.
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="Placed" value={placed.length} hint="have lat/lon" />
-        <StatTile label="Routes" value={routes.length} hint="both ends placed" />
-        <StatTile label="Unplaced" value={unplacedCount} hint="no coordinates" />
-        <StatTile label="Total entities" value={graph.data?.nodes.length ?? 0} />
+        <StatTile label="Розміщено" value={placed.length} hint="мають lat/lon" />
+        <StatTile label="Маршрути" value={routes.length} hint="обидва кінці розміщені" />
+        <StatTile label="Не розміщено" value={unplacedCount} hint="без координат" />
+        <StatTile label="Усього сутностей" value={graph.data?.nodes.length ?? 0} />
       </div>
 
       {mapError && (
@@ -246,9 +246,11 @@ export function MapView() {
 
       <Panel className="overflow-hidden">
         <PanelHeader
-          title="Geospatial view"
+          title="Геопросторовий вигляд"
           description={
-            placed.length === 0 ? "No placed entities" : `${placed.length} entities placed`
+            placed.length === 0
+              ? "Розміщених сутностей немає"
+              : `Розміщено сутностей: ${placed.length}`
           }
         />
         <div className="relative">
@@ -257,8 +259,8 @@ export function MapView() {
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/70">
               <EmptyState
                 icon={Globe2}
-                title="No entity has coordinates yet"
-                description="Ingest records with lat and lon properties — for example a Location entity mapped from a CSV with those columns — and they will appear here."
+                title="Жодна сутність ще не має координат"
+                description="Завантажте записи з властивостями lat і lon — наприклад сутність Location із CSV із такими колонками — і вони зʼявляться тут."
               />
             </div>
           )}

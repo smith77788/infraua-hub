@@ -67,40 +67,44 @@ export function AnalyticsView() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Analysis</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Аналіз</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Computed over your view of the graph, not the whole store — an entity above your clearance
-          cannot influence the scores of one below it, which would reveal that it exists.
+          Обчислено за вашим виглядом графа, а не за всім сховищем — сутність вище вашого допуску не
+          може впливати на оцінки тих, що нижче, бо це виказало б її існування.
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <StatTile label="Entities" value={formatNumber(data.totals.nodes)} />
-        <StatTile label="Relations" value={formatNumber(data.totals.edges)} />
+        <StatTile label="Сутності" value={formatNumber(data.totals.nodes)} />
+        <StatTile label="Звʼязки" value={formatNumber(data.totals.edges)} />
         <StatTile
-          label="Clusters"
+          label="Кластери"
           value={formatNumber(data.totals.components)}
-          hint={`largest ${data.totals.largestComponent}`}
+          hint={`найбільший ${data.totals.largestComponent}`}
         />
-        <StatTile label="Isolated" value={formatNumber(data.totals.isolated)} hint="no relations" />
         <StatTile
-          label="Severe risk"
+          label="Ізольовані"
+          value={formatNumber(data.totals.isolated)}
+          hint="без звʼязків"
+        />
+        <StatTile
+          label="Критичний ризик"
           value={formatNumber(data.riskBands.severe)}
-          hint={`${data.riskBands.high} high`}
+          hint={`${data.riskBands.high} високих`}
           tone={data.riskBands.severe > 0 ? "bad" : data.riskBands.high > 0 ? "warn" : "good"}
         />
       </div>
 
       <Tabs
         tabs={[
-          { id: "risk" as const, label: "Risk", count: scored.length },
-          { id: "structure" as const, label: "Structure" },
+          { id: "risk" as const, label: "Ризик", count: scored.length },
+          { id: "structure" as const, label: "Структура" },
           {
             id: "duplicates" as const,
-            label: "Duplicates",
+            label: "Дублікати",
             count: data.duplicateCandidates.length,
           },
-          { id: "paths" as const, label: "Connections" },
+          { id: "paths" as const, label: "Звʼязність" },
         ]}
         value={tab}
         onChange={setTab}
@@ -111,14 +115,14 @@ export function AnalyticsView() {
         <div className="grid gap-4 lg:grid-cols-2">
           <Panel>
             <PanelHeader
-              title="Brokerage (betweenness)"
-              description="Entities sitting on the paths between others — where intermediaries show up"
+              title="Посередництво (betweenness)"
+              description="Сутності, що лежать на шляхах між іншими — там, де зʼявляються посередники"
             />
             {data.centrality.every((c) => c.raw === 0) ? (
               <EmptyState
                 icon={GitBranch}
-                title="Nobody brokers anything"
-                description="Either the graph has no paths of length two or more, or every entity has an equally direct alternative route. Neither is a problem — there is simply no intermediary position to find."
+                title="Посередників немає"
+                description="Або в графі немає шляхів довжиною два і більше, або в кожної сутності є так само прямий обхідний маршрут. Це не проблема — просто немає позиції посередника."
               />
             ) : (
               <ul className="divide-y divide-border">
@@ -145,9 +149,9 @@ export function AnalyticsView() {
           </Panel>
 
           <Panel>
-            <PanelHeader title="Most connected" description="Raw relation count" />
+            <PanelHeader title="Найбільш звʼязані" description="Кількість звʼязків" />
             {data.connectivity.length === 0 ? (
-              <EmptyState title="No entities" />
+              <EmptyState title="Сутностей немає" />
             ) : (
               <ul className="divide-y divide-border">
                 {data.connectivity.map((entry) => (
@@ -183,7 +187,7 @@ function RiskPanel({ scored, total }: { scored: RiskAssessment[]; total: number 
       <Panel>
         <EmptyState
           icon={ShieldAlert}
-          title="No entity triggered a risk signal"
+          title="Жодна сутність не спрацювала на сигнал ризику"
           description={`All ${total} visible entities scored zero. Signals and their weights are in config/risk_signals.json — if you expected a hit, the thresholds there are the place to look.`}
         />
       </Panel>
@@ -193,8 +197,8 @@ function RiskPanel({ scored, total }: { scored: RiskAssessment[]; total: number 
   return (
     <Panel>
       <PanelHeader
-        title="Risk assessments"
-        description="Click an entity to see every signal behind its score"
+        title="Оцінки ризику"
+        description="Клацніть сутність, щоб побачити кожен сигнал за її оцінкою"
       />
       <ul className="divide-y divide-border">
         {scored.map((assessment) => {
@@ -249,9 +253,9 @@ function RiskPanel({ scored, total }: { scored: RiskAssessment[]; total: number 
                     </li>
                   ))}
                   <li className="pt-0.5 text-[11px] text-muted-foreground">
-                    Scores are capped at 100, so the contributions above may sum higher. Weights
-                    live in <span className="font-mono">config/risk_signals.json</span> — what
-                    counts as risky is your judgement, not the platform&apos;s.
+                    Оцінки обмежені сотнею, тож внески вище можуть у сумі перевищувати її. Ваги
+                    лежать у<span className="font-mono"> config/risk_signals.json</span> — що
+                    вважати ризиком, вирішуєте ви, а не платформа.
                   </li>
                 </ul>
               )}
@@ -279,8 +283,8 @@ function DuplicatesPanel({
       <Panel>
         <EmptyState
           icon={Copy}
-          title="No duplicate candidates"
-          description="No two entities of the same type share a name, an identifier, or enough corroborating structure to be worth proposing."
+          title="Кандидатів у дублікати немає"
+          description="Жодні дві сутності одного типу не мають спільної назви, ідентифікатора чи достатньої підтверджувальної структури."
         />
       </Panel>
     );
@@ -289,8 +293,8 @@ function DuplicatesPanel({
   return (
     <Panel>
       <PanelHeader
-        title="Possible duplicates"
-        description="Proposed, never merged — a wrong merge invents a relationship between two real people"
+        title="Можливі дублікати"
+        description="Пропонуються, але ніколи не обʼєднуються — помилкове обʼєднання вигадує звʼязок між двома реальними людьми"
       />
       <ul className="divide-y divide-border">
         {candidates.map((candidate, i) => (
@@ -308,7 +312,7 @@ function DuplicatesPanel({
                   "ml-auto shrink-0 font-mono text-xs tabular-nums",
                   candidate.confidence >= 0.8 ? "text-clearance-secret" : "text-muted-foreground",
                 )}
-                title="Confidence — a strength of case, never a decision"
+                title="Впевненість — сила аргументу, а не рішення"
               >
                 {candidate.confidence.toFixed(2)}
               </span>
@@ -325,8 +329,8 @@ function DuplicatesPanel({
       </ul>
       <p className="flex items-start gap-2 border-t border-border px-4 py-3 text-[11px] leading-relaxed text-muted-foreground">
         <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        These are proposals for a person to judge. Merging automatically on a similarity score would
-        rewrite history in a system whose whole value is that its history is auditable.
+        Це пропозиції для людського рішення. Автоматичне обʼєднання за оцінкою подібності переписало
+        б історію в системі, вся цінність якої — у перевірності цієї історії.
       </p>
     </Panel>
   );
@@ -350,8 +354,8 @@ function PathsPanel({ apiKey }: { apiKey: string }) {
   return (
     <Panel>
       <PanelHeader
-        title="How are these connected?"
-        description="Every equally-short route, so no single path reads as the connection"
+        title="Як вони повʼязані?"
+        description="Усі однаково короткі маршрути, щоб жоден окремий не читався як «той самий» звʼязок"
       />
       <form
         className="flex flex-col gap-2 border-b border-border p-4 sm:flex-row"
@@ -360,16 +364,16 @@ function PathsPanel({ apiKey }: { apiKey: string }) {
           if (from && to && from !== to) lookup.mutate();
         }}
       >
-        <Select value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From entity">
-          <option value="">From…</option>
+        <Select value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Від сутності">
+          <option value="">Від…</option>
           {nodes.map((n) => (
             <option key={n.id} value={n.id}>
               {n.label} ({n.type})
             </option>
           ))}
         </Select>
-        <Select value={to} onChange={(e) => setTo(e.target.value)} aria-label="To entity">
-          <option value="">To…</option>
+        <Select value={to} onChange={(e) => setTo(e.target.value)} aria-label="До сутності">
+          <option value="">До…</option>
           {nodes.map((n) => (
             <option key={n.id} value={n.id}>
               {n.label} ({n.type})
@@ -377,7 +381,7 @@ function PathsPanel({ apiKey }: { apiKey: string }) {
           ))}
         </Select>
         <Button type="submit" loading={lookup.isPending} disabled={!from || !to || from === to}>
-          <Route className="h-3.5 w-3.5" /> Trace
+          <Route className="h-3.5 w-3.5" /> Простежити
         </Button>
       </form>
 
@@ -391,7 +395,7 @@ function PathsPanel({ apiKey }: { apiKey: string }) {
         <div className="p-4">
           {!result.connected ? (
             <EmptyState
-              title="No connection at your clearance"
+              title="Звʼязку на вашому допуску немає"
               description={`${labelFor.get(result.from) ?? result.from} and ${labelFor.get(result.to) ?? result.to} are not linked by any chain of relations you can see. A path may exist above your clearance.`}
             />
           ) : (
@@ -424,8 +428,8 @@ function PathsPanel({ apiKey }: { apiKey: string }) {
       {!result && !lookup.isPending && (
         <EmptyState
           icon={Route}
-          title="Pick two entities"
-          description="Only entities visible at your clearance are listed, and only routes through visible entities are returned."
+          title="Оберіть дві сутності"
+          description="У списку лише сутності, видимі на вашому допуску, і маршрути лише через видимі сутності."
         />
       )}
     </Panel>

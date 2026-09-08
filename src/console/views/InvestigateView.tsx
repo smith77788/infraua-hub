@@ -28,10 +28,10 @@ import { cn } from "@/lib/utils";
 import { entityClasses } from "@/console/lib/format";
 
 const EXAMPLES = [
-  "What is the total contract amount linked to John Doe?",
-  "Which vendors are affiliated with a director?",
-  "What is the distance between the depots?",
-  "Where are the longest reported delays?",
+  "Яка загальна сума контрактів, повʼязаних з John Doe?",
+  "Які постачальники афілійовані з директором?",
+  "Яка відстань між складами?",
+  "Де найдовші зафіксовані затримки?",
 ];
 
 const PLAN_ICONS: Record<PlanStep["action"], React.ComponentType<{ className?: string }>> = {
@@ -75,11 +75,11 @@ export function InvestigateView() {
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Investigate</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Розслідування</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Ask in plain language. Results are filtered to your clearance before they are assembled,
-          and any arithmetic is executed as real code in a sandbox — never produced by a language
-          model.
+          Запитуйте звичайною мовою. Результати фільтруються за вашим допуском ще до складання, а
+          будь-яка арифметика виконується як справжній код у пісочниці — її ніколи не вигадує мовна
+          модель.
         </p>
       </div>
 
@@ -89,14 +89,14 @@ export function InvestigateView() {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="h-10 pl-9"
-              placeholder="e.g. What is the total contract amount linked to John Doe?"
+              placeholder="напр. Яка загальна сума контрактів, повʼязаних з John Doe?"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              aria-label="Investigation query"
+              aria-label="Запит розслідування"
             />
           </div>
           <Button type="submit" className="h-10 sm:w-32" loading={investigation.isPending}>
-            Investigate
+            Дослідити
           </Button>
         </form>
 
@@ -121,8 +121,8 @@ export function InvestigateView() {
         <Panel>
           <EmptyState
             icon={Search}
-            title="No investigation run yet"
-            description="Every run is appended to the audit log with its full plan, so any answer here can be replayed and checked later."
+            title="Розслідувань ще не було"
+            description="Кожен запуск додається до журналу аудиту разом з повним планом, тож будь-яку відповідь можна відтворити й перевірити пізніше."
           />
         </Panel>
       )}
@@ -144,16 +144,16 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
         <PanelHeader
           title={
             <span className="flex items-center gap-2 text-destructive">
-              <Ban className="h-4 w-4" /> Query blocked
+              <Ban className="h-4 w-4" /> Запит заблоковано
             </span>
           }
-          description="Input guardrails rejected this query before it ran."
+          description="Захисні правила відхилили цей запит ще до виконання."
         />
         <div className="space-y-2 p-4">
           <p className="text-sm">{result.summary}</p>
           <p className="text-xs text-muted-foreground">
-            The rejection itself is recorded at audit sequence #{result.auditSeq} — blocked queries
-            are logged, not discarded.
+            Саме відхилення записано в аудит під номером #{result.auditSeq} — заблоковані запити
+            логуються, а не зникають.
           </p>
         </div>
       </Panel>
@@ -166,8 +166,8 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
     <div className="space-y-4">
       <Panel>
         <PanelHeader
-          title="Answer"
-          description={`Audit sequence #${result.auditSeq}`}
+          title="Відповідь"
+          description={`Запис аудиту #${result.auditSeq}`}
           actions={
             <Badge
               className={cn(
@@ -177,8 +177,8 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
               )}
               title={
                 isDeterministic
-                  ? "Rendered from a fixed template over the raw facts — grounded by construction."
-                  : "Generated, then checked against the raw facts before being shown."
+                  ? "Складено за фіксованим шаблоном з первинних фактів — обґрунтовано за побудовою."
+                  : "Згенеровано, потім перевірено за первинними фактами перед показом."
               }
             >
               {result.narrativeSource}
@@ -190,8 +190,8 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
           {!isDeterministic && (
             <p className="flex items-center gap-1.5 text-xs text-clearance-public">
               <Check className="h-3 w-3" />
-              Grounding check passed — every entity and figure in this narrative appears in the
-              retrieved evidence below.
+              Перевірку обґрунтованості пройдено — кожна сутність і кожне число з цього викладу є в
+              наведених нижче доказах.
             </p>
           )}
         </div>
@@ -202,10 +202,10 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
           <PanelHeader
             title={
               <span className="flex items-center gap-2">
-                <Calculator className="h-4 w-4 text-primary" /> Computed result
+                <Calculator className="h-4 w-4 text-primary" /> Обчислений результат
               </span>
             }
-            description="Produced by code executed in the sandbox, not by a model"
+            description="Отримано кодом, виконаним у пісочниці, а не моделлю"
           />
           <div className="space-y-2 p-4">
             <p className="text-sm">{result.computation.description}</p>
@@ -216,7 +216,7 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel>
-          <PanelHeader title="Execution plan" description={`${result.plan.length} steps`} />
+          <PanelHeader title="План виконання" description={`${result.plan.length} кроків`} />
           <ol className="divide-y divide-border">
             {result.plan.map((step) => {
               const Icon = PLAN_ICONS[step.action] ?? Search;
@@ -242,13 +242,13 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
 
         <Panel>
           <PanelHeader
-            title="Evidence"
-            description={`${result.documentHits.length} document${result.documentHits.length === 1 ? "" : "s"} retrieved`}
+            title="Докази"
+            description={`Знайдено документів: ${result.documentHits.length}`}
           />
           {result.documentHits.length === 0 ? (
             <EmptyState
-              title="No documents matched"
-              description="The answer above rests on the graph alone. If you expected document support, the sources may sit above your clearance."
+              title="Жоден документ не збігся"
+              description="Відповідь вище спирається лише на граф. Якщо ви очікували підтвердження документами, джерела можуть бути вище вашого допуску."
             />
           ) : (
             <ul className="divide-y divide-border">
@@ -258,7 +258,7 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
                     <p className="truncate text-xs font-medium">{hit.source}</p>
                     <span
                       className="shrink-0 font-mono text-[11px] text-muted-foreground"
-                      title="Semantic similarity score"
+                      title="Оцінка семантичної подібності"
                     >
                       {hit.score.toFixed(3)}
                     </span>
@@ -278,14 +278,14 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
 
       <Panel>
         <PanelHeader
-          title="Traversed subgraph"
-          description={`${result.subgraph.nodes.length} entities, ${result.subgraph.edges.length} relations`}
+          title="Пройдений підграф"
+          description={`Сутностей: ${result.subgraph.nodes.length}, звʼязків: ${result.subgraph.edges.length}`}
         />
         {result.subgraph.nodes.length === 0 ? (
           <EmptyState
             icon={Network}
-            title="No entities were reached"
-            description="No entity in the graph matched a name in the query, so nothing was expanded. Ingest a document naming the entity, or check that it is not above your clearance."
+            title="Жодної сутності не досягнуто"
+            description="Жодна сутність графа не збіглася з назвою в запиті, тож розгортати не було чого. Завантажте документ, де названо цю сутність, або перевірте, чи не вища вона за ваш допуск."
           />
         ) : (
           <>
@@ -304,7 +304,7 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
               ))}
               {result.subgraph.nodes.length > 24 && (
                 <Badge className="border-border bg-muted text-muted-foreground">
-                  +{result.subgraph.nodes.length - 24} more
+                  +{result.subgraph.nodes.length - 24} ще
                 </Badge>
               )}
             </div>
@@ -314,16 +314,16 @@ function InvestigationReport({ result }: { result: InvestigationResult }) {
 
       {result.subgraph.edges.length > 0 && (
         <Panel>
-          <PanelHeader title="Relations" description="Every edge the traversal crossed" />
+          <PanelHeader title="Звʼязки" description="Кожне ребро, яке перетнув обхід" />
           <div className="scroll-x">
             <table className="w-full text-xs">
               <thead className="border-b border-border text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 text-left font-medium">From</th>
-                  <th className="px-4 py-2 text-left font-medium">Relation</th>
-                  <th className="px-4 py-2 text-left font-medium">To</th>
-                  <th className="px-4 py-2 text-left font-medium">Properties</th>
-                  <th className="px-4 py-2 text-left font-medium">Class.</th>
+                  <th className="px-4 py-2 text-left font-medium">Від</th>
+                  <th className="px-4 py-2 text-left font-medium">Звʼязок</th>
+                  <th className="px-4 py-2 text-left font-medium">До</th>
+                  <th className="px-4 py-2 text-left font-medium">Властивості</th>
+                  <th className="px-4 py-2 text-left font-medium">Клас.</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">

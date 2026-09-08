@@ -16,7 +16,7 @@ export function ClearanceBadge({
   return (
     <Badge
       className={cn(clearanceClasses(level), className)}
-      title={`Classification: ${clearanceName(level)}`}
+      title={`Класифікація: ${clearanceName(level)}`}
     >
       {showIcon && <Lock className="h-2.5 w-2.5" aria-hidden />}
       {clearanceName(level)}

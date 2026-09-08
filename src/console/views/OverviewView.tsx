@@ -87,38 +87,38 @@ export function OverviewView() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Overview</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Огляд</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Everything below is scoped to your clearance
+            Усе нижче обмежено вашим допуском
             {clearance !== null && (
               <>
                 {" "}
                 — <ClearanceBadge level={clearance} className="align-middle" />
               </>
             )}
-            . Entities above it are filtered out before results are assembled, not redacted after.
+            . Сутності вище нього відфільтровані ще до складання відповіді, а не приховані потім.
           </p>
         </div>
         <Link
           to="/investigate"
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
-          Start an investigation <ArrowRight className="h-3.5 w-3.5" />
+          Почати розслідування <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Entities" value={formatNumber(nodes.length)} hint="visible to you" />
-        <StatTile label="Relations" value={formatNumber(edges.length)} hint="ontology-validated" />
+        <StatTile label="Сутності" value={formatNumber(nodes.length)} hint="видимі вам" />
+        <StatTile label="Звʼязки" value={formatNumber(edges.length)} hint="перевірені онтологією" />
         <StatTile
-          label="Documents"
+          label="Документи"
           value={formatNumber(health.data?.documents ?? 0)}
-          hint="in the semantic index"
+          hint="у семантичному індексі"
         />
         <StatTile
-          label="Audit entries"
+          label="Записів аудиту"
           value={formatNumber(entries.length)}
-          hint={blockedCount > 0 ? `${blockedCount} blocked queries` : "none blocked"}
+          hint={blockedCount > 0 ? `${blockedCount} заблокованих запитів` : "заблокованих немає"}
           tone={blockedCount > 0 ? "warn" : "default"}
         />
       </div>
@@ -140,18 +140,18 @@ export function OverviewView() {
           <p className="text-xs">
             {verification.valid ? (
               <>
-                <span className="font-medium text-clearance-public">Audit chain intact.</span>{" "}
+                <span className="font-medium text-clearance-public">Ланцюжок аудиту цілий.</span>{" "}
                 <span className="text-muted-foreground">
-                  All {entries.length} entries recompute to their recorded hashes.
+                  Усі {entries.length} записів перераховуються до своїх хешів.
                 </span>
               </>
             ) : (
               <>
                 <span className="font-medium text-destructive">
-                  Audit chain broken at #{verification.brokenAtSeq}.
+                  Ланцюжок аудиту порушено на #{verification.brokenAtSeq}.
                 </span>{" "}
                 <span className="text-muted-foreground">
-                  Records from that point on can no longer be trusted.
+                  Записам від цієї точки далі вже не можна довіряти.
                 </span>
               </>
             )}
@@ -160,19 +160,19 @@ export function OverviewView() {
             to="/audit"
             className="ml-auto shrink-0 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           >
-            Inspect
+            Переглянути
           </Link>
         </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel className="lg:col-span-1">
-          <PanelHeader title="Entities by type" />
+          <PanelHeader title="Сутності за типом" />
           {nodes.length === 0 ? (
             <EmptyState
               icon={Database}
-              title="Nothing ingested yet"
-              description="Load a document or a CSV to populate the graph."
+              title="Ще нічого не завантажено"
+              description="Завантажте документ або CSV, щоб наповнити граф."
             />
           ) : (
             <div className="space-y-2.5 p-4">
@@ -201,9 +201,9 @@ export function OverviewView() {
         </Panel>
 
         <Panel className="lg:col-span-1">
-          <PanelHeader title="Classification spread" description="Where the visible data sits" />
+          <PanelHeader title="Розподіл класифікації" description="Де лежать видимі дані" />
           {nodes.length === 0 ? (
-            <EmptyState title="No entities" />
+            <EmptyState title="Сутностей немає" />
           ) : (
             <div className="space-y-2 p-4">
               {CLEARANCE_ORDER.map((level) => {
@@ -232,8 +232,7 @@ export function OverviewView() {
               })}
               {clearance !== null && clearance < 4 && (
                 <p className="pt-1 text-[11px] leading-relaxed text-muted-foreground">
-                  Levels above {CLEARANCE_ORDER[clearance] !== undefined ? "" : ""}your clearance
-                  are absent from this chart entirely — the server never sent them.
+                  Рівнів вище вашого допуску немає на цій діаграмі взагалі — сервер їх не надсилав.
                 </p>
               )}
             </div>
@@ -241,9 +240,9 @@ export function OverviewView() {
         </Panel>
 
         <Panel className="lg:col-span-1">
-          <PanelHeader title="Relations" description={`${relationCounts.length} distinct types`} />
+          <PanelHeader title="Звʼязки" description={`${relationCounts.length} різних типів`} />
           {relationCounts.length === 0 ? (
-            <EmptyState icon={Network} title="No relations yet" />
+            <EmptyState icon={Network} title="Звʼязків ще немає" />
           ) : (
             <ul className="divide-y divide-border">
               {relationCounts.slice(0, 8).map(([relation, count]) => (
@@ -259,19 +258,19 @@ export function OverviewView() {
 
       <Panel>
         <PanelHeader
-          title="Recent activity"
-          description="Newest audit entries"
+          title="Нещодавня активність"
+          description="Найновіші записи аудиту"
           actions={
             <Link to="/audit" className="text-xs text-muted-foreground hover:text-foreground">
-              View all
+              Усі записи
             </Link>
           }
         />
         {recent.length === 0 ? (
           <EmptyState
             icon={ScrollText}
-            title="No activity yet"
-            description="Ingestions and investigations appear here as they happen."
+            title="Активності ще немає"
+            description="Завантаження і розслідування зʼявляються тут одразу."
           />
         ) : (
           <ul className="divide-y divide-border">
@@ -301,7 +300,7 @@ export function OverviewView() {
       {health.data && (
         <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <Activity className="h-3 w-3" />
-          Narrative engine: <span className="font-mono">{health.data.narrative_engine}</span>
+          Механізм викладу: <span className="font-mono">{health.data.narrative_engine}</span>
         </p>
       )}
     </div>
