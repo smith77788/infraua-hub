@@ -60,23 +60,6 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-grid-line: var(--grid-line);
-
-  /* Classification is a first-class visual dimension in this console: an
-     analyst must be able to tell at a glance what level a node, edge or
-     document sits at. These are the five ClearanceLevel values. */
-  --color-clearance-public: var(--clearance-public);
-  --color-clearance-internal: var(--clearance-internal);
-  --color-clearance-confidential: var(--clearance-confidential);
-  --color-clearance-secret: var(--clearance-secret);
-  --color-clearance-topsecret: var(--clearance-topsecret);
-
-  /* The five ontology entity types, used by the graph and map views. */
-  --color-entity-person: var(--entity-person);
-  --color-entity-organization: var(--entity-organization);
-  --color-entity-asset: var(--entity-asset);
-  --color-entity-location: var(--entity-location);
-  --color-entity-event: var(--entity-event);
-
   --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
@@ -117,21 +100,6 @@
   --sidebar-accent-foreground: oklch(0.95 0.008 230);
   --sidebar-border: oklch(0.34 0.025 240 / 60%);
   --sidebar-ring: oklch(0.82 0.15 195);
-
-  /* Classification runs cool -> hot as sensitivity rises, so the ordering is
-     legible without reading the label. */
-  --clearance-public: oklch(0.72 0.15 155);
-  --clearance-internal: oklch(0.75 0.13 220);
-  --clearance-confidential: oklch(0.8 0.15 78);
-  --clearance-secret: oklch(0.72 0.18 45);
-  --clearance-topsecret: oklch(0.68 0.21 20);
-
-  /* Entity types are distinguished by hue, not by heat. */
-  --entity-person: oklch(0.78 0.14 220);
-  --entity-organization: oklch(0.72 0.16 295);
-  --entity-asset: oklch(0.8 0.15 78);
-  --entity-location: oklch(0.74 0.15 155);
-  --entity-event: oklch(0.72 0.18 350);
 }
 
 .dark {
@@ -162,129 +130,19 @@
 }
 
 @keyframes infra-scan {
-  0% {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-  40% {
-    opacity: 1;
-  }
-  100% {
-    transform: translateY(2000%);
-    opacity: 0;
-  }
+  0% { transform: translateY(-100%); opacity: 0; }
+  40% { opacity: 1; }
+  100% { transform: translateY(2000%); opacity: 0; }
 }
 
 @keyframes infra-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.35;
-    transform: scale(0.82);
-  }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.82); }
 }
 
-.animate-scan {
-  animation: infra-scan 7s linear infinite;
-}
-.animate-pulse-dot {
-  animation: infra-pulse 2s ease-in-out infinite;
-}
+.animate-scan { animation: infra-scan 7s linear infinite; }
+.animate-pulse-dot { animation: infra-pulse 2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-scan,
-  .animate-pulse-dot {
-    animation: none;
-  }
-}
-
-/*
- * Console surfaces. Everything here is built from the design tokens above, so
- * a rebrand stays a one-file change and both the landing and the console move
- * together.
- */
-@layer components {
-  .panel {
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--color-border);
-    background-color: var(--color-card);
-    color: var(--color-card-foreground);
-  }
-
-  .field-label {
-    display: block;
-    margin-bottom: 0.375rem;
-    font-size: 0.6875rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-muted-foreground);
-  }
-
-  .json-block {
-    max-height: 20rem;
-    overflow: auto;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
-    border-radius: var(--radius-md);
-    background-color: color-mix(in oklch, var(--color-muted) 60%, transparent);
-    padding: 0.75rem;
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-    color: var(--color-muted-foreground);
-  }
-}
-
-/* Wide content (tables, JSON, path chains) scrolls inside its own box — the
-   page body must never scroll sideways. */
-.scroll-x {
-  overflow-x: auto;
-}
-
-/* maplibre-gl ships light-themed controls; align them with the console. */
-.maplibregl-ctrl-group {
-  background: var(--color-card) !important;
-  border: 1px solid var(--color-border) !important;
-}
-.maplibregl-ctrl-group button + button {
-  border-top: 1px solid var(--color-border) !important;
-}
-.maplibregl-ctrl-group button span {
-  filter: invert(1);
-}
-.maplibregl-popup-content {
-  background: var(--color-popover) !important;
-  color: var(--color-popover-foreground) !important;
-  border: 1px solid var(--color-border) !important;
-  border-radius: var(--radius-lg) !important;
-  padding: 10px 12px !important;
-  font-family: inherit;
-}
-.maplibregl-popup-tip {
-  border-top-color: var(--color-popover) !important;
-  border-bottom-color: var(--color-popover) !important;
-}
-.maplibregl-ctrl-attrib {
-  background: color-mix(in oklch, var(--color-card) 80%, transparent) !important;
-  color: var(--color-muted-foreground) !important;
-}
-.maplibregl-ctrl-attrib a {
-  color: var(--color-muted-foreground) !important;
-}
-
-@keyframes console-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.animate-fade-in {
-  animation: console-fade-in 0.18s ease-out;
+  .animate-scan, .animate-pulse-dot { animation: none; }
 }

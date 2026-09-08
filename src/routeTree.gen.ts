@@ -10,128 +10,43 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AnalysisRouteImport } from './routes/analysis'
-import { Route as AuditRouteImport } from './routes/audit'
-import { Route as CasesRouteImport } from './routes/cases'
-import { Route as GraphRouteImport } from './routes/graph'
-import { Route as IngestRouteImport } from './routes/ingest'
-import { Route as InvestigateRouteImport } from './routes/investigate'
-import { Route as MapRouteImport } from './routes/map'
+import { Route as AboutRouteImport } from './routes/about'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AnalysisRoute = AnalysisRouteImport.update({
-  id: '/analysis',
-  path: '/analysis',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuditRoute = AuditRouteImport.update({
-  id: '/audit',
-  path: '/audit',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CasesRoute = CasesRouteImport.update({
-  id: '/cases',
-  path: '/cases',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GraphRoute = GraphRouteImport.update({
-  id: '/graph',
-  path: '/graph',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const IngestRoute = IngestRouteImport.update({
-  id: '/ingest',
-  path: '/ingest',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const InvestigateRoute = InvestigateRouteImport.update({
-  id: '/investigate',
-  path: '/investigate',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MapRoute = MapRouteImport.update({
-  id: '/map',
-  path: '/map',
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/analysis': typeof AnalysisRoute
-  '/audit': typeof AuditRoute
-  '/cases': typeof CasesRoute
-  '/graph': typeof GraphRoute
-  '/ingest': typeof IngestRoute
-  '/investigate': typeof InvestigateRoute
-  '/map': typeof MapRoute
+  '/about': typeof AboutRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/analysis': typeof AnalysisRoute
-  '/audit': typeof AuditRoute
-  '/cases': typeof CasesRoute
-  '/graph': typeof GraphRoute
-  '/ingest': typeof IngestRoute
-  '/investigate': typeof InvestigateRoute
-  '/map': typeof MapRoute
+  '/about': typeof AboutRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/analysis': typeof AnalysisRoute
-  '/audit': typeof AuditRoute
-  '/cases': typeof CasesRoute
-  '/graph': typeof GraphRoute
-  '/ingest': typeof IngestRoute
-  '/investigate': typeof InvestigateRoute
-  '/map': typeof MapRoute
+  '/about': typeof AboutRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/analysis'
-    | '/audit'
-    | '/cases'
-    | '/graph'
-    | '/ingest'
-    | '/investigate'
-    | '/map'
+  fullPaths: '/' | '/about'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/analysis'
-    | '/audit'
-    | '/cases'
-    | '/graph'
-    | '/ingest'
-    | '/investigate'
-    | '/map'
-  id:
-    | '__root__'
-    | '/'
-    | '/analysis'
-    | '/audit'
-    | '/cases'
-    | '/graph'
-    | '/ingest'
-    | '/investigate'
-    | '/map'
+  to: '/' | '/about'
+  id: '__root__' | '/' | '/about'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AnalysisRoute: typeof AnalysisRoute
-  AuditRoute: typeof AuditRoute
-  CasesRoute: typeof CasesRoute
-  GraphRoute: typeof GraphRoute
-  IngestRoute: typeof IngestRoute
-  InvestigateRoute: typeof InvestigateRoute
-  MapRoute: typeof MapRoute
+  AboutRoute: typeof AboutRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -143,53 +58,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/analysis': {
-      id: '/analysis'
-      path: '/analysis'
-      fullPath: '/analysis'
-      preLoaderRoute: typeof AnalysisRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/audit': {
-      id: '/audit'
-      path: '/audit'
-      fullPath: '/audit'
-      preLoaderRoute: typeof AuditRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/cases': {
-      id: '/cases'
-      path: '/cases'
-      fullPath: '/cases'
-      preLoaderRoute: typeof CasesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/graph': {
-      id: '/graph'
-      path: '/graph'
-      fullPath: '/graph'
-      preLoaderRoute: typeof GraphRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/ingest': {
-      id: '/ingest'
-      path: '/ingest'
-      fullPath: '/ingest'
-      preLoaderRoute: typeof IngestRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/investigate': {
-      id: '/investigate'
-      path: '/investigate'
-      fullPath: '/investigate'
-      preLoaderRoute: typeof InvestigateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/map': {
-      id: '/map'
-      path: '/map'
-      fullPath: '/map'
-      preLoaderRoute: typeof MapRouteImport
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -197,13 +70,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AnalysisRoute: AnalysisRoute,
-  AuditRoute: AuditRoute,
-  CasesRoute: CasesRoute,
-  GraphRoute: GraphRoute,
-  IngestRoute: IngestRoute,
-  InvestigateRoute: InvestigateRoute,
-  MapRoute: MapRoute,
+  AboutRoute: AboutRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
