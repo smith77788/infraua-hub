@@ -56,6 +56,17 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
 
   const totalAtRisk = analysis.sectors.reduce((n, s) => n + s.atRisk, 0);
   const top = analysis.ranked.slice(0, 15);
+  const connected = analysis.ranked.filter((r) => r.a.dependents > 0).slice(0, 10);
+
+  if (facilities.length === 0) {
+    return (
+      <div className="grid-bg flex h-full items-center justify-center bg-background">
+        <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+          Завантаження даних для аналітики…
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="grid-bg h-full overflow-y-auto bg-background p-4">
@@ -268,58 +279,57 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
           <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             <Network className="size-3" /> Найбільш звʼязані вузли (низхідні залежності)
           </p>
-          <div className="mt-3 h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                layout="vertical"
-                data={analysis.ranked
-                  .filter((r) => r.a.dependents > 0)
-                  .slice(0, 10)
-                  .map((r) => ({
+          {connected.length === 0 ? (
+            <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+              Немає обʼєктів із низхідними залежностями.
+            </p>
+          ) : (
+            <div className="mt-3 h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  layout="vertical"
+                  data={connected.map((r) => ({
                     name:
                       r.facility.name.length > 26
                         ? r.facility.name.slice(0, 25) + "…"
                         : r.facility.name,
                     dependents: r.a.dependents,
-                    color: CATEGORIES[r.facility.category].color,
                   }))}
-                margin={{ top: 0, right: 12, bottom: 0, left: 4 }}
-              >
-                <XAxis
-                  type="number"
-                  tick={{ fontSize: 9, fill: "#94a3b8" }}
-                  tickLine={false}
-                  axisLine={false}
-                  allowDecimals={false}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={150}
-                  tick={{ fontSize: 9, fill: "#cbd5e1" }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <Tooltip
-                  cursor={{ fill: "#1f293733" }}
-                  contentStyle={{
-                    background: "#0a0d12",
-                    border: "1px solid #1f2937",
-                    borderRadius: 6,
-                    fontSize: 11,
-                  }}
-                />
-                <Bar dataKey="dependents" radius={[0, 3, 3, 0]}>
-                  {analysis.ranked
-                    .filter((r) => r.a.dependents > 0)
-                    .slice(0, 10)
-                    .map((r) => (
+                  margin={{ top: 0, right: 12, bottom: 0, left: 4 }}
+                >
+                  <XAxis
+                    type="number"
+                    tick={{ fontSize: 9, fill: "#94a3b8" }}
+                    tickLine={false}
+                    axisLine={false}
+                    allowDecimals={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={150}
+                    tick={{ fontSize: 9, fill: "#cbd5e1" }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip
+                    cursor={{ fill: "#1f293733" }}
+                    contentStyle={{
+                      background: "#0a0d12",
+                      border: "1px solid #1f2937",
+                      borderRadius: 6,
+                      fontSize: 11,
+                    }}
+                  />
+                  <Bar dataKey="dependents" radius={[0, 3, 3, 0]}>
+                    {connected.map((r) => (
                       <Cell key={r.facility.id} fill={CATEGORIES[r.facility.category].color} />
                     ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </section>
 
         <p className="pb-2 font-mono text-[10px] leading-relaxed text-muted-foreground">

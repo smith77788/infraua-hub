@@ -146,3 +146,8 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-scan, .animate-pulse-dot { animation: none; }
 }
+
+/* Прибрати дефолтний фон/рамку Leaflet для наших іконок-пінів */
+.infra-pin { background: transparent !important; border: none !important; }
+.leaflet-popup-content-wrapper { background: #0f141b; color: #e2e8f0; border: 1px solid #1f2937; }
+.leaflet-popup-tip { background: #0f141b; }

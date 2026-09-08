@@ -2,7 +2,23 @@ import { createServerFn } from "@tanstack/react-start";
 
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { SEED_FACILITIES } from "./infra-seed";
-import { UA_BBOX, type CategoryId, type Facility, type InfraEvent } from "./infra-types";
+import {
+  distanceKm,
+  UA_BBOX,
+  type CategoryId,
+  type Facility,
+  type InfraEvent,
+} from "./infra-types";
+
+/** Додає опорні обʼєкти, яких немає серед live-даних (дедуп за категорією + близькістю). */
+function mergeWithSeed(live: Facility[]): Facility[] {
+  const out = [...live];
+  for (const s of SEED_FACILITIES) {
+    const dup = live.some((f) => f.category === s.category && distanceKm(f, s) < 5);
+    if (!dup) out.push(s);
+  }
+  return out;
+}
 
 // Кілька публічних дзеркал Overpass. Пробуємо послідовно, поки якесь не відповість —
 // це знижує вплив rate-limit/timeout окремого сервера.
@@ -164,7 +180,7 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(async () 
     }
 
     const payload: FacilitiesPayload = {
-      facilities,
+      facilities: mergeWithSeed(facilities),
       fetchedAt: new Date().toISOString(),
       degraded: false,
       source: "live",
