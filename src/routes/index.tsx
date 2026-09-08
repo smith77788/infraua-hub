@@ -20,7 +20,13 @@ import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getAlerts, getEvents, getFacilities } from "@/lib/infra.functions";
+import {
+  getAlerts,
+  getAlertZones,
+  getEvents,
+  getFacilities,
+  getThreats,
+} from "@/lib/infra.functions";
 import { assignRegions } from "@/lib/infra-analytics";
 import {
   buildGraph,
@@ -89,6 +95,20 @@ function Console() {
     staleTime: 60 * 1000,
     refetchInterval: 60 * 1000,
   });
+  const threatsFn = useServerFn(getThreats);
+  const threatsQuery = useQuery({
+    queryKey: ["threats"],
+    queryFn: () => threatsFn(),
+    staleTime: 30 * 1000,
+    refetchInterval: 30 * 1000,
+  });
+  const zonesFn = useServerFn(getAlertZones);
+  const zonesQuery = useQuery({
+    queryKey: ["zones"],
+    queryFn: () => zonesFn(),
+    staleTime: 45 * 1000,
+    refetchInterval: 45 * 1000,
+  });
 
   const [active, setActive] = useState<Set<CategoryId>>(new Set(ALL_CATEGORIES));
   const [query, setQuery] = useState("");
@@ -106,6 +126,8 @@ function Console() {
   const allEvents = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
+  const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
+  const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
   const alarmIds = useMemo(() => {
     const active = new Set(regions.filter((r) => r.active).map((r) => r.code));
     if (!active.size) return new Set<string>();
@@ -234,6 +256,8 @@ function Console() {
               void facilitiesQuery.refetch();
               void eventsQuery.refetch();
               void alertsQuery.refetch();
+              void threatsQuery.refetch();
+              void zonesQuery.refetch();
             }}
           >
             <RefreshCw className={eventsQuery.isFetching ? "animate-spin" : ""} />
@@ -258,7 +282,7 @@ function Console() {
         </div>
       </header>
 
-      <SituationBar summary={summary} loading={loading} />
+      <SituationBar summary={summary} loading={loading} threats={threats.length} />
 
       {view === "analytics" ? (
         <ClientOnly
@@ -383,7 +407,8 @@ function Console() {
             ) : null}
 
             <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
-              Дані: OpenStreetMap (обʼєкти), NASA EONET (пожежі, шторми), USGS (сейсміка).
+              Дані: OpenStreetMap (обʼєкти), NASA EONET та GDACS (події), USGS (сейсміка),
+              detoyshahed.in.ua (тривоги, полігони, повітряні цілі — OSINT).
               {facilitiesQuery.data?.fetchedAt
                 ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
                 : ""}
@@ -399,6 +424,8 @@ function Console() {
                   events={events}
                   edges={edges}
                   alerts={regions}
+                  zones={zones}
+                  threats={threats}
                   alarmIds={alarmIds}
                   showLinks={showLinks}
                   riskIds={riskIds}

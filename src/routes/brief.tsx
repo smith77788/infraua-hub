@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 
-import { getAlerts, getEvents, getFacilities } from "@/lib/infra.functions";
+import { getAlerts, getEvents, getFacilities, getThreats } from "@/lib/infra.functions";
 import { analyzeNetwork, operatorRollup } from "@/lib/infra-analytics";
 import {
   buildGraph,
@@ -29,6 +29,9 @@ function Brief() {
   const facilitiesQuery = useQuery({ queryKey: ["facilities"], queryFn: () => facilitiesFn() });
   const eventsQuery = useQuery({ queryKey: ["events"], queryFn: () => eventsFn() });
   const alertsQuery = useQuery({ queryKey: ["alerts"], queryFn: () => alertsFn() });
+  const threatsFn = useServerFn(getThreats);
+  const threatsQuery = useQuery({ queryKey: ["threats"], queryFn: () => threatsFn() });
+  const threats = threatsQuery.data?.threats ?? [];
 
   const facilities = useMemo(() => facilitiesQuery.data?.facilities ?? [], [facilitiesQuery.data]);
   const events = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
@@ -99,8 +102,9 @@ function Brief() {
           {analysis.sectors.length} секторах, зафіксовано <b>{summary.atRisk}</b> обʼєктів у зоні
           активних подій
           {summary.lifeAtRisk ? ` (зокрема ${summary.lifeAtRisk} обʼєктів життєзабезпечення)` : ""}.
-          Повітряні тривоги активні у <b>{activeAlarms.length}</b> регіонах. Усього подій за 30
-          днів: <b>{summary.eventCount}</b>.
+          Повітряні тривоги активні у <b>{activeAlarms.length}</b> регіонах, зафіксовано{" "}
+          <b>{threats.length}</b> активних повітряних цілей (OSINT). Усього подій за 30 днів:{" "}
+          <b>{summary.eventCount}</b>.
         </p>
       </section>
 

@@ -7,12 +7,14 @@ import {
   Marker,
   Popup,
   Polyline,
+  Polygon,
   useMap,
   useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+import { type AlertZone, type Threat } from "@/lib/air";
 import { type AlertRegion } from "@/lib/alerts";
 import {
   CATEGORIES,
@@ -28,6 +30,8 @@ interface Props {
   events: InfraEvent[];
   edges: GraphEdge[];
   alerts: AlertRegion[];
+  zones: AlertZone[];
+  threats: Threat[];
   alarmIds: Set<string>;
   showLinks: boolean;
   riskIds: Set<string>;
@@ -35,6 +39,14 @@ interface Props {
   selectedId: string | null;
   onSelect: (f: Facility) => void;
 }
+
+const threatIcon = L.divIcon({
+  html: '<span class="threat-mark"></span>',
+  className: "threat-pin",
+  iconSize: [12, 12],
+  iconAnchor: [6, 6],
+  popupAnchor: [0, -6],
+});
 
 /** Мінімальні SVG-гліфи (у стилі lucide) для кожної категорії. */
 const ICON_PATHS: Record<CategoryId, string> = {
@@ -242,6 +254,8 @@ export default function InfraMap({
   events,
   edges,
   alerts,
+  zones,
+  threats,
   alarmIds,
   showLinks,
   riskIds,
@@ -276,30 +290,54 @@ export default function InfraMap({
     >
       <ResilientTileLayer />
 
-      {alerts
-        .filter((r) => r.active)
-        .map((r) => (
-          <Circle
-            key={`alarm-${r.code}`}
-            center={[r.lat, r.lon]}
-            radius={62000}
-            pathOptions={{
-              color: "#ef4444",
-              fillColor: "#ef4444",
-              fillOpacity: 0.12,
-              weight: 1.2,
-              dashArray: "5 5",
-            }}
-          >
-            <Popup>
-              <div className="space-y-1 font-sans text-xs">
-                <p className="font-semibold text-red-600">Повітряна тривога</p>
-                <p className="opacity-80">{r.name}</p>
-                {r.since ? <p className="opacity-70">Від {r.since}</p> : null}
-              </div>
-            </Popup>
-          </Circle>
-        ))}
+      {/* Зони тривог: реальні полігони регіонів, або кола-фолбек, якщо полігони недоступні */}
+      {zones.length > 0
+        ? zones.flatMap((z) =>
+            z.polygons.map((ring, i) => (
+              <Polygon
+                key={`zone-${z.region}-${i}`}
+                positions={ring}
+                pathOptions={{
+                  color: "#ef4444",
+                  fillColor: "#ef4444",
+                  fillOpacity: 0.14,
+                  weight: 1,
+                }}
+              >
+                <Popup>
+                  <div className="space-y-1 font-sans text-xs">
+                    <p className="font-semibold text-red-600">Повітряна тривога</p>
+                    <p className="opacity-80">{z.region}</p>
+                    {z.type ? <p className="opacity-60">{z.type}</p> : null}
+                  </div>
+                </Popup>
+              </Polygon>
+            )),
+          )
+        : alerts
+            .filter((r) => r.active)
+            .map((r) => (
+              <Circle
+                key={`alarm-${r.code}`}
+                center={[r.lat, r.lon]}
+                radius={62000}
+                pathOptions={{
+                  color: "#ef4444",
+                  fillColor: "#ef4444",
+                  fillOpacity: 0.12,
+                  weight: 1.2,
+                  dashArray: "5 5",
+                }}
+              >
+                <Popup>
+                  <div className="space-y-1 font-sans text-xs">
+                    <p className="font-semibold text-red-600">Повітряна тривога</p>
+                    <p className="opacity-80">{r.name}</p>
+                    {r.since ? <p className="opacity-70">Від {r.since}</p> : null}
+                  </div>
+                </Popup>
+              </Circle>
+            ))}
 
       {lines.map(({ e, a, b }) => (
         <Polyline
@@ -354,6 +392,22 @@ export default function InfraMap({
         selectedId={selectedId}
         onSelect={onSelect}
       />
+
+      {/* Повітряні цілі (OSINT) */}
+      {threats.map((t) => (
+        <Marker key={t.id} position={[t.lat, t.lon]} icon={threatIcon}>
+          <Popup>
+            <div className="space-y-1 font-sans text-xs">
+              <p className="font-semibold text-red-600">Повітряна ціль</p>
+              <p className="opacity-80">{t.name}</p>
+              <p className="opacity-70">Джерело: {t.source}</p>
+              {t.since ? (
+                <p className="opacity-70">{new Date(t.since).toLocaleString("uk-UA")}</p>
+              ) : null}
+            </div>
+          </Popup>
+        </Marker>
+      ))}
 
       <FlyTo facility={selected} />
     </MapContainer>

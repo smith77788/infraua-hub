@@ -1,4 +1,11 @@
-import { AlertTriangle, HeartPulse, ShieldAlert, ShieldCheck, Siren } from "lucide-react";
+import {
+  AlertTriangle,
+  Crosshair,
+  HeartPulse,
+  ShieldAlert,
+  ShieldCheck,
+  Siren,
+} from "lucide-react";
 
 import { EVENT_KINDS, type SituationLevel, type SituationSummary } from "@/lib/infra-types";
 
@@ -36,9 +43,11 @@ function LevelIcon({ level, className }: { level: SituationLevel; className?: st
 export default function SituationBar({
   summary,
   loading,
+  threats = 0,
 }: {
   summary: SituationSummary;
   loading: boolean;
+  threats?: number;
 }) {
   const s = LEVEL_STYLE[summary.level];
 
@@ -62,6 +71,14 @@ export default function SituationBar({
           {loading ? "Оцінка обстановки…" : summary.label}
         </span>
       </span>
+
+      {threats > 0 ? (
+        <span className="flex items-center gap-1.5 rounded-full border border-red-500/60 bg-red-500/15 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400">
+          <Crosshair className="size-3.5 animate-pulse" />
+          Повітряні цілі
+          <span>{threats}</span>
+        </span>
+      ) : null}
 
       {summary.alarms > 0 ? (
         <span className="flex items-center gap-1.5 rounded-full border border-red-500/50 bg-red-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400">

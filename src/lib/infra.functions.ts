@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 
+import { mercToLatLon, type AlertZone, type Threat } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { SEED_FACILITIES } from "./infra-seed";
 import {
@@ -410,6 +411,130 @@ export const getAlerts = createServerFn({ method: "GET" }).handler(async () => {
       fetchedAt: new Date().toISOString(),
       degraded: true,
     } satisfies AlertsPayload;
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+// Повітряні цілі та зони тривог — відкрите джерело detoyshahed.in.ua (OSINT).
+const THREATS_ENDPOINT = "https://detoyshahed.in.ua/api/incidents/active";
+const ZONES_ENDPOINT = "https://detoyshahed.in.ua/api/alerts/active";
+
+interface ThreatsPayload {
+  threats: Threat[];
+  fetchedAt: string;
+  degraded: boolean;
+}
+
+export const getThreats = createServerFn({ method: "GET" }).handler(async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(THREATS_ENDPOINT, { signal: controller.signal });
+    if (!res.ok) throw new Error(`threats ${res.status}`);
+    const data = (await res.json()) as {
+      incidents?: {
+        id: string;
+        location_name?: string;
+        display_name?: string;
+        coordinates?: { lat: number; lng: number };
+        channel_name?: string;
+        count?: number;
+        created_at?: string;
+        expires_at?: string;
+      }[];
+    };
+    const threats: Threat[] = [];
+    for (const it of data.incidents ?? []) {
+      const c = it.coordinates;
+      if (!c) continue;
+      const [lat, lon] = mercToLatLon(c.lng, c.lat);
+      if (lat < UA_BBOX.south || lat > UA_BBOX.north || lon < UA_BBOX.west || lon > UA_BBOX.east)
+        continue;
+      threats.push({
+        id: it.id,
+        name: it.location_name ?? it.display_name ?? "Ціль",
+        lat,
+        lon,
+        source: it.channel_name ?? "OSINT",
+        count: it.count ?? 1,
+        since: it.created_at ?? "",
+        expires: it.expires_at ?? "",
+      });
+    }
+    return {
+      threats,
+      fetchedAt: new Date().toISOString(),
+      degraded: false,
+    } satisfies ThreatsPayload;
+  } catch {
+    return {
+      threats: [],
+      fetchedAt: new Date().toISOString(),
+      degraded: true,
+    } satisfies ThreatsPayload;
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+interface ZonesPayload {
+  zones: AlertZone[];
+  fetchedAt: string;
+  degraded: boolean;
+}
+
+/** Спрощує кільце: конвертує [lon,lat]→[lat,lon] і проріджує до ~120 точок. */
+function ringToLatLon(ring: number[][]): [number, number][] {
+  const step = Math.max(1, Math.ceil(ring.length / 120));
+  const out: [number, number][] = [];
+  for (let i = 0; i < ring.length; i += step) {
+    const p = ring[i];
+    if (Array.isArray(p) && p.length >= 2) out.push([p[1], p[0]]);
+  }
+  return out;
+}
+
+export const getAlertZones = createServerFn({ method: "GET" }).handler(async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch(ZONES_ENDPOINT, { signal: controller.signal });
+    if (!res.ok) throw new Error(`zones ${res.status}`);
+    const data = (await res.json()) as {
+      alerts?: {
+        region_name?: string;
+        region_type?: string;
+        geometry?: { type?: string; coordinates?: unknown };
+      }[];
+    };
+    const zones: AlertZone[] = [];
+    for (const a of data.alerts ?? []) {
+      const g = a.geometry;
+      if (!g?.coordinates) continue;
+      const polygons: [number, number][][] = [];
+      if (g.type === "Polygon") {
+        const poly = g.coordinates as number[][][];
+        if (poly[0]) polygons.push(ringToLatLon(poly[0]));
+      } else if (g.type === "MultiPolygon") {
+        const multi = g.coordinates as number[][][][];
+        for (const poly of multi) if (poly[0]) polygons.push(ringToLatLon(poly[0]));
+      }
+      if (polygons.length) {
+        zones.push({
+          region: a.region_name ?? "Регіон",
+          type: a.region_type ?? "",
+          polygons,
+        });
+      }
+    }
+    return { zones, fetchedAt: new Date().toISOString(), degraded: false } satisfies ZonesPayload;
+  } catch {
+    return {
+      zones: [],
+      fetchedAt: new Date().toISOString(),
+      degraded: true,
+    } satisfies ZonesPayload;
   } finally {
     clearTimeout(timer);
   }
