@@ -163,12 +163,53 @@ export function analyzeNetwork(
   return { perFacility, ranked, sectors, maxDependents };
 }
 
+export interface OperatorStat {
+  operator: string;
+  total: number;
+  atRisk: number;
+  underAlarm: number;
+  avgScore: number;
+}
+
+/** Зведення по операторах (сутностях): скільки обʼєктів, під загрозою, критичність. */
+export function operatorRollup(
+  facilities: Facility[],
+  analysis: NetworkAnalysis,
+  limit = 12,
+): OperatorStat[] {
+  const map = new Map<string, { total: number; atRisk: number; underAlarm: number; sum: number }>();
+  for (const f of facilities) {
+    const op = f.operator?.trim();
+    if (!op) continue;
+    const a = analysis.perFacility.get(f.id);
+    if (!a) continue;
+    const s = map.get(op) ?? { total: 0, atRisk: 0, underAlarm: 0, sum: 0 };
+    s.total++;
+    s.sum += a.score;
+    if (a.atRisk) s.atRisk++;
+    if (a.underAlarm) s.underAlarm++;
+    map.set(op, s);
+  }
+  return [...map.entries()]
+    .map(([operator, s]) => ({
+      operator,
+      total: s.total,
+      atRisk: s.atRisk,
+      underAlarm: s.underAlarm,
+      avgScore: Math.round(s.sum / s.total),
+    }))
+    .sort((a, b) => b.total - a.total || b.avgScore - a.avgScore)
+    .slice(0, limit);
+}
+
 export interface TimelineBucket {
   date: string;
   label: string;
   fire: number;
   quake: number;
   storm: number;
+  flood: number;
+  drought: number;
   other: number;
   total: number;
 }
@@ -186,6 +227,8 @@ export function eventTimeline(events: InfraEvent[], days = 30): TimelineBucket[]
       fire: 0,
       quake: 0,
       storm: 0,
+      flood: 0,
+      drought: 0,
       other: 0,
       total: 0,
     });

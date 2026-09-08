@@ -17,9 +17,11 @@ import {
 
 import DependencyGraph from "@/components/DependencyGraph";
 import SituationBar from "@/components/SituationBar";
+import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getAlerts, getEvents, getFacilities } from "@/lib/infra.functions";
+import { assignRegions } from "@/lib/infra-analytics";
 import {
   buildGraph,
   CATEGORIES,
@@ -95,6 +97,7 @@ function Console() {
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
   const [windowId, setWindowId] = useState<WindowId>("30d");
+  const [playCursor, setPlayCursor] = useState<number | null>(null);
 
   const allFacilities = useMemo(
     () => facilitiesQuery.data?.facilities ?? [],
@@ -103,13 +106,28 @@ function Console() {
   const allEvents = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
+  const alarmIds = useMemo(() => {
+    const active = new Set(regions.filter((r) => r.active).map((r) => r.code));
+    if (!active.size) return new Set<string>();
+    const reg = assignRegions(allFacilities, regions);
+    const s = new Set<string>();
+    for (const [id, code] of reg) if (active.has(code)) s.add(id);
+    return s;
+  }, [allFacilities, regions]);
 
   const windowHours = TIME_WINDOWS.find((w) => w.id === windowId)!.hours;
   const events = useMemo(() => {
+    if (playCursor != null) {
+      const from = playCursor - TRAIL_MS;
+      return allEvents.filter((e) => {
+        const t = new Date(e.time).getTime();
+        return t <= playCursor && t >= from;
+      });
+    }
     if (windowId === "30d") return allEvents;
     const cutoff = Date.now() - windowHours * 3600_000;
     return allEvents.filter((e) => new Date(e.time).getTime() >= cutoff);
-  }, [allEvents, windowId, windowHours]);
+  }, [allEvents, windowId, windowHours, playCursor]);
   const edges = useMemo(() => buildGraph(allFacilities), [allFacilities]);
   const byId = useMemo(() => new Map(allFacilities.map((f) => [f.id, f])), [allFacilities]);
 
@@ -224,8 +242,16 @@ function Console() {
           <Button
             asChild
             size="sm"
-            variant="ghost"
+            variant="outline"
             className="font-mono text-[10px] uppercase tracking-[0.12em]"
+          >
+            <Link to="/brief">Брифінг</Link>
+          </Button>
+          <Button
+            asChild
+            size="sm"
+            variant="ghost"
+            className="hidden font-mono text-[10px] uppercase tracking-[0.12em] sm:inline-flex"
           >
             <Link to="/about">Про платформу</Link>
           </Button>
@@ -373,6 +399,7 @@ function Console() {
                   events={events}
                   edges={edges}
                   alerts={regions}
+                  alarmIds={alarmIds}
                   showLinks={showLinks}
                   riskIds={riskIds}
                   impactedIds={impactedIds}
@@ -396,6 +423,8 @@ function Console() {
                 Натисніть «Оновити» для повторної спроби.
               </div>
             ) : null}
+
+            <TimelinePlayer onCursor={setPlayCursor} />
           </main>
 
           {/* Right panel */}

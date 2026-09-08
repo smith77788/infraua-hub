@@ -1,9 +1,9 @@
 import { useMemo, type ReactNode } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from "recharts";
-import { Activity, Layers, Network, ShieldAlert, Siren, TrendingUp } from "lucide-react";
+import { Activity, Building2, Layers, Network, ShieldAlert, Siren, TrendingUp } from "lucide-react";
 
 import { type AlertRegion } from "@/lib/alerts";
-import { analyzeNetwork, eventTimeline } from "@/lib/infra-analytics";
+import { analyzeNetwork, eventTimeline, operatorRollup } from "@/lib/infra-analytics";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -51,6 +51,7 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
     [facilities, edges, events, alerts],
   );
   const timeline = useMemo(() => eventTimeline(events, 30), [events]);
+  const operators = useMemo(() => operatorRollup(facilities, analysis), [facilities, analysis]);
   const activeAlarms = useMemo(() => alerts.filter((r) => r.active), [alerts]);
 
   const totalAtRisk = analysis.sectors.reduce((n, s) => n + s.atRisk, 0);
@@ -141,6 +142,8 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
                 <Bar dataKey="fire" stackId="e" fill={EVENT_KINDS.fire.color} name="Пожежі" />
                 <Bar dataKey="quake" stackId="e" fill={EVENT_KINDS.quake.color} name="Сейсміка" />
                 <Bar dataKey="storm" stackId="e" fill={EVENT_KINDS.storm.color} name="Шторми" />
+                <Bar dataKey="flood" stackId="e" fill={EVENT_KINDS.flood.color} name="Повені" />
+                <Bar dataKey="drought" stackId="e" fill={EVENT_KINDS.drought.color} name="Посухи" />
                 <Bar
                   dataKey="other"
                   stackId="e"
@@ -216,6 +219,49 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
             </div>
           </section>
         </div>
+
+        {/* Operators */}
+        {operators.length ? (
+          <section className="rounded border border-border bg-card p-3">
+            <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              <Building2 className="size-3" /> Оператори (сутності)
+            </p>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-left font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+                    <th className="py-1 pr-2 font-normal">Оператор</th>
+                    <th className="py-1 pr-2 text-right font-normal">Обʼєктів</th>
+                    <th className="py-1 pr-2 text-right font-normal">Під загрозою</th>
+                    <th className="py-1 pr-2 text-right font-normal">У тривозі</th>
+                    <th className="py-1 text-right font-normal">Сер. індекс</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {operators.map((o) => (
+                    <tr key={o.operator} className="border-t border-border/50">
+                      <td className="py-1 pr-2">{o.operator}</td>
+                      <td className="py-1 pr-2 text-right font-mono tabular-nums">{o.total}</td>
+                      <td
+                        className={`py-1 pr-2 text-right font-mono tabular-nums ${o.atRisk ? "text-amber-400" : "text-muted-foreground"}`}
+                      >
+                        {o.atRisk}
+                      </td>
+                      <td
+                        className={`py-1 pr-2 text-right font-mono tabular-nums ${o.underAlarm ? "text-red-400" : "text-muted-foreground"}`}
+                      >
+                        {o.underAlarm}
+                      </td>
+                      <td className="py-1 text-right font-mono tabular-nums text-primary">
+                        {o.avgScore}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
 
         {/* Dependents bar */}
         <section className="rounded border border-border bg-card p-3">

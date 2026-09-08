@@ -29,10 +29,12 @@ export interface Facility {
   source: string;
 }
 
+export type EventKind = "fire" | "quake" | "storm" | "flood" | "drought" | "other";
+
 export interface InfraEvent {
   id: string;
   title: string;
-  kind: "fire" | "quake" | "storm" | "other";
+  kind: EventKind;
   lat: number;
   lon: number;
   time: string;
@@ -65,10 +67,12 @@ export const CATEGORIES: Record<
   industry: { label: "Промислові вузли", short: "ПР", color: "#9ca3af", tier: "industry" },
 };
 
-export const EVENT_KINDS: Record<InfraEvent["kind"], { label: string; color: string }> = {
+export const EVENT_KINDS: Record<EventKind, { label: string; color: string }> = {
   fire: { label: "Пожежі", color: "#fb923c" },
   quake: { label: "Сейсміка", color: "#facc15" },
   storm: { label: "Шторми", color: "#60a5fa" },
+  flood: { label: "Повені", color: "#22d3ee" },
+  drought: { label: "Посухи", color: "#eab308" },
   other: { label: "Інше", color: "#a3a3a3" },
 };
 
@@ -175,7 +179,14 @@ export function summarize(
     if (f && CATEGORIES[f.category].tier === "life") lifeAtRisk++;
   }
 
-  const byKind: Record<InfraEvent["kind"], number> = { fire: 0, quake: 0, storm: 0, other: 0 };
+  const byKind: Record<EventKind, number> = {
+    fire: 0,
+    quake: 0,
+    storm: 0,
+    flood: 0,
+    drought: 0,
+    other: 0,
+  };
   for (const e of events) byKind[e.kind]++;
 
   const atRisk = riskMap.size;

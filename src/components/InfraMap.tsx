@@ -24,6 +24,7 @@ interface Props {
   events: InfraEvent[];
   edges: GraphEdge[];
   alerts: AlertRegion[];
+  alarmIds: Set<string>;
   showLinks: boolean;
   riskIds: Set<string>;
   impactedIds: Set<string>;
@@ -87,6 +88,7 @@ export default function InfraMap({
   events,
   edges,
   alerts,
+  alarmIds,
   showLinks,
   riskIds,
   impactedIds,
@@ -189,6 +191,24 @@ export default function InfraMap({
           </Popup>
         </CircleMarker>
       ))}
+
+      {facilities
+        .filter((f) => alarmIds.has(f.id))
+        .map((f) => (
+          <CircleMarker
+            key={`alarm-ring-${f.id}`}
+            center={[f.lat, f.lon]}
+            radius={8}
+            interactive={false}
+            pathOptions={{
+              color: "#ef4444",
+              weight: 1,
+              opacity: 0.65,
+              fill: false,
+              dashArray: "2 3",
+            }}
+          />
+        ))}
 
       {facilities.map((f) => {
         const meta = CATEGORIES[f.category];

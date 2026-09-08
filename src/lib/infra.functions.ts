@@ -197,6 +197,37 @@ function eonetKind(catId: string | undefined): InfraEvent["kind"] {
   return "other";
 }
 
+function gdacsKind(type: string | undefined): InfraEvent["kind"] {
+  switch (type) {
+    case "EQ":
+      return "quake";
+    case "TC":
+      return "storm";
+    case "FL":
+      return "flood";
+    case "WF":
+      return "fire";
+    case "DR":
+      return "drought";
+    default:
+      return "other";
+  }
+}
+
+interface GdacsFeature {
+  geometry?: { coordinates?: number[] };
+  properties?: {
+    eventtype?: string;
+    eventid?: number | string;
+    name?: string;
+    htmldescription?: string;
+    alertlevel?: string;
+    fromdate?: string;
+    todate?: string;
+    url?: { report?: string } | string;
+  };
+}
+
 export const getEvents = createServerFn({ method: "GET" }).handler(async () => {
   const cached = readCache<{ events: InfraEvent[]; fetchedAt: string; degraded: boolean }>(
     "events",
@@ -212,11 +243,13 @@ export const getEvents = createServerFn({ method: "GET" }).handler(async () => {
   const eonetUrl = `https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=30&bbox=${UA_BBOX.west},${UA_BBOX.north},${UA_BBOX.east},${UA_BBOX.south}`;
   const start = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
   const usgsUrl = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=${start}&minlatitude=${UA_BBOX.south}&maxlatitude=${UA_BBOX.north}&minlongitude=${UA_BBOX.west}&maxlongitude=${UA_BBOX.east}&orderby=time&limit=60`;
+  const gdacsUrl = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/EVENTS4APP";
 
   try {
-    const [eonetRes, usgsRes] = await Promise.allSettled([
+    const [eonetRes, usgsRes, gdacsRes] = await Promise.allSettled([
       fetch(eonetUrl, { signal: controller.signal }).then((r) => r.json()),
       fetch(usgsUrl, { signal: controller.signal }).then((r) => r.json()),
+      fetch(gdacsUrl, { signal: controller.signal }).then((r) => r.json()),
     ]);
 
     if (eonetRes.status === "fulfilled") {
@@ -260,6 +293,31 @@ export const getEvents = createServerFn({ method: "GET" }).handler(async () => {
           ...(f.properties.mag != null ? { magnitude: f.properties.mag } : {}),
           url: f.properties.url,
           source: "USGS",
+        });
+      }
+    } else failures++;
+
+    if (gdacsRes.status === "fulfilled") {
+      const data = gdacsRes.value as { features?: GdacsFeature[] };
+      for (const f of data.features ?? []) {
+        const coords = f.geometry?.coordinates;
+        const p = f.properties;
+        if (!coords || !p) continue;
+        const [lon, lat] = coords as [number, number];
+        if (lat < UA_BBOX.south || lat > UA_BBOX.north || lon < UA_BBOX.west || lon > UA_BBOX.east)
+          continue;
+        const when = p.todate ?? p.fromdate;
+        const t = when ? new Date(when) : new Date();
+        const report = typeof p.url === "object" ? p.url?.report : p.url;
+        events.push({
+          id: `gdacs-${p.eventtype}-${p.eventid}`,
+          title: p.htmldescription ?? p.name ?? "Подія GDACS",
+          kind: gdacsKind(p.eventtype),
+          lat,
+          lon,
+          time: (isNaN(t.getTime()) ? new Date() : t).toISOString(),
+          ...(report ? { url: report } : {}),
+          source: "GDACS",
         });
       }
     } else failures++;
