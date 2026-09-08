@@ -199,7 +199,7 @@ function Index() {
 
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <Button asChild size="lg" className="font-mono text-xs uppercase tracking-[0.14em]">
-                <a href="#contact">Отримати демо</a>
+                <Link to="/">Відкрити консоль</Link>
               </Button>
               <Button
                 asChild
