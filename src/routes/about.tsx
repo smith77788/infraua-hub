@@ -161,7 +161,7 @@ function Index() {
           </nav>
 
           <Button asChild size="sm" className="font-mono text-xs uppercase tracking-[0.12em]">
-            <a href="#contact">Запит доступу</a>
+            <Link to="/">Відкрити консоль</Link>
           </Button>
         </div>
       </header>
