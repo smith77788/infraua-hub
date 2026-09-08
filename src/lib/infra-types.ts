@@ -1,11 +1,5 @@
 export type CategoryId =
-  | "power_plant"
-  | "substation"
-  | "water"
-  | "hospital"
-  | "airport"
-  | "rail"
-  | "telecom";
+  "power_plant" | "substation" | "water" | "hospital" | "airport" | "rail" | "telecom";
 
 export interface Facility {
   id: string;
@@ -58,8 +52,7 @@ export function distanceKm(a: { lat: number; lon: number }, b: { lat: number; lo
   const dLon = ((b.lon - a.lon) * Math.PI) / 180;
   const la1 = (a.lat * Math.PI) / 180;
   const la2 = (b.lat * Math.PI) / 180;
-  const h =
-    Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(la1) * Math.cos(la2);
+  const h = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(la1) * Math.cos(la2);
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
@@ -74,9 +67,7 @@ export interface GraphEdge {
 export function buildGraph(facilities: Facility[]): GraphEdge[] {
   const plants = facilities.filter((f) => f.category === "power_plant");
   const subs = facilities.filter((f) => f.category === "substation");
-  const consumers = facilities.filter(
-    (f) => !["power_plant", "substation"].includes(f.category),
-  );
+  const consumers = facilities.filter((f) => !["power_plant", "substation"].includes(f.category));
   const edges: GraphEdge[] = [];
 
   const nearest = (f: Facility, pool: Facility[]) => {
@@ -119,6 +110,58 @@ export function facilitiesAtRisk(
     }
   }
   return map;
+}
+
+export type SituationLevel = "normal" | "elevated" | "critical";
+
+export interface SituationSummary {
+  level: SituationLevel;
+  label: string;
+  atRisk: number;
+  /** At-risk facilities in the life-critical tier (hospitals, water works). */
+  lifeAtRisk: number;
+  byKind: Record<InfraEvent["kind"], number>;
+  eventCount: number;
+}
+
+const LEVEL_LABEL: Record<SituationLevel, string> = {
+  normal: "Штатний режим",
+  elevated: "Підвищена готовність",
+  critical: "Критичний стан",
+};
+
+/**
+ * Aggregates an operational picture from facilities, their risk map and events.
+ * The life-critical tier (лікарні, водоканали) escalates the alert level, and a
+ * large absolute number of endangered objects does the same.
+ */
+export function summarize(
+  facilities: Facility[],
+  riskMap: Map<string, InfraEvent>,
+  events: InfraEvent[],
+): SituationSummary {
+  const byId = new Map(facilities.map((f) => [f.id, f]));
+  let lifeAtRisk = 0;
+  for (const id of riskMap.keys()) {
+    const f = byId.get(id);
+    if (f && CATEGORIES[f.category].tier === "life") lifeAtRisk++;
+  }
+
+  const byKind: Record<InfraEvent["kind"], number> = { fire: 0, quake: 0, storm: 0, other: 0 };
+  for (const e of events) byKind[e.kind]++;
+
+  const atRisk = riskMap.size;
+  const level: SituationLevel =
+    lifeAtRisk > 0 || atRisk >= 8 ? "critical" : atRisk > 0 ? "elevated" : "normal";
+
+  return {
+    level,
+    label: LEVEL_LABEL[level],
+    atRisk,
+    lifeAtRisk,
+    byKind,
+    eventCount: events.length,
+  };
 }
 
 /** Cascade: everything downstream of the given nodes. */

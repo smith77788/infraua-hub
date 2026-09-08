@@ -6,6 +6,7 @@ import { ClientOnly } from "@tanstack/react-router";
 import { Activity, AlertTriangle, Loader2, RefreshCw, Search, Waypoints, Zap } from "lucide-react";
 
 import DependencyGraph from "@/components/DependencyGraph";
+import SituationBar from "@/components/SituationBar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getEvents, getFacilities } from "@/lib/infra.functions";
@@ -15,6 +16,7 @@ import {
   EVENT_KINDS,
   downstreamOf,
   facilitiesAtRisk,
+  summarize,
   type CategoryId,
   type Facility,
 } from "@/lib/infra-types";
@@ -89,6 +91,24 @@ function Console() {
   );
   const riskMap = useMemo(() => facilitiesAtRisk(allFacilities, events), [allFacilities, events]);
 
+  const summary = useMemo(
+    () => summarize(allFacilities, riskMap, events),
+    [allFacilities, riskMap, events],
+  );
+
+  const atRiskList = useMemo(
+    () =>
+      [...riskMap.entries()]
+        .map(([id, ev]) => ({ facility: byId.get(id), event: ev }))
+        .filter((x): x is { facility: Facility; event: (typeof events)[number] } => !!x.facility)
+        .sort((a, b) => {
+          const at = CATEGORIES[a.facility.category].tier === "life" ? 0 : 1;
+          const bt = CATEGORIES[b.facility.category].tier === "life" ? 0 : 1;
+          return at - bt;
+        }),
+    [riskMap, byId],
+  );
+
   const impactedIds = useMemo(() => {
     if (!outageId) return new Set<string>();
     const set = downstreamOf(new Set([outageId]), edges);
@@ -134,7 +154,9 @@ function Console() {
 
         <div className="flex items-center gap-2">
           <span className="hidden font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground md:inline">
-            {loading ? "синхронізація…" : `${allFacilities.length} обʼєктів · ${events.length} подій`}
+            {loading
+              ? "синхронізація…"
+              : `${allFacilities.length} обʼєктів · ${events.length} подій`}
           </span>
           <Button
             size="sm"
@@ -148,11 +170,18 @@ function Console() {
             <RefreshCw className={eventsQuery.isFetching ? "animate-spin" : ""} />
             Оновити
           </Button>
-          <Button asChild size="sm" variant="ghost" className="font-mono text-[10px] uppercase tracking-[0.12em]">
+          <Button
+            asChild
+            size="sm"
+            variant="ghost"
+            className="font-mono text-[10px] uppercase tracking-[0.12em]"
+          >
             <Link to="/about">Про платформу</Link>
           </Button>
         </div>
       </header>
+
+      <SituationBar summary={summary} loading={loading} />
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Filters */}
@@ -313,7 +342,12 @@ function Console() {
                 >
                   <Zap className="size-3" /> Змоделювати відключення
                 </Button>
-                <Button asChild size="sm" variant="ghost" className="h-8 font-mono text-[10px] uppercase">
+                <Button
+                  asChild
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 font-mono text-[10px] uppercase"
+                >
                   <a href={selected.source} target="_blank" rel="noreferrer">
                     Джерело
                   </a>
@@ -321,9 +355,46 @@ function Console() {
               </div>
             </section>
           ) : (
-            <p className="mb-5 font-mono text-[11px] text-muted-foreground">
-              Оберіть обʼєкт на карті, щоб побачити його звʼязки та ризики.
-            </p>
+            <section className="mb-5">
+              <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                <AlertTriangle className="size-3" /> Обʼєкти під загрозою
+              </p>
+              {atRiskList.length === 0 ? (
+                <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+                  {loading
+                    ? "Аналізуємо близькість подій…"
+                    : "Обʼєктів у зоні активних подій не виявлено. Оберіть обʼєкт на карті, щоб побачити його звʼязки."}
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1.5">
+                  {atRiskList.slice(0, 12).map(({ facility, event }) => (
+                    <button
+                      key={facility.id}
+                      onClick={() => setSelectedId(facility.id)}
+                      className="flex w-full items-start gap-2 rounded border border-destructive/40 bg-destructive/5 p-2 text-left transition-colors hover:bg-destructive/10"
+                    >
+                      <span
+                        className="mt-1 size-2 shrink-0 rounded-full"
+                        style={{ background: CATEGORIES[facility.category].color }}
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px] font-medium">
+                          {facility.name}
+                        </span>
+                        <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                          {CATEGORIES[facility.category].label} · {event.title}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                  {atRiskList.length > 12 ? (
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      …та ще {atRiskList.length - 12} обʼєктів
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </section>
           )}
 
           <section className="min-h-0">
