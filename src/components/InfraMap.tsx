@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -19,6 +19,48 @@ interface Props {
   impactedIds: Set<string>;
   selectedId: string | null;
   onSelect: (f: Facility) => void;
+}
+
+// Безключові базові тайли з автоперемиканням: якщо основне джерело масово
+// не віддає тайли — переходимо до наступного.
+const BASEMAPS = [
+  {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    attribution:
+      'Tiles &copy; Esri · Джерела: Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 16,
+  },
+  {
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19,
+  },
+] as const;
+
+function ResilientTileLayer() {
+  const [idx, setIdx] = useState(0);
+  const errors = useRef(0);
+  const bm = BASEMAPS[Math.min(idx, BASEMAPS.length - 1)];
+  return (
+    <TileLayer
+      key={idx}
+      url={bm.url}
+      attribution={bm.attribution}
+      maxZoom={bm.maxZoom}
+      eventHandlers={{
+        load: () => {
+          errors.current = 0;
+        },
+        tileerror: () => {
+          errors.current += 1;
+          if (errors.current >= 8 && idx < BASEMAPS.length - 1) {
+            errors.current = 0;
+            setIdx((i) => i + 1);
+          }
+        },
+      }}
+    />
+  );
 }
 
 function FlyTo({ facility }: { facility: Facility | null }) {
@@ -65,11 +107,7 @@ export default function InfraMap({
       className="size-full"
       style={{ background: "#0a0d12" }}
     >
-      <TileLayer
-        attribution='Tiles &copy; Esri · Джерела: Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-        maxZoom={16}
-      />
+      <ResilientTileLayer />
 
       {lines.map(({ e, a, b }) => (
         <Polyline
