@@ -146,6 +146,7 @@ export interface SituationSummary {
   atRisk: number;
   /** At-risk facilities in the life-critical tier (hospitals, water works). */
   lifeAtRisk: number;
+  alarms: number;
   byKind: Record<InfraEvent["kind"], number>;
   eventCount: number;
 }
@@ -165,6 +166,7 @@ export function summarize(
   facilities: Facility[],
   riskMap: Map<string, InfraEvent>,
   events: InfraEvent[],
+  alarms = 0,
 ): SituationSummary {
   const byId = new Map(facilities.map((f) => [f.id, f]));
   let lifeAtRisk = 0;
@@ -178,13 +180,14 @@ export function summarize(
 
   const atRisk = riskMap.size;
   const level: SituationLevel =
-    lifeAtRisk > 0 || atRisk >= 8 ? "critical" : atRisk > 0 ? "elevated" : "normal";
+    alarms > 0 || lifeAtRisk > 0 || atRisk >= 8 ? "critical" : atRisk > 0 ? "elevated" : "normal";
 
   return {
     level,
     label: LEVEL_LABEL[level],
     atRisk,
     lifeAtRisk,
+    alarms,
     byKind,
     eventCount: events.length,
   };

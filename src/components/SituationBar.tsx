@@ -1,4 +1,4 @@
-import { AlertTriangle, HeartPulse, ShieldAlert, ShieldCheck } from "lucide-react";
+import { AlertTriangle, HeartPulse, ShieldAlert, ShieldCheck, Siren } from "lucide-react";
 
 import { EVENT_KINDS, type SituationLevel, type SituationSummary } from "@/lib/infra-types";
 
@@ -62,6 +62,14 @@ export default function SituationBar({
           {loading ? "Оцінка обстановки…" : summary.label}
         </span>
       </span>
+
+      {summary.alarms > 0 ? (
+        <span className="flex items-center gap-1.5 rounded-full border border-red-500/50 bg-red-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400">
+          <Siren className="size-3.5 animate-pulse" />
+          Повітряна тривога
+          <span>{summary.alarms} обл.</span>
+        </span>
+      ) : null}
 
       <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
         <AlertTriangle className="size-3 text-amber-400" />

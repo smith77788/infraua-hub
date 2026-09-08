@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 
+import { OBLASTS, type AlertRegion } from "./alerts";
 import { SEED_FACILITIES } from "./infra-seed";
 import { UA_BBOX, type CategoryId, type Facility, type InfraEvent } from "./infra-types";
 
@@ -270,4 +271,72 @@ export const getEvents = createServerFn({ method: "GET" }).handler(async () => {
   const payload = { events, fetchedAt: new Date().toISOString(), degraded: failures > 0 };
   if (failures === 0) writeCache("events", payload);
   return payload;
+});
+
+// Повітряні тривоги по областях — безключове публічне джерело.
+const ALERT_ENDPOINT = "https://ubilling.net.ua/aerialalerts/?json";
+
+interface AlertsPayload {
+  regions: AlertRegion[];
+  activeCount: number;
+  fetchedAt: string;
+  degraded: boolean;
+}
+
+function idleRegions(): AlertRegion[] {
+  const seen = new Set<string>();
+  const out: AlertRegion[] = [];
+  for (const o of Object.values(OBLASTS)) {
+    if (seen.has(o.code)) continue;
+    seen.add(o.code);
+    out.push({ ...o, active: false });
+  }
+  return out;
+}
+
+export const getAlerts = createServerFn({ method: "GET" }).handler(async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(ALERT_ENDPOINT, { signal: controller.signal });
+    if (!res.ok) throw new Error(`alerts ${res.status}`);
+    const data = (await res.json()) as {
+      states?: Record<string, { alertnow?: boolean; changed?: string }>;
+    };
+    const states = data.states ?? {};
+
+    const byCode = new Map<string, AlertRegion>();
+    for (const [apiName, st] of Object.entries(states)) {
+      const center = OBLASTS[apiName];
+      if (!center) continue;
+      const active = st.alertnow === true;
+      const prev = byCode.get(center.code);
+      // Той самий регіон може прийти під кількома назвами — беремо «активний».
+      if (!prev || (active && !prev.active)) {
+        byCode.set(center.code, {
+          ...center,
+          active,
+          ...(st.changed && !st.changed.startsWith("1970") ? { since: st.changed } : {}),
+        });
+      }
+    }
+
+    const regions = byCode.size ? [...byCode.values()] : idleRegions();
+    const activeCount = regions.filter((r) => r.active).length;
+    return {
+      regions,
+      activeCount,
+      fetchedAt: new Date().toISOString(),
+      degraded: byCode.size === 0,
+    } satisfies AlertsPayload;
+  } catch {
+    return {
+      regions: idleRegions(),
+      activeCount: 0,
+      fetchedAt: new Date().toISOString(),
+      degraded: true,
+    } satisfies AlertsPayload;
+  } finally {
+    clearTimeout(timer);
+  }
 });

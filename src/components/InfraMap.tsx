@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, useMap } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  CircleMarker,
+  Circle,
+  Popup,
+  Polyline,
+  useMap,
+} from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
+import { type AlertRegion } from "@/lib/alerts";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -14,6 +23,7 @@ interface Props {
   facilities: Facility[];
   events: InfraEvent[];
   edges: GraphEdge[];
+  alerts: AlertRegion[];
   showLinks: boolean;
   riskIds: Set<string>;
   impactedIds: Set<string>;
@@ -76,6 +86,7 @@ export default function InfraMap({
   facilities,
   events,
   edges,
+  alerts,
   showLinks,
   riskIds,
   impactedIds,
@@ -108,6 +119,31 @@ export default function InfraMap({
       style={{ background: "#0a0d12" }}
     >
       <ResilientTileLayer />
+
+      {alerts
+        .filter((r) => r.active)
+        .map((r) => (
+          <Circle
+            key={`alarm-${r.code}`}
+            center={[r.lat, r.lon]}
+            radius={62000}
+            pathOptions={{
+              color: "#ef4444",
+              fillColor: "#ef4444",
+              fillOpacity: 0.12,
+              weight: 1.2,
+              dashArray: "5 5",
+            }}
+          >
+            <Popup>
+              <div className="space-y-1 font-sans text-xs">
+                <p className="font-semibold text-red-600">Повітряна тривога</p>
+                <p className="opacity-80">{r.name}</p>
+                {r.since ? <p className="opacity-70">Від {r.since}</p> : null}
+              </div>
+            </Popup>
+          </Circle>
+        ))}
 
       {lines.map(({ e, a, b }) => (
         <Polyline
