@@ -16,21 +16,39 @@ const OVERPASS_ENDPOINTS = [
 const QUERIES: Record<CategoryId, string> = {
   power_plant: `nwr["power"="plant"]({{bbox}});`,
   substation: `nwr["power"="substation"]["voltage"~"^(1[1-9][0-9]{4}|[2-9][0-9]{5})"]({{bbox}});`,
+  oil_gas: `nwr["man_made"="works"]["product"~"oil|fuel|petroleum|diesel|gas|petrol",i]({{bbox}});nwr["landuse"="depot"]["substance"~"oil|fuel|gas",i]({{bbox}});`,
+  dam: `nwr["waterway"="dam"]["name"]({{bbox}});`,
   water: `nwr["man_made"="water_works"]({{bbox}});`,
   hospital: `nwr["amenity"="hospital"]({{bbox}});`,
+  fire_station: `nwr["amenity"="fire_station"]({{bbox}});`,
   airport: `nwr["aeroway"="aerodrome"]["iata"]({{bbox}});`,
   rail: `nwr["railway"="station"]["train"!="no"]({{bbox}});`,
+  seaport: `nwr["harbour"="yes"]({{bbox}});nwr["industrial"="port"]({{bbox}});`,
+  border: `nwr["barrier"="border_control"]({{bbox}});`,
   telecom: `nwr["man_made"="communications_tower"]({{bbox}});`,
+  data_center: `nwr["telecom"="data_center"]({{bbox}});nwr["office"="telecommunication"]({{bbox}});`,
+  government: `nwr["office"="government"]["name"]({{bbox}});`,
+  grain: `nwr["man_made"="silo"]["name"]({{bbox}});nwr["crop"="grain"]({{bbox}});`,
+  industry: `nwr["landuse"="industrial"]["name"]["operator"]({{bbox}});`,
 };
 
 const LIMITS: Record<CategoryId, number> = {
   power_plant: 250,
   substation: 400,
+  oil_gas: 120,
+  dam: 120,
   water: 200,
   hospital: 350,
+  fire_station: 300,
   airport: 60,
   rail: 300,
+  seaport: 60,
+  border: 120,
   telecom: 250,
+  data_center: 80,
+  government: 200,
+  grain: 200,
+  industry: 200,
 };
 
 interface CacheEntry<T> {

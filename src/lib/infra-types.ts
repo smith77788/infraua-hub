@@ -1,5 +1,22 @@
 export type CategoryId =
-  "power_plant" | "substation" | "water" | "hospital" | "airport" | "rail" | "telecom";
+  | "power_plant"
+  | "substation"
+  | "oil_gas"
+  | "dam"
+  | "water"
+  | "hospital"
+  | "fire_station"
+  | "airport"
+  | "rail"
+  | "seaport"
+  | "border"
+  | "telecom"
+  | "data_center"
+  | "government"
+  | "grain"
+  | "industry";
+
+export type Tier = "energy" | "life" | "mobility" | "comms" | "industry" | "gov";
 
 export interface Facility {
   id: string;
@@ -28,15 +45,24 @@ export const UA_BBOX = { south: 44.2, west: 22.0, north: 52.4, east: 40.3 };
 
 export const CATEGORIES: Record<
   CategoryId,
-  { label: string; short: string; color: string; tier: "energy" | "life" | "mobility" | "comms" }
+  { label: string; short: string; color: string; tier: Tier }
 > = {
   power_plant: { label: "Електростанції", short: "ЕС", color: "#f5a623", tier: "energy" },
   substation: { label: "Підстанції 110кВ+", short: "ПС", color: "#22d3ee", tier: "energy" },
+  oil_gas: { label: "Нафта і газ", short: "НГ", color: "#fb7185", tier: "energy" },
+  dam: { label: "Греблі / ГТС", short: "ГТ", color: "#2dd4bf", tier: "energy" },
   water: { label: "Водоканали", short: "ВД", color: "#38bdf8", tier: "life" },
   hospital: { label: "Лікарні", short: "ЛК", color: "#f87171", tier: "life" },
+  fire_station: { label: "Пожежні частини (ДСНС)", short: "ПЧ", color: "#ef4444", tier: "life" },
   airport: { label: "Аеродроми", short: "АП", color: "#a78bfa", tier: "mobility" },
   rail: { label: "Залізничні вузли", short: "ЗВ", color: "#94a3b8", tier: "mobility" },
+  seaport: { label: "Морські порти", short: "МП", color: "#818cf8", tier: "mobility" },
+  border: { label: "Пункти пропуску", short: "КП", color: "#c084fc", tier: "mobility" },
   telecom: { label: "Вузли звʼязку", short: "ЗВʼ", color: "#4ade80", tier: "comms" },
+  data_center: { label: "Центри обробки даних", short: "ЦОД", color: "#34d399", tier: "comms" },
+  government: { label: "Держустанови", short: "ДУ", color: "#e2e8f0", tier: "gov" },
+  grain: { label: "Елеватори", short: "ЕЛ", color: "#eab308", tier: "industry" },
+  industry: { label: "Промислові вузли", short: "ПР", color: "#9ca3af", tier: "industry" },
 };
 
 export const EVENT_KINDS: Record<InfraEvent["kind"], { label: string; color: string }> = {

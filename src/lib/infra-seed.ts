@@ -556,6 +556,212 @@ const SEED: Seed[] = [
     lon: 35.139,
     operator: "Укрзалізниця",
   },
+
+  // Нафта і газ
+  {
+    name: "Кременчуцький НПЗ (Укртатнафта)",
+    category: "oil_gas",
+    lat: 49.05,
+    lon: 33.44,
+    operator: "Укртатнафта",
+    detail: "нафтопереробка",
+  },
+  {
+    name: "Дрогобицький НПЗ",
+    category: "oil_gas",
+    lat: 49.35,
+    lon: 23.51,
+    detail: "нафтопереробка",
+  },
+  {
+    name: "Шебелинський ГПЗ",
+    category: "oil_gas",
+    lat: 49.62,
+    lon: 36.3,
+    operator: "Укргазвидобування",
+    detail: "газопереробка",
+  },
+  {
+    name: "ПСГ Більче-Волицько-Угерське",
+    category: "oil_gas",
+    lat: 49.3,
+    lon: 23.5,
+    operator: "Укртрансгаз",
+    detail: "підземне сховище газу",
+  },
+  {
+    name: "Дашавське ПСГ",
+    category: "oil_gas",
+    lat: 49.35,
+    lon: 23.87,
+    operator: "Укртрансгаз",
+    detail: "підземне сховище газу",
+  },
+  { name: "Одеська нафтобаза", category: "oil_gas", lat: 46.5, lon: 30.75, detail: "нафтобаза" },
+
+  // Греблі / ГТС
+  {
+    name: "Гребля Київської ГЕС (Вишгород)",
+    category: "dam",
+    lat: 50.6,
+    lon: 30.5,
+    operator: "Укргідроенерго",
+  },
+  {
+    name: "Гребля Кременчуцької ГЕС",
+    category: "dam",
+    lat: 49.076,
+    lon: 33.25,
+    operator: "Укргідроенерго",
+  },
+  {
+    name: "Гребля Дністровської ГЕС",
+    category: "dam",
+    lat: 48.517,
+    lon: 27.47,
+    operator: "Укргідроенерго",
+  },
+  {
+    name: "Гребля Канівської ГЕС",
+    category: "dam",
+    lat: 49.766,
+    lon: 31.468,
+    operator: "Укргідроенерго",
+  },
+  {
+    name: "Гребля ДніпроГЕС",
+    category: "dam",
+    lat: 47.868,
+    lon: 35.087,
+    operator: "Укргідроенерго",
+  },
+
+  // Пожежні частини (ДСНС)
+  { name: "ГУ ДСНС у м. Києві", category: "fire_station", lat: 50.447, lon: 30.52 },
+  { name: "ГУ ДСНС у Львівській області", category: "fire_station", lat: 49.84, lon: 24.03 },
+  { name: "ГУ ДСНС у Харківській області", category: "fire_station", lat: 49.99, lon: 36.23 },
+  { name: "ГУ ДСНС в Одеській області", category: "fire_station", lat: 46.47, lon: 30.73 },
+  { name: "ГУ ДСНС у Дніпропетровській області", category: "fire_station", lat: 48.46, lon: 35.04 },
+
+  // Морські порти
+  { name: "Одеський морський порт", category: "seaport", lat: 46.49, lon: 30.74, operator: "АМПУ" },
+  {
+    name: "Порт «Південний» (Південне)",
+    category: "seaport",
+    lat: 46.63,
+    lon: 31.02,
+    operator: "АМПУ",
+  },
+  { name: "Порт «Чорноморськ»", category: "seaport", lat: 46.3, lon: 30.66, operator: "АМПУ" },
+  {
+    name: "Миколаївський морський порт",
+    category: "seaport",
+    lat: 46.95,
+    lon: 32.02,
+    operator: "АМПУ",
+  },
+  { name: "Ізмаїльський порт", category: "seaport", lat: 45.35, lon: 28.84, operator: "АМПУ" },
+  { name: "Порт Рені", category: "seaport", lat: 45.45, lon: 28.28, operator: "АМПУ" },
+
+  // Пункти пропуску
+  { name: "ПП «Краковець» (UA–PL)", category: "border", lat: 49.96, lon: 23.18 },
+  { name: "ПП «Шегині» (UA–PL)", category: "border", lat: 49.79, lon: 22.99 },
+  { name: "ПП «Ягодин» (UA–PL)", category: "border", lat: 51.05, lon: 23.83 },
+  { name: "ПП «Чоп / Тиса» (UA–HU)", category: "border", lat: 48.43, lon: 22.2 },
+  { name: "ПП «Порубне» (UA–RO)", category: "border", lat: 48.09, lon: 26.1 },
+  { name: "ПП «Паланка» (UA–MD)", category: "border", lat: 46.27, lon: 29.98 },
+
+  // Центри обробки даних
+  { name: "ЦОД De Novo (Київ)", category: "data_center", lat: 50.4, lon: 30.52 },
+  { name: "ЦОД Datagroup (Київ)", category: "data_center", lat: 50.45, lon: 30.48 },
+  { name: "ЦОД GigaCenter (Київ)", category: "data_center", lat: 50.43, lon: 30.55 },
+  { name: "ЦОД (Харків)", category: "data_center", lat: 49.99, lon: 36.23 },
+  { name: "ЦОД (Львів)", category: "data_center", lat: 49.84, lon: 24.03 },
+
+  // Держустанови
+  { name: "Верховна Рада України", category: "government", lat: 50.4456, lon: 30.5461 },
+  { name: "Кабінет Міністрів України", category: "government", lat: 50.4479, lon: 30.5374 },
+  { name: "Офіс Президента України", category: "government", lat: 50.4492, lon: 30.537 },
+  { name: "Національний банк України", category: "government", lat: 50.4472, lon: 30.5353 },
+  { name: "Львівська ОВА", category: "government", lat: 49.842, lon: 24.031 },
+  { name: "Харківська ОВА", category: "government", lat: 49.993, lon: 36.231 },
+  { name: "Одеська ОВА", category: "government", lat: 46.484, lon: 30.727 },
+  { name: "Дніпропетровська ОВА", category: "government", lat: 48.465, lon: 35.046 },
+
+  // Елеватори / зерносховища
+  {
+    name: "Зерновий термінал «Нібулон» (Миколаїв)",
+    category: "grain",
+    lat: 46.96,
+    lon: 31.98,
+    operator: "Нібулон",
+  },
+  { name: "Одеський зерновий термінал", category: "grain", lat: 46.49, lon: 30.74 },
+  { name: "Чорноморський зерновий термінал", category: "grain", lat: 46.3, lon: 30.66 },
+  {
+    name: "Елеватор Kernel (Полтавщина)",
+    category: "grain",
+    lat: 49.6,
+    lon: 34.4,
+    operator: "Kernel",
+  },
+  { name: "Елеватор (Тернопільщина)", category: "grain", lat: 49.55, lon: 25.6 },
+
+  // Промислові вузли
+  {
+    name: "АрселорМіттал Кривий Ріг",
+    category: "industry",
+    lat: 47.9,
+    lon: 33.42,
+    operator: "ArcelorMittal",
+    detail: "металургія",
+  },
+  {
+    name: "Запоріжсталь",
+    category: "industry",
+    lat: 47.88,
+    lon: 35.2,
+    operator: "Метінвест",
+    detail: "металургія",
+  },
+  {
+    name: "Дніпровський МК (Камʼянське)",
+    category: "industry",
+    lat: 48.51,
+    lon: 34.62,
+    detail: "металургія",
+  },
+  {
+    name: "Черкаський «Азот»",
+    category: "industry",
+    lat: 49.47,
+    lon: 32.12,
+    operator: "OSTCHEM",
+    detail: "хімія",
+  },
+  {
+    name: "«Рівнеазот»",
+    category: "industry",
+    lat: 50.57,
+    lon: 26.2,
+    operator: "OSTCHEM",
+    detail: "хімія",
+  },
+  {
+    name: "Південний ГЗК (Кривий Ріг)",
+    category: "industry",
+    lat: 47.75,
+    lon: 33.3,
+    detail: "гірничо-збагачувальний",
+  },
+  {
+    name: "Інтерпайп Сталь (Дніпро)",
+    category: "industry",
+    lat: 48.42,
+    lon: 35.0,
+    operator: "Интерпайп",
+    detail: "металургія",
+  },
 ];
 
 /** Опорні обʼєкти у форматі Facility зі стабільними id та посиланням на OSM-координати. */
