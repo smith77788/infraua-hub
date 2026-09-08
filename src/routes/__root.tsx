@@ -77,17 +77,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "InfraUA — ситуаційна обізнаність для критичної інфраструктури" },
+      { title: "Palanter — консоль аналітика" },
       {
         name: "description",
         content:
-          "InfraUA зводить відкриті дані про енергетику, транспорт і звʼязок України в єдину карту та граф залежностей.",
+          "Граф знань з перевіркою онтології, розслідування з обґрунтуванням, детерміновані обчислення в пісочниці та журнал аудиту, захищений ланцюжком хешів.",
       },
-      { name: "author", content: "InfraUA" },
-      { property: "og:title", content: "InfraUA" },
+      { name: "author", content: "Palanter" },
+      { property: "og:title", content: "Palanter" },
       {
         property: "og:description",
-        content: "Єдина карта та граф залежностей критичної інфраструктури України.",
+        content:
+          "Жодна відповідь цієї системи не є непідзвітною: кожне число обчислює код, кожен висновок перевіряється за фактами, кожна дія потрапляє в журнал.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
