@@ -1,4 +1,5 @@
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -32,7 +33,7 @@ const NAV = [
   { to: "/audit", label: "Аудит", icon: ScrollText, exact: false },
 ] as const;
 
-export function AppShell() {
+export function AppShell({ children }: { children: ReactNode }) {
   const { clearance, signOut } = useSession();
 
   // Liveness is a public endpoint, so this keeps reporting even after a key is
@@ -140,9 +141,7 @@ export function AppShell() {
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-5 md:px-6 md:py-6">
-          <Outlet />
-        </main>
+        <main className="min-w-0 flex-1 px-4 py-5 md:px-6 md:py-6">{children}</main>
       </div>
     </div>
   );

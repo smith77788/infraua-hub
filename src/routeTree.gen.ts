@@ -9,92 +9,86 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ConsoleRouteImport } from './routes/_console'
-import { Route as ConsoleIndexRouteImport } from './routes/_console.index'
-import { Route as ConsoleAnalysisRouteImport } from './routes/_console.analysis'
-import { Route as ConsoleAuditRouteImport } from './routes/_console.audit'
-import { Route as ConsoleCasesRouteImport } from './routes/_console.cases'
-import { Route as ConsoleGraphRouteImport } from './routes/_console.graph'
-import { Route as ConsoleIngestRouteImport } from './routes/_console.ingest'
-import { Route as ConsoleInvestigateRouteImport } from './routes/_console.investigate'
-import { Route as ConsoleMapRouteImport } from './routes/_console.map'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as AnalysisRouteImport } from './routes/analysis'
+import { Route as AuditRouteImport } from './routes/audit'
+import { Route as CasesRouteImport } from './routes/cases'
+import { Route as GraphRouteImport } from './routes/graph'
+import { Route as IngestRouteImport } from './routes/ingest'
+import { Route as InvestigateRouteImport } from './routes/investigate'
+import { Route as MapRouteImport } from './routes/map'
 
-const ConsoleRoute = ConsoleRouteImport.update({
-  id: '/_console',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConsoleIndexRoute = ConsoleIndexRouteImport.update({
+const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleAnalysisRoute = ConsoleAnalysisRouteImport.update({
+const AnalysisRoute = AnalysisRouteImport.update({
   id: '/analysis',
   path: '/analysis',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleAuditRoute = ConsoleAuditRouteImport.update({
+const AuditRoute = AuditRouteImport.update({
   id: '/audit',
   path: '/audit',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleCasesRoute = ConsoleCasesRouteImport.update({
+const CasesRoute = CasesRouteImport.update({
   id: '/cases',
   path: '/cases',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleGraphRoute = ConsoleGraphRouteImport.update({
+const GraphRoute = GraphRouteImport.update({
   id: '/graph',
   path: '/graph',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleIngestRoute = ConsoleIngestRouteImport.update({
+const IngestRoute = IngestRouteImport.update({
   id: '/ingest',
   path: '/ingest',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleInvestigateRoute = ConsoleInvestigateRouteImport.update({
+const InvestigateRoute = InvestigateRouteImport.update({
   id: '/investigate',
   path: '/investigate',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConsoleMapRoute = ConsoleMapRouteImport.update({
+const MapRoute = MapRouteImport.update({
   id: '/map',
   path: '/map',
-  getParentRoute: () => ConsoleRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof ConsoleIndexRoute
-  '/analysis': typeof ConsoleAnalysisRoute
-  '/audit': typeof ConsoleAuditRoute
-  '/cases': typeof ConsoleCasesRoute
-  '/graph': typeof ConsoleGraphRoute
-  '/ingest': typeof ConsoleIngestRoute
-  '/investigate': typeof ConsoleInvestigateRoute
-  '/map': typeof ConsoleMapRoute
+  '/': typeof IndexRoute
+  '/analysis': typeof AnalysisRoute
+  '/audit': typeof AuditRoute
+  '/cases': typeof CasesRoute
+  '/graph': typeof GraphRoute
+  '/ingest': typeof IngestRoute
+  '/investigate': typeof InvestigateRoute
+  '/map': typeof MapRoute
 }
 export interface FileRoutesByTo {
-  '/analysis': typeof ConsoleAnalysisRoute
-  '/audit': typeof ConsoleAuditRoute
-  '/cases': typeof ConsoleCasesRoute
-  '/graph': typeof ConsoleGraphRoute
-  '/ingest': typeof ConsoleIngestRoute
-  '/investigate': typeof ConsoleInvestigateRoute
-  '/map': typeof ConsoleMapRoute
-  '/': typeof ConsoleIndexRoute
+  '/': typeof IndexRoute
+  '/analysis': typeof AnalysisRoute
+  '/audit': typeof AuditRoute
+  '/cases': typeof CasesRoute
+  '/graph': typeof GraphRoute
+  '/ingest': typeof IngestRoute
+  '/investigate': typeof InvestigateRoute
+  '/map': typeof MapRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/_console': typeof ConsoleRouteWithChildren
-  '/_console/analysis': typeof ConsoleAnalysisRoute
-  '/_console/audit': typeof ConsoleAuditRoute
-  '/_console/cases': typeof ConsoleCasesRoute
-  '/_console/graph': typeof ConsoleGraphRoute
-  '/_console/ingest': typeof ConsoleIngestRoute
-  '/_console/investigate': typeof ConsoleInvestigateRoute
-  '/_console/map': typeof ConsoleMapRoute
-  '/_console/': typeof ConsoleIndexRoute
+  '/': typeof IndexRoute
+  '/analysis': typeof AnalysisRoute
+  '/audit': typeof AuditRoute
+  '/cases': typeof CasesRoute
+  '/graph': typeof GraphRoute
+  '/ingest': typeof IngestRoute
+  '/investigate': typeof InvestigateRoute
+  '/map': typeof MapRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -109,6 +103,7 @@ export interface FileRouteTypes {
     | '/map'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/analysis'
     | '/audit'
     | '/cases'
@@ -116,119 +111,99 @@ export interface FileRouteTypes {
     | '/ingest'
     | '/investigate'
     | '/map'
-    | '/'
   id:
     | '__root__'
-    | '/_console'
-    | '/_console/analysis'
-    | '/_console/audit'
-    | '/_console/cases'
-    | '/_console/graph'
-    | '/_console/ingest'
-    | '/_console/investigate'
-    | '/_console/map'
-    | '/_console/'
+    | '/'
+    | '/analysis'
+    | '/audit'
+    | '/cases'
+    | '/graph'
+    | '/ingest'
+    | '/investigate'
+    | '/map'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  ConsoleRoute: typeof ConsoleRouteWithChildren
+  IndexRoute: typeof IndexRoute
+  AnalysisRoute: typeof AnalysisRoute
+  AuditRoute: typeof AuditRoute
+  CasesRoute: typeof CasesRoute
+  GraphRoute: typeof GraphRoute
+  IngestRoute: typeof IngestRoute
+  InvestigateRoute: typeof InvestigateRoute
+  MapRoute: typeof MapRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/_console': {
-      id: '/_console'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof ConsoleRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_console/': {
-      id: '/_console/'
+    '/': {
+      id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof ConsoleIndexRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/analysis': {
-      id: '/_console/analysis'
+    '/analysis': {
+      id: '/analysis'
       path: '/analysis'
       fullPath: '/analysis'
-      preLoaderRoute: typeof ConsoleAnalysisRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof AnalysisRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/audit': {
-      id: '/_console/audit'
+    '/audit': {
+      id: '/audit'
       path: '/audit'
       fullPath: '/audit'
-      preLoaderRoute: typeof ConsoleAuditRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof AuditRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/cases': {
-      id: '/_console/cases'
+    '/cases': {
+      id: '/cases'
       path: '/cases'
       fullPath: '/cases'
-      preLoaderRoute: typeof ConsoleCasesRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof CasesRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/graph': {
-      id: '/_console/graph'
+    '/graph': {
+      id: '/graph'
       path: '/graph'
       fullPath: '/graph'
-      preLoaderRoute: typeof ConsoleGraphRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof GraphRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/ingest': {
-      id: '/_console/ingest'
+    '/ingest': {
+      id: '/ingest'
       path: '/ingest'
       fullPath: '/ingest'
-      preLoaderRoute: typeof ConsoleIngestRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof IngestRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/investigate': {
-      id: '/_console/investigate'
+    '/investigate': {
+      id: '/investigate'
       path: '/investigate'
       fullPath: '/investigate'
-      preLoaderRoute: typeof ConsoleInvestigateRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof InvestigateRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_console/map': {
-      id: '/_console/map'
+    '/map': {
+      id: '/map'
       path: '/map'
       fullPath: '/map'
-      preLoaderRoute: typeof ConsoleMapRouteImport
-      parentRoute: typeof ConsoleRoute
+      preLoaderRoute: typeof MapRouteImport
+      parentRoute: typeof rootRouteImport
     }
   }
 }
 
-interface ConsoleRouteChildren {
-  ConsoleAnalysisRoute: typeof ConsoleAnalysisRoute
-  ConsoleAuditRoute: typeof ConsoleAuditRoute
-  ConsoleCasesRoute: typeof ConsoleCasesRoute
-  ConsoleGraphRoute: typeof ConsoleGraphRoute
-  ConsoleIngestRoute: typeof ConsoleIngestRoute
-  ConsoleInvestigateRoute: typeof ConsoleInvestigateRoute
-  ConsoleMapRoute: typeof ConsoleMapRoute
-  ConsoleIndexRoute: typeof ConsoleIndexRoute
-}
-
-const ConsoleRouteChildren: ConsoleRouteChildren = {
-  ConsoleAnalysisRoute: ConsoleAnalysisRoute,
-  ConsoleAuditRoute: ConsoleAuditRoute,
-  ConsoleCasesRoute: ConsoleCasesRoute,
-  ConsoleGraphRoute: ConsoleGraphRoute,
-  ConsoleIngestRoute: ConsoleIngestRoute,
-  ConsoleInvestigateRoute: ConsoleInvestigateRoute,
-  ConsoleMapRoute: ConsoleMapRoute,
-  ConsoleIndexRoute: ConsoleIndexRoute,
-}
-
-const ConsoleRouteWithChildren =
-  ConsoleRoute._addFileChildren(ConsoleRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
-  ConsoleRoute: ConsoleRouteWithChildren,
+  IndexRoute: IndexRoute,
+  AnalysisRoute: AnalysisRoute,
+  AuditRoute: AuditRoute,
+  CasesRoute: CasesRoute,
+  GraphRoute: GraphRoute,
+  IngestRoute: IngestRoute,
+  InvestigateRoute: InvestigateRoute,
+  MapRoute: MapRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
