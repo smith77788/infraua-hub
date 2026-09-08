@@ -24,7 +24,8 @@ interface Props {
 function FlyTo({ facility }: { facility: Facility | null }) {
   const map = useMap();
   useEffect(() => {
-    if (facility) map.flyTo([facility.lat, facility.lon], Math.max(map.getZoom(), 9), { duration: 0.7 });
+    if (facility)
+      map.flyTo([facility.lat, facility.lon], Math.max(map.getZoom(), 9), { duration: 0.7 });
   }, [facility, map]);
   return null;
 }
@@ -65,8 +66,9 @@ export default function InfraMap({
       style={{ background: "#0a0d12" }}
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · CARTO'
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+        attribution='Tiles &copy; Esri · Джерела: Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+        maxZoom={16}
       />
 
       {lines.map(({ e, a, b }) => (

@@ -289,9 +289,10 @@ function Console() {
             </div>
           ) : null}
 
-          {facilitiesQuery.data?.degraded ? (
-            <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto w-fit rounded border border-destructive/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-destructive">
-              Джерело OpenStreetMap тимчасово недоступне — спробуйте «Оновити».
+          {facilitiesQuery.data?.source === "baseline" ? (
+            <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
+              Live-джерело OpenStreetMap недоступне — показано опорний перелік ключових обʼєктів.
+              Натисніть «Оновити» для повторної спроби.
             </div>
           ) : null}
         </main>

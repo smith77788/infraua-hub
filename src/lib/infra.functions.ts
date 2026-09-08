@@ -1,10 +1,16 @@
 import { createServerFn } from "@tanstack/react-start";
 
+import { SEED_FACILITIES } from "./infra-seed";
 import { UA_BBOX, type CategoryId, type Facility, type InfraEvent } from "./infra-types";
 
+// Кілька публічних дзеркал Overpass. Пробуємо послідовно, поки якесь не відповість —
+// це знижує вплив rate-limit/timeout окремого сервера.
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass.osm.jp/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ];
 
 const QUERIES: Record<CategoryId, string> = {
@@ -80,8 +86,7 @@ function toFacility(el: OverpassElement, category: CategoryId): Facility | null 
   const lon = el.lon ?? el.center?.lon;
   if (typeof lat !== "number" || typeof lon !== "number") return null;
   const tags = el.tags ?? {};
-  const name =
-    tags["name:uk"] ?? tags["name"] ?? tags["operator"] ?? "Обʼєкт без назви";
+  const name = tags["name:uk"] ?? tags["name"] ?? tags["operator"] ?? "Обʼєкт без назви";
   const detailParts = [
     tags["plant:source"] && `джерело: ${tags["plant:source"]}`,
     tags["voltage"] && `${Math.round(Number(tags["voltage"].split(";")[0]) / 1000)} кВ`,
@@ -101,11 +106,16 @@ function toFacility(el: OverpassElement, category: CategoryId): Facility | null 
   };
 }
 
+interface FacilitiesPayload {
+  facilities: Facility[];
+  fetchedAt: string;
+  /** true, коли live-джерело недоступне і показано опорний (baseline) перелік. */
+  degraded: boolean;
+  source: "live" | "baseline";
+}
+
 export const getFacilities = createServerFn({ method: "GET" }).handler(async () => {
-  const cached = readCache<{ facilities: Facility[]; fetchedAt: string; degraded: boolean }>(
-    "facilities",
-    30 * 60 * 1000,
-  );
+  const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
   if (cached) return cached;
 
   const controller = new AbortController();
@@ -122,13 +132,33 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(async () 
       }),
     );
     const facilities = results.flat();
-    const payload = {
+
+    // Overpass періодично недоступний (rate-limit / timeout). Щоб консоль не була
+    // порожньою, повертаємо опорний перелік ключових обʼєктів як baseline.
+    if (facilities.length === 0) {
+      return {
+        facilities: SEED_FACILITIES,
+        fetchedAt: new Date().toISOString(),
+        degraded: true,
+        source: "baseline" as const,
+      } satisfies FacilitiesPayload;
+    }
+
+    const payload: FacilitiesPayload = {
       facilities,
       fetchedAt: new Date().toISOString(),
-      degraded: facilities.length === 0,
+      degraded: false,
+      source: "live",
     };
-    if (facilities.length) writeCache("facilities", payload);
+    writeCache("facilities", payload);
     return payload;
+  } catch {
+    return {
+      facilities: SEED_FACILITIES,
+      fetchedAt: new Date().toISOString(),
+      degraded: true,
+      source: "baseline" as const,
+    } satisfies FacilitiesPayload;
   } finally {
     clearTimeout(timer);
   }
@@ -176,12 +206,7 @@ export const getEvents = createServerFn({ method: "GET" }).handler(async () => {
         const geo = ev.geometry?.filter((g) => g.type === "Point").at(-1);
         if (!geo) continue;
         const [lon, lat] = geo.coordinates as [number, number];
-        if (
-          lat < UA_BBOX.south ||
-          lat > UA_BBOX.north ||
-          lon < UA_BBOX.west ||
-          lon > UA_BBOX.east
-        )
+        if (lat < UA_BBOX.south || lat > UA_BBOX.north || lon < UA_BBOX.west || lon > UA_BBOX.east)
           continue;
         events.push({
           id: `eonet-${ev.id}`,
