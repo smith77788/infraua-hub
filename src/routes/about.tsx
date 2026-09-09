@@ -27,7 +27,10 @@ export const Route = createFileRoute("/about")({
         content:
           "InfraUA — платформа ситуаційної обізнаності: збирає відкриті дані про енергетику, транспорт і звʼязок України в одну карту та граф звʼязків.",
       },
-      { property: "og:title", content: "InfraUA — ситуаційна обізнаність для критичної інфраструктури" },
+      {
+        property: "og:title",
+        content: "InfraUA — ситуаційна обізнаність для критичної інфраструктури",
+      },
       {
         property: "og:description",
         content:
@@ -135,7 +138,9 @@ function Index() {
       {/* Header */}
       <header
         className={`fixed inset-x-0 top-0 z-50 transition-colors duration-300 ${
-          scrolled ? "border-b border-border bg-background/85 backdrop-blur-md" : "border-b border-transparent"
+          scrolled
+            ? "border-b border-border bg-background/85 backdrop-blur-md"
+            : "border-b border-transparent"
         }`}
       >
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5">
@@ -234,10 +239,10 @@ function Index() {
                   Не ще один дашборд, а робочий інструмент аналітика
                 </h2>
                 <p className="mt-5 text-base leading-relaxed text-muted-foreground">
-                  Більшість систем показують точки на карті. InfraUA показує звʼязки між ними:
-                  які обʼєкти залежать один від одного, які події їх зачепили і що станеться,
-                  якщо вузол вимкнеться. Кожне твердження в системі можна розгорнути до
-                  конкретного запису й джерела.
+                  Більшість систем показують точки на карті. InfraUA показує звʼязки між ними: які
+                  обʼєкти залежать один від одного, які події їх зачепили і що станеться, якщо вузол
+                  вимкнеться. Кожне твердження в системі можна розгорнути до конкретного запису й
+                  джерела.
                 </p>
                 <ul className="mt-8 space-y-4">
                   {[
@@ -274,7 +279,10 @@ function Index() {
                     ["last_event", "12 хв тому", "text-muted-foreground"],
                     ["source", "open-data · verified", "text-muted-foreground"],
                   ].map(([k, v, cls]) => (
-                    <div key={k} className="flex items-baseline justify-between gap-4 border-b border-border/50 pb-2">
+                    <div
+                      key={k}
+                      className="flex items-baseline justify-between gap-4 border-b border-border/50 pb-2"
+                    >
                       <span className="text-muted-foreground">{k}</span>
                       <span className={cls}>{v}</span>
                     </div>
@@ -325,16 +333,20 @@ function Index() {
                   Тільки те, що можна перевірити
                 </h2>
                 <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
-                  Платформа працює з відкритими даними та з вашими власними наборами. Кожен
-                  запис зберігає посилання на джерело й час отримання, тож будь-який висновок
-                  можна відтворити.
+                  Платформа працює з відкритими даними та з вашими власними наборами. Кожен запис
+                  зберігає посилання на джерело й час отримання, тож будь-який висновок можна
+                  відтворити.
                 </p>
               </div>
 
               <div className="grid gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-2">
                 {SOURCES.map(({ icon: Icon, name, note }) => (
                   <div key={name} className="flex items-start gap-3 bg-card px-5 py-5">
-                    <Icon className="mt-0.5 size-5 shrink-0 text-accent" strokeWidth={1.5} aria-hidden />
+                    <Icon
+                      className="mt-0.5 size-5 shrink-0 text-accent"
+                      strokeWidth={1.5}
+                      aria-hidden
+                    />
                     <div>
                       <p className="font-mono text-xs font-semibold tracking-wide">{name}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{note}</p>
@@ -376,8 +388,8 @@ function Index() {
               Готові подивитись на свою інфраструктуру інакше?
             </h2>
             <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
-              Напишіть кілька слів про вашу задачу — покажемо платформу на ваших даних і
-              обговоримо, які джерела під неї підключити.
+              Напишіть кілька слів про вашу задачу — покажемо платформу на ваших даних і обговоримо,
+              які джерела під неї підключити.
             </p>
             <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
               <Button asChild size="lg" className="font-mono text-xs uppercase tracking-[0.14em]">

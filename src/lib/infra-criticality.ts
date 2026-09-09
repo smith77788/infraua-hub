@@ -312,7 +312,8 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         id: "energy_backbone",
         label: "Опора енергосистеми",
         contribution: 10,
-        reason: "Генерація і високовольтні підстанції живлять решту секторів, тож їх відмова поширюється далі за власний сектор.",
+        reason:
+          "Генерація і високовольтні підстанції живлять решту секторів, тож їх відмова поширюється далі за власний сектор.",
         evidence: tier === "power_plant" ? "електростанція" : "підстанція 110кВ+",
       });
     }

@@ -130,38 +130,86 @@
 }
 
 @keyframes infra-scan {
-  0% { transform: translateY(-100%); opacity: 0; }
-  40% { opacity: 1; }
-  100% { transform: translateY(2000%); opacity: 0; }
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(2000%);
+    opacity: 0;
+  }
 }
 
 @keyframes infra-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.82); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
 }
 
-.animate-scan { animation: infra-scan 7s linear infinite; }
-.animate-pulse-dot { animation: infra-pulse 2s ease-in-out infinite; }
+.animate-scan {
+  animation: infra-scan 7s linear infinite;
+}
+.animate-pulse-dot {
+  animation: infra-pulse 2s ease-in-out infinite;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-scan, .animate-pulse-dot { animation: none; }
+  .animate-scan,
+  .animate-pulse-dot {
+    animation: none;
+  }
 }
 
 /* Прибрати дефолтний фон/рамку Leaflet для наших іконок-пінів */
-.infra-pin { background: transparent !important; border: none !important; }
-.leaflet-popup-content-wrapper { background: #0f141b; color: #e2e8f0; border: 1px solid #1f2937; }
-.leaflet-popup-tip { background: #0f141b; }
+.infra-pin {
+  background: transparent !important;
+  border: none !important;
+}
+.leaflet-popup-content-wrapper {
+  background: #0f141b;
+  color: #e2e8f0;
+  border: 1px solid #1f2937;
+}
+.leaflet-popup-tip {
+  background: #0f141b;
+}
 
 /* Пульсуюча позначка повітряної цілі */
-.threat-pin { background: transparent !important; border: none !important; }
+.threat-pin {
+  background: transparent !important;
+  border: none !important;
+}
 .threat-mark {
-  display: block; width: 12px; height: 12px; border-radius: 50%;
-  background: #ef4444; box-shadow: 0 0 0 0 rgba(239,68,68,.7);
-  animation: threat-ping 1.5s cubic-bezier(0,0,.2,1) infinite;
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  animation: threat-ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 @keyframes threat-ping {
-  0% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); }
-  70% { box-shadow: 0 0 0 13px rgba(239,68,68,0); }
-  100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 13px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
 }
-@media (prefers-reduced-motion: reduce) { .threat-mark { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .threat-mark {
+    animation: none;
+  }
+}

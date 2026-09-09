@@ -44,7 +44,12 @@ export default function DependencyGraph({ root, facilities, edges, onSelect }: P
   }
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" role="img" aria-label="Граф залежностей обʼєкта">
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      className="w-full"
+      role="img"
+      aria-label="Граф залежностей обʼєкта"
+    >
       {upstream.map((u, i) => {
         const p = place(i, upstream.length, 92, Math.PI * 1.15, Math.PI * 0.85);
         return (
@@ -58,7 +63,13 @@ export default function DependencyGraph({ root, facilities, edges, onSelect }: P
               className="cursor-pointer"
               onClick={() => onSelect(u.node)}
             />
-            <text x={p.x} y={p.y - 9} textAnchor="middle" className="fill-muted-foreground" fontSize={7}>
+            <text
+              x={p.x}
+              y={p.y - 9}
+              textAnchor="middle"
+              className="fill-muted-foreground"
+              fontSize={7}
+            >
               {u.node.name.slice(0, 22)}
             </text>
           </g>
@@ -86,7 +97,14 @@ export default function DependencyGraph({ root, facilities, edges, onSelect }: P
       })}
 
       <circle cx={cx} cy={cy} r={9} fill={CATEGORIES[root.category].color} />
-      <circle cx={cx} cy={cy} r={14} fill="none" stroke={CATEGORIES[root.category].color} strokeOpacity={0.4} />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={14}
+        fill="none"
+        stroke={CATEGORIES[root.category].color}
+        strokeOpacity={0.4}
+      />
       <text x={cx} y={cy + 28} textAnchor="middle" className="fill-foreground" fontSize={8}>
         {root.name.slice(0, 28)}
       </text>
