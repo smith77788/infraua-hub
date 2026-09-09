@@ -19,6 +19,7 @@ def compute(broadcaster) -> dict:
     conf_buckets = {"low": 0, "med": 0, "high": 0}
     moving = 0
     corroborated = 0
+    in_zone = 0
     for t in tracks:
         by_type[t.type] = by_type.get(t.type, 0) + 1
         sc = len(t.sources)
@@ -29,6 +30,8 @@ def compute(broadcaster) -> dict:
         conf_buckets["low" if t.confidence < 0.5 else "med" if t.confidence < 0.8 else "high"] += 1
         if t.heading is not None:
             moving += 1
+        if t.in_zone:
+            in_zone += 1
 
     threatened_tracks = len(broadcaster.threatened)
     threatened_assets = set()
@@ -52,6 +55,7 @@ def compute(broadcaster) -> dict:
             "source_distribution": src_dist,
             "corroborated_tracks": corroborated,
             "corroborated_ratio": round(corroborated / n, 3) if n else 0.0,
+            "in_official_zone": in_zone,
         },
         "correlation": {
             "threatened_tracks": threatened_tracks,

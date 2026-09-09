@@ -74,6 +74,9 @@ class Track:
     # поточна екстрапольована позиція (оновлюється motion-кроком)
     ex_lat: float = 0.0
     ex_lon: float = 0.0
+    # крос-перевірка з офіційними зонами тривог (незалежний авторитетний сигнал)
+    in_zone: bool = False
+    zone_region: str | None = None
 
     def _speed(self) -> float:
         if self.speed_kmh:
@@ -86,6 +89,9 @@ class Track:
         if [self.ex_lat, self.ex_lon] != (wp[-1] if wp else None):
             wp = wp + [[self.ex_lat, self.ex_lon]]
         vector = [wp[0], wp[-1]] if len(wp) >= 2 else None
+        # Офіційна зона тривоги — незалежне підтвердження: піднімає ефективну
+        # впевненість (базова лишається як є для метрик корроборації каналів).
+        eff_conf = min(0.99, self.confidence + (0.08 if self.in_zone else 0.0))
         return {
             "id": self.id,
             "type": self.type,
@@ -98,7 +104,9 @@ class Track:
             "destination": self.destination,
             "waypoints": wp,
             "vector": vector,
-            "confidence": round(self.confidence, 2),
+            "confidence": round(eff_conf, 2),
+            "in_zone": self.in_zone,
+            "zone_region": self.zone_region,
             "count": self.count,
             "source": self.source,
             "channel": self.channel,

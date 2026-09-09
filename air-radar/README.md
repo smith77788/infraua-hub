@@ -71,3 +71,16 @@ pytest backend/tests -q     # 10 тестів: нормалізація, скл�
 GeoNames (гео-база), detoyshahed.in.ua (реальні OSINT-цілі та зони тривог,
 агреговані з публічних Telegram-каналів). Дані OSINT — не офіційні; джерело
 підписане в UI та логах.
+
+## Docker
+
+```bash
+cd air-radar
+docker compose up --build      # http://localhost:8000
+```
+Гео-база будується при першому старті у volume `radar-data` (одноразово).
+Для повного NLP-інжесту Telegram додайте `TG_API_ID` / `TG_API_HASH` у
+середовище сервісу (див. `docker-compose.yml`).
+
+> Примітка: у пісочниці розробки Docker-демон недоступний, тож `docker build`
+> тут не виконувався; Dockerfile/compose перевіряються у середовищі з Docker.

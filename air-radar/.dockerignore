@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+backend/data/*.sqlite
+*.session
+*.session-journal
+STATE.md

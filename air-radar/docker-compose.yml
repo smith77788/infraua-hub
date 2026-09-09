@@ -1,0 +1,17 @@
+services:
+  radar:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENABLE_BRIDGE=1
+      - BRIDGE_POLL_SECONDS=20
+      # Для повного NLP-інжесту Telegram задайте TG_API_ID / TG_API_HASH:
+      # - TG_API_ID=${TG_API_ID:-}
+      # - TG_API_HASH=${TG_API_HASH:-}
+    volumes:
+      - radar-data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  radar-data:

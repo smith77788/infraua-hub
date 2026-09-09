@@ -75,6 +75,18 @@ def test_to_dict_shape():
         assert k in d
 
 
+def test_official_zone_boosts_confidence():
+    tm = TrackManager()
+    tr = tm.observe(obs("a", 49.5, 30.5, time.time(), ttype="shahed"))
+    base = tr.to_dict()["confidence"]
+    tr.in_zone = True
+    tr.zone_region = "Область"
+    boosted = tr.to_dict()
+    assert boosted["confidence"] >= base
+    assert boosted["in_zone"] is True
+    assert boosted["zone_region"] == "Область"
+
+
 def test_corroboration_by_independent_sources():
     t0 = time.time()
     # два підтвердження з РІЗНИХ каналів

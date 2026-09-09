@@ -95,6 +95,14 @@ class Broadcaster:
             await asyncio.sleep(interval)
             async with self._lock:
                 changed, expired = self.tracks.step()
+                # Крос-перевірка треків з офіційними зонами тривог (незалежний сигнал).
+                if self.zones:
+                    from .geometry import zone_containing
+
+                    for t in self.tracks.tracks.values():
+                        region = zone_containing(t.ex_lat, t.ex_lon, self.zones)
+                        t.in_zone = region is not None
+                        t.zone_region = region
                 # Кореляція «загроза → обʼєкт» по всіх рухомих треках.
                 self.threatened = correlate_tracks(list(self.tracks.tracks.values()))
             for t in changed:
