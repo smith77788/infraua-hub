@@ -101,6 +101,7 @@ function Console() {
       fetchedAt: "",
       degraded: true,
       source: "baseline" as const,
+      truncatedCategories: [],
     },
   });
   /*
@@ -335,6 +336,11 @@ function Console() {
       text: `Прийнято: ${result.facilitiesIngested} обʼєктів, ${result.dependenciesIngested} звʼязків (${split.observed} спостережених, ${split.inferred} виведених).`,
     });
   };
+
+  const truncated = useMemo(
+    () => facilitiesQuery.data?.truncatedCategories ?? [],
+    [facilitiesQuery.data],
+  );
 
   const loading = facilitiesQuery.isLoading;
   const counts = useMemo(() => {
@@ -592,6 +598,17 @@ function Console() {
                 ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
                 : ""}
             </p>
+            {/*
+              Обрізаний набір виглядає точнісінько як повний. Категорія, що
+              вперлася у власну стелю, — це не «стільки об'єктів існує», а
+              «стільки ми дозволили собі попросити».
+            */}
+            {truncated.length > 0 ? (
+              <p className="font-mono text-[10px] leading-relaxed text-amber-400/90">
+                Набір неповний: {truncated.map((c) => CATEGORIES[c].label).join(", ")} — досягнуто
+                межі запиту, тож обʼєктів насправді більше.
+              </p>
+            ) : null}
           </aside>
 
           {/* Map */}
@@ -723,6 +740,20 @@ function Console() {
                       </>
                     ) : null}
                   </p>
+                  {/*
+                    Скільки реальних ліній ми не змогли використати. Без цього
+                    рядка втрата виглядає як відсутність: «мало фактів» і «ми
+                    викинули більшість фактів» — різні твердження, і діяти на
+                    них треба по-різному.
+                  */}
+                  {observedGraph && observedGraph.linesWithUnknownEnd > 0 ? (
+                    <p className="mt-1.5 text-[10px] leading-relaxed text-amber-400/90">
+                      Зведено {observedGraph.matchedLines} з {observedGraph.totalLines} ліній.{" "}
+                      {observedGraph.linesWithUnknownEnd} приходять на підстанції, яких немає в
+                      наборі — це щонайменше {observedGraph.unknownEndpointClusters} відсутніх
+                      вузлів, і стільки ж втрачених звʼязків.
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="mt-2 flex gap-2">

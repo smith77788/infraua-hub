@@ -51,9 +51,25 @@ const QUERIES: Record<CategoryId, string> = {
   industry: `nwr["landuse"="industrial"]["name"]["operator"]({{bbox}});`,
 };
 
+/**
+ * Стеля на категорію в запиті Overpass (`out center N`).
+ *
+ * Для енергетики вона була вузьким місцем усього продукту. Заміряно на
+ * реальному тайлі 2°×2° (50–52°N, 30–32°E): 470 ліній 110 кВ+, кінці яких
+ * збиваються у 285 різних вузлів — в одному тайлі з приблизно півсотні, що
+ * покривають країну. Стеля в 400 підстанцій на всю країну означала, що
+ * переважна більшість реальних ліній не мала до чого привʼязатися і мовчки
+ * відкидалася, а спостережена топологія була малою вибіркою, поданою як
+ * мережа.
+ *
+ * Підняте значення — компроміс: Overpass має встигнути за таймаут одного
+ * запиту. Справжнє рішення таке саме, як для ліній, — тягнути підстанції по
+ * тайлах без загальної стелі; воно більше за цю правку і зроблене буде окремо.
+ * До того часу `truncatedCategories` каже прямо, що набір обрізаний.
+ */
 const LIMITS: Record<CategoryId, number> = {
-  power_plant: 250,
-  substation: 400,
+  power_plant: 600,
+  substation: 3000,
   oil_gas: 120,
   dam: 120,
   water: 200,
@@ -151,57 +167,76 @@ interface FacilitiesPayload {
   /** true, коли live-джерело недоступне і показано опорний (baseline) перелік. */
   degraded: boolean;
   source: "live" | "baseline";
+  /**
+   * Категорії, що вперлися у власну стелю, — набір по них неповний.
+   *
+   * Обрізаний набір нічим не відрізняється від повного, якщо про це не
+   * сказати: «підстанцій 3000» і «підстанцій рівно стільки, скільки ми
+   * дозволили собі попросити» — різні твердження.
+   */
+  truncatedCategories: CategoryId[];
 }
 
-export const getFacilities = createServerFn({ method: "GET" }).handler(async () => {
-  const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
-  if (cached) return cached;
+export const getFacilities = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FacilitiesPayload> => {
+    const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
+    if (cached) return cached;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 22_000);
-  try {
-    const entries = Object.entries(QUERIES) as [CategoryId, string][];
-    const results = await Promise.all(
-      entries.map(async ([category, q]) => {
-        const query = `[out:json][timeout:18];(${q.replaceAll("{{bbox}}", BBOX)});out center ${LIMITS[category]};`;
-        const elements = await overpass(query, controller.signal);
-        return elements
-          .map((el) => toFacility(el, category))
-          .filter((f): f is Facility => f !== null);
-      }),
-    );
-    const facilities = results.flat();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 22_000);
+    try {
+      const entries = Object.entries(QUERIES) as [CategoryId, string][];
+      const results = await Promise.all(
+        entries.map(async ([category, q]) => {
+          const query = `[out:json][timeout:18];(${q.replaceAll("{{bbox}}", BBOX)});out center ${LIMITS[category]};`;
+          const elements = await overpass(query, controller.signal);
+          return {
+            category,
+            // Рівно стільки, скільки просили, — майже напевно обрізано.
+            truncated: elements.length >= LIMITS[category],
+            facilities: elements
+              .map((el) => toFacility(el, category))
+              .filter((f): f is Facility => f !== null),
+          };
+        }),
+      );
+      const facilities = results.flatMap((r) => r.facilities);
+      const truncatedCategories = results.filter((r) => r.truncated).map((r) => r.category);
 
-    // Overpass періодично недоступний (rate-limit / timeout). Щоб консоль не була
-    // порожньою, повертаємо опорний перелік ключових обʼєктів як baseline.
-    if (facilities.length === 0) {
+      // Overpass періодично недоступний (rate-limit / timeout). Щоб консоль не була
+      // порожньою, повертаємо опорний перелік ключових обʼєктів як baseline.
+      if (facilities.length === 0) {
+        return {
+          facilities: SEED_FACILITIES,
+          fetchedAt: new Date().toISOString(),
+          degraded: true,
+          source: "baseline" as const,
+          truncatedCategories: [],
+        } satisfies FacilitiesPayload;
+      }
+
+      const payload: FacilitiesPayload = {
+        facilities: mergeWithSeed(facilities),
+        fetchedAt: new Date().toISOString(),
+        degraded: false,
+        source: "live",
+        truncatedCategories,
+      };
+      writeCache("facilities", payload);
+      return payload;
+    } catch {
       return {
         facilities: SEED_FACILITIES,
         fetchedAt: new Date().toISOString(),
         degraded: true,
         source: "baseline" as const,
+        truncatedCategories: [],
       } satisfies FacilitiesPayload;
+    } finally {
+      clearTimeout(timer);
     }
-
-    const payload: FacilitiesPayload = {
-      facilities: mergeWithSeed(facilities),
-      fetchedAt: new Date().toISOString(),
-      degraded: false,
-      source: "live",
-    };
-    writeCache("facilities", payload);
-    return payload;
-  } catch {
-    return {
-      facilities: SEED_FACILITIES,
-      fetchedAt: new Date().toISOString(),
-      degraded: true,
-      source: "baseline" as const,
-    } satisfies FacilitiesPayload;
-  } finally {
-    clearTimeout(timer);
-  }
-});
+  },
+);
 
 interface EonetEvent {
   id: string;

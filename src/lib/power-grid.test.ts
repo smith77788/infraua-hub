@@ -118,7 +118,7 @@ describe("buildObservedGraph", () => {
       "2026-09-09",
     );
     expect(result.edges).toHaveLength(0);
-    expect(result.unmatchedLines).toBe(1);
+    expect(result.linesWithUnknownEnd).toBe(1);
   });
 
   it("не зациклює лінію на той самий обʼєкт", () => {
@@ -272,3 +272,65 @@ function line2Point() {
     ],
   };
 }
+
+describe("облік зведення", () => {
+  it("лічильники в сумі дають кількість ліній на вході", () => {
+    // Попередня версія повертала кількість ребер під назвою кількості ліній,
+    // і сума не сходилася: злита паралельна лінія не потрапляла нікуди.
+    const lines = parsePowerLines({
+      elements: [
+        line(30, [50.4, 30.5], [50.5, 30.5], "110000"), // ребро
+        line(31, [50.5, 30.5], [50.4, 30.5], "330000"), // дубль тієї ж пари
+        line(32, [50.4, 30.5], [49.0, 29.0], "110000"), // кінець у нікуди
+        line(33, [50.4, 30.5], [50.4001, 30.5001], "110000"), // сам на себе
+      ],
+    });
+    const r = buildObservedGraph([SUB_A, SUB_B], lines, "2026-09-09");
+
+    expect(r.totalLines).toBe(4);
+    expect(r.matchedLines).toBe(1);
+    expect(r.duplicateLines).toBe(1);
+    expect(r.linesWithUnknownEnd).toBe(1);
+    expect(r.degenerateLines).toBe(1);
+    expect(r.matchedLines + r.duplicateLines + r.linesWithUnknownEnd + r.degenerateLines).toBe(
+      r.totalLines,
+    );
+    expect(r.edges).toHaveLength(1);
+  });
+
+  it("рахує різні місця без обʼєкта, а не кожен кінець окремо", () => {
+    // Дві лінії приходять в одну й ту саму невідому точку — це одна відсутня
+    // підстанція, а не дві.
+    const lines = parsePowerLines({
+      elements: [
+        line(40, [50.4, 30.5], [48.0, 28.0], "110000"),
+        line(41, [50.5, 30.5], [48.0001, 28.0001], "110000"),
+      ],
+    });
+    const r = buildObservedGraph([SUB_A, SUB_B], lines, "2026-09-09");
+    expect(r.linesWithUnknownEnd).toBe(2);
+    expect(r.unknownEndpointClusters).toBe(1);
+  });
+
+  it("не вигадує вузлів на місці невідомих кінців", () => {
+    // Порахувати їх можна, створити — ні: про сам обʼєкт ми не знаємо нічого.
+    const lines = parsePowerLines({
+      elements: [line(42, [50.4, 30.5], [48.0, 28.0], "110000")],
+    });
+    const r = buildObservedGraph([SUB_A], lines, "2026-09-09");
+    expect(r.edges).toEqual([]);
+    expect(r.unknownEndpointClusters).toBe(1);
+  });
+
+  it("порожній вхід дає нулі, а не NaN", () => {
+    const r = buildObservedGraph([SUB_A], [], "2026-09-09");
+    expect(r).toMatchObject({
+      totalLines: 0,
+      matchedLines: 0,
+      duplicateLines: 0,
+      linesWithUnknownEnd: 0,
+      degenerateLines: 0,
+      unknownEndpointClusters: 0,
+    });
+  });
+});

@@ -176,12 +176,44 @@ class SpatialIndex {
   }
 }
 
+/**
+ * Звіт про зведення, а не лише результат.
+ *
+ * Попередня версія повертала `matchedLines: seen.size` — тобто кількість
+ * *ребер*, названу кількістю ліній. Лінія, що згорталася в уже наявну пару,
+ * не потрапляла в жоден лічильник, і сума не сходилася з входом. Гірше, всі
+ * причини відмови зливалися в одне число, хоча означають вони різне: лінія
+ * без обʼєкта на кінці — це відсутня в наборі підстанція, а лінія в межах
+ * одного обʼєкта — просто службовий відрізок.
+ *
+ * Тепер лічильники розділені й у сумі дають `totalLines`.
+ */
 export interface ObservedGraphResult {
   edges: GraphEdge[];
-  /** Скільки ліній не вдалося звести з жодним обʼєктом на обох кінцях. */
-  unmatchedLines: number;
-  /** Скільки ліній дали ребро. */
+  /** Ліній на вході. Сума решти лічильників дорівнює цьому числу. */
+  totalLines: number;
+  /** Ліній, що дали нове ребро. */
   matchedLines: number;
+  /** Ліній, що лягли на вже побудовану пару (паралельні ланцюги). */
+  duplicateLines: number;
+  /**
+   * Ліній, у яких хоча б один кінець не має обʼєкта поблизу.
+   *
+   * Це головна діагностика покриття: така лінія існує в OSM, але підстанції,
+   * до якої вона приходить, у нашому наборі немає, тож звʼязок втрачено.
+   */
+  linesWithUnknownEnd: number;
+  /** Ліній, обидва кінці яких на тому самому обʼєкті або надто близько. */
+  degenerateLines: number;
+  /**
+   * Скільки різних місць, куди приходять лінії, лишилися без обʼєкта —
+   * оцінка кількості підстанцій, яких у наборі бракує.
+   *
+   * Це рахунок різних точок, а не здогадка про мережу: жодного вузла з них
+   * не створюється, бо про сам обʼєкт ми не знаємо нічого, крім того, що в
+   * цьому місці щось є.
+   */
+  unknownEndpointClusters: number;
 }
 
 /**
@@ -201,33 +233,51 @@ export function buildObservedGraph(
   // Одна пара підстанцій буває зʼєднана кількома паралельними лініями; для
   // топології це одне ребро, тому дублікати згортаються (лишається коротше).
   const seen = new Map<string, GraphEdge>();
-  let unmatched = 0;
+  let duplicates = 0;
+  let unknownEnd = 0;
+  let degenerate = 0;
+  // Місця, куди приходять лінії, але обʼєкта там немає. Сітка того ж порядку,
+  // що й радіус привʼязки, щоб два кінці однієї підстанції не рахувалися двічі.
+  const orphanCells = new Set<string>();
+  const cellOf = (lat: number, lon: number) =>
+    `${Math.round(lat / 0.008)}:${Math.round(lon / 0.008)}`;
 
   for (const line of lines) {
     const first = line.geometry[0];
     const last = line.geometry[line.geometry.length - 1];
     if (!first || !last) {
-      unmatched++;
+      degenerate++;
       continue;
     }
 
     const a = index.nearest(first.lat, first.lon, SNAP_KM);
     const b = index.nearest(last.lat, last.lon, SNAP_KM);
-    if (!a || !b || a.facility.id === b.facility.id) {
-      unmatched++;
+    if (!a || !b) {
+      unknownEnd++;
+      if (!a) orphanCells.add(cellOf(first.lat, first.lon));
+      if (!b) orphanCells.add(cellOf(last.lat, last.lon));
+      continue;
+    }
+    if (a.facility.id === b.facility.id) {
+      degenerate++;
       continue;
     }
 
     const km = distanceKm(a.facility, b.facility);
     if (km < MIN_EDGE_KM) {
-      unmatched++;
+      degenerate++;
       continue;
     }
 
     // Ключ незалежний від напрямку: лінія фізично двостороння.
     const key = [a.facility.id, b.facility.id].sort().join("|");
     const existing = seen.get(key);
-    if (existing && existing.km <= km) continue;
+    if (existing) {
+      duplicates++;
+      // Коротше ребро точніше описує пару, тож замінюємо; довше просто
+      // рахується як дубль.
+      if (existing.km <= km) continue;
+    }
 
     const attributes: Record<string, string | number> = {};
     if (line.voltage !== undefined) attributes["voltage"] = line.voltage;
@@ -250,7 +300,15 @@ export function buildObservedGraph(
   }
 
   edges.push(...seen.values());
-  return { edges, unmatchedLines: unmatched, matchedLines: seen.size };
+  return {
+    edges,
+    totalLines: lines.length,
+    matchedLines: lines.length - duplicates - unknownEnd - degenerate,
+    duplicateLines: duplicates,
+    linesWithUnknownEnd: unknownEnd,
+    degenerateLines: degenerate,
+    unknownEndpointClusters: orphanCells.size,
+  };
 }
 
 /**
