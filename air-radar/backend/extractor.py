@@ -50,6 +50,8 @@ COURSE_RE = re.compile(
 )
 ORIGIN_RE = re.compile(r"(?:з боку|від|зі сторони)\s+", re.I)
 COUNT_RE = re.compile(r"(\d+)\s*(?:х|x|шт|од|бпла|шахед|ракет|ціл)", re.I)
+ALT_RE = re.compile(r"висот[іаиу]\D{0,4}(\d{1,5})\s*(км|м)", re.I)
+SPEED_RE = re.compile(r"(\d{2,4})\s*км\s*/?\s*год", re.I)
 
 
 @dataclass
@@ -100,6 +102,14 @@ def extract(text: str, geo: GeoDB) -> Extraction:
             pass
     if re.search(r"груп[аи]|рій|kolona|колон", text, re.I):
         tokens.append("group")
+
+    # Телеметрія: висота / швидкість (для панелі телеметрії COP).
+    am = ALT_RE.search(text)
+    if am:
+        tokens.append(f"alt:{am.group(1)}{am.group(2)}")
+    sm = SPEED_RE.search(text)
+    if sm:
+        tokens.append(f"spd:{sm.group(1)}км/год")
 
     # Пункт призначення за маркером курсу має пріоритет.
     dest_place = _course_target(text, geo)

@@ -23,6 +23,7 @@
         <div class="top-metrics">
           <span class="metric">Цілі <b id="m-targets">0</b></span>
           <span class="metric alarm">Тривоги <b id="m-zones">0</b></span>
+          <span class="metric alarm">Сповіщення <b id="m-alerts">0</b></span>
           <span class="metric">Швидкість потоку <b id="m-rate">0</b>/хв</span>
           <span class="metric">Гео-база <b id="m-geo">—</b></span>
         </div>
@@ -57,6 +58,10 @@
         <div class="hud hud-risk" id="risk-hud" hidden>
           <div class="risk-title">Обʼєкти під загрозою</div>
           <div id="risk-list"></div>
+        </div>
+        <div class="hud hud-alerts" id="alert-hud" hidden>
+          <div class="risk-title">⚠ Тривожні сповіщення</div>
+          <div id="alert-list"></div>
         </div>
       </main>
 

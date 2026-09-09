@@ -145,6 +145,24 @@ body {
 .risk-item { display: flex; align-items: baseline; gap: 8px; font-size: 11px; padding: 2px 0; }
 .risk-item .eta { margin-left: auto; color: var(--red); font-weight: 700; }
 .risk-item .cat { color: var(--muted); font-size: 9px; }
+/* ── Стрічка предиктивних алертів ────────────────────────── */
+.hud-alerts { top: 12px; right: 12px; padding: 8px 10px; width: 268px; max-height: 46vh; overflow-y: auto; }
+.hud-alerts .risk-title { color: var(--red); }
+.alert-item { border-left: 3px solid var(--muted); padding: 5px 8px; margin-bottom: 5px; background: rgba(255,255,255,.02); cursor: pointer; border-radius: 0 4px 4px 0; transition: background 0.15s; }
+.alert-item:hover { background: rgba(255,255,255,.06); }
+.alert-item.sev-critical { border-left-color: var(--red); animation: alertPulse 1.6s ease-in-out infinite; }
+.alert-item.sev-high { border-left-color: var(--orange); }
+.alert-item.sev-medium { border-left-color: var(--yellow); }
+.alert-top { display: flex; align-items: baseline; gap: 8px; }
+.alert-top .sev { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.1em; }
+.sev-critical .sev { color: var(--red); }
+.sev-high .sev { color: var(--orange); }
+.sev-medium .sev { color: var(--yellow); }
+.alert-top .eta { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--text); }
+.alert-asset { font-size: 12px; font-weight: 600; margin-top: 2px; color: var(--text); }
+.alert-meta { font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 2px; }
+@keyframes alertPulse { 0%, 100% { box-shadow: inset 2px 0 0 var(--red); } 50% { box-shadow: inset 2px 0 0 var(--red), 0 0 12px rgba(255,77,77,.35); } }
+
 .asset-pin { background: transparent !important; border: none !important; }
 .asset-pin .a { width: 8px; height: 8px; transform: rotate(45deg); border: 1px solid #64748b; background: rgba(100,116,139,.25); }
 .asset-pin.hot .a { border-color: var(--red); background: rgba(255,77,77,.5); box-shadow: 0 0 8px var(--red); }

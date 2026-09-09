@@ -10,6 +10,7 @@ import asyncio
 import time
 from collections import deque
 
+from .alerts_engine import evaluate as evaluate_alerts
 from .assets import ASSETS, CATEGORY_LABEL
 from .correlation import correlate_tracks
 from .fusion import TrackManager
@@ -27,6 +28,7 @@ class Broadcaster:
         self.zones: list[dict] = []
         self.logs: deque[dict] = deque(maxlen=300)
         self.threatened: dict[str, list[dict]] = {}
+        self.alerts_feed: list[dict] = []
         self.clients: set = set()
         self.store = store
         self._lock = asyncio.Lock()
@@ -62,6 +64,7 @@ class Broadcaster:
             "zones": self.zones,
             "assets": ASSET_LIST,
             "threatened": self.threatened,
+            "alerts": self.alerts_feed,
             "logs": list(self.logs)[-80:],
             "ts": time.time(),
         }
@@ -105,8 +108,15 @@ class Broadcaster:
                         t.zone_region = region
                 # Кореляція «загроза → обʼєкт» по всіх рухомих треках.
                 self.threatened = correlate_tracks(list(self.tracks.tracks.values()))
+                new_alerts = evaluate_alerts(self.tracks.tracks, self.threatened)
             for t in changed:
                 await self._emit({"type": "upsert", "object": t.to_dict()})
             for tid in expired:
                 await self.remove(tid)
             await self._emit({"type": "threatened", "threatened": self.threatened})
+            # Транслюємо стрічку алертів лише коли склад алертів змінився.
+            if {a["id"] for a in new_alerts} != {a["id"] for a in self.alerts_feed}:
+                self.alerts_feed = new_alerts
+                await self._emit({"type": "alert_feed", "alerts": new_alerts})
+            else:
+                self.alerts_feed = new_alerts

@@ -52,6 +52,19 @@ class Store:
             )
             return [{"lat": r[0], "lon": r[1], "ts": r[2]} for r in cur]
 
+    def recent_paths(self, minutes: float = 60, max_points: int = 6000) -> dict[str, list[dict]]:
+        """Треки за останні `minutes` хв, згруповані за obj_id — для реплею."""
+        cutoff = time.time() - minutes * 60
+        paths: dict[str, list[dict]] = {}
+        with self._lock:
+            cur = self._con.execute(
+                "SELECT obj_id, lat, lon, ts FROM tracks WHERE ts>=? ORDER BY ts LIMIT ?",
+                (cutoff, max_points),
+            )
+            for oid, lat, lon, ts in cur:
+                paths.setdefault(oid, []).append({"lat": lat, "lon": lon, "ts": ts})
+        return paths
+
     def stats(self, since_sec: float = 3600) -> dict:
         cutoff = time.time() - since_sec
         with self._lock:

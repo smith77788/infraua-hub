@@ -83,6 +83,33 @@ function applyThreatened(threatened) {
   ).join("");
 }
 
+const SEV_LABEL = { critical: "КРИТИЧНО", high: "ВИСОКА", medium: "СЕРЕДНЯ" };
+function applyAlerts(alerts) {
+  alerts = alerts || [];
+  const hud = document.getElementById("alert-hud");
+  const listEl = document.getElementById("alert-list");
+  document.getElementById("m-alerts") && (document.getElementById("m-alerts").textContent = alerts.length);
+  if (!alerts.length) { hud.hidden = true; listEl.innerHTML = ""; return; }
+  hud.hidden = false;
+  listEl.innerHTML = alerts.slice(0, 8).map((a) => {
+    const eta = Math.round(a.eta_min);
+    return `<div class="alert-item sev-${a.severity}" data-tid="${a.track_id}" data-lat="${a.lat}" data-lon="${a.lon}">
+      <div class="alert-top"><span class="sev">${SEV_LABEL[a.severity] || a.severity}</span>
+        <span class="eta">ETA ${eta}'</span></div>
+      <div class="alert-asset">→ ${a.asset}</div>
+      <div class="alert-meta">${a.label}${a.in_zone ? " · ◎ офіц. зона" : ""} · ${(a.confidence * 100) | 0}%</div>
+    </div>`;
+  }).join("");
+  listEl.querySelectorAll(".alert-item").forEach((el) => {
+    el.onclick = () => {
+      const lat = parseFloat(el.dataset.lat), lon = parseFloat(el.dataset.lon);
+      map.flyTo([lat, lon], Math.max(map.getZoom(), 9), { duration: 0.6 });
+      const e = objects.get(el.dataset.tid);
+      if (e) e.marker.openPopup();
+    };
+  });
+}
+
 function targetIcon(o) {
   const glyph = TYPE_GLYPH[o.type] || TYPE_GLYPH.unknown;
   const html = `<div class="core" style="color:${o.color};background:${o.color}22;box-shadow:0 0 10px ${o.color}88,0 0 0 1.5px ${o.color}">
@@ -243,11 +270,13 @@ function connect() {
       msg.objects.forEach(upsertObject);
       setZones(msg.zones || []);
       applyThreatened(msg.threatened || {});
+      applyAlerts(msg.alerts || []);
       (msg.logs || []).slice().forEach(addLog);
     } else if (msg.type === "upsert") upsertObject(msg.object);
     else if (msg.type === "remove") removeObject(msg.id);
     else if (msg.type === "zones") setZones(msg.zones);
     else if (msg.type === "threatened") applyThreatened(msg.threatened);
+    else if (msg.type === "alert_feed") applyAlerts(msg.alerts);
     else if (msg.type === "log") addLog(msg.log);
   };
 }

@@ -92,6 +92,16 @@ async def api_metrics():
     return JSONResponse(metrics.compute(broadcaster))
 
 
+@app.get("/api/alerts_feed")
+async def api_alerts_feed():
+    return JSONResponse({"alerts": broadcaster.alerts_feed})
+
+
+@app.get("/api/history")
+async def api_history(minutes: float = 60):
+    return JSONResponse({"minutes": minutes, "paths": store.recent_paths(minutes)})
+
+
 @app.get("/api/health")
 async def api_health():
     return {
