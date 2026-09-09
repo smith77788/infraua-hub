@@ -158,12 +158,12 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(async () 
   if (cached) return cached;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45_000);
+  const timer = setTimeout(() => controller.abort(), 22_000);
   try {
     const entries = Object.entries(QUERIES) as [CategoryId, string][];
     const results = await Promise.all(
       entries.map(async ([category, q]) => {
-        const query = `[out:json][timeout:40];(${q.replaceAll("{{bbox}}", BBOX)});out center ${LIMITS[category]};`;
+        const query = `[out:json][timeout:18];(${q.replaceAll("{{bbox}}", BBOX)});out center ${LIMITS[category]};`;
         const elements = await overpass(query, controller.signal);
         return elements
           .map((el) => toFacility(el, category))

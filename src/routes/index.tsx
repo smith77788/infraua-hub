@@ -32,6 +32,7 @@ import {
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
+import { SEED_FACILITIES } from "@/lib/infra-seed";
 import { analyzeNetwork, assignRegions } from "@/lib/infra-analytics";
 import {
   buildGraph,
@@ -86,6 +87,14 @@ function Console() {
     queryKey: ["facilities"],
     queryFn: () => facilitiesFn(),
     staleTime: 30 * 60 * 1000,
+    // Опорний набір показуємо миттєво, поки вантажиться live з OpenStreetMap
+    // (Overpass буває повільним), щоб карта не була порожньою під час старту.
+    placeholderData: {
+      facilities: SEED_FACILITIES,
+      fetchedAt: "",
+      degraded: true,
+      source: "baseline" as const,
+    },
   });
   /*
    * Покриття накопичується тут, а не на сервері.
@@ -533,7 +542,12 @@ function Console() {
               </div>
             ) : null}
 
-            {facilitiesQuery.data?.source === "baseline" ? (
+            {facilitiesQuery.isPlaceholderData ? (
+              <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" /> Опорний набір показано; вантажимо повні
+                дані з OpenStreetMap…
+              </div>
+            ) : facilitiesQuery.data?.source === "baseline" ? (
               <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
                 Live-джерело OpenStreetMap недоступне — показано опорний перелік ключових обʼєктів.
                 Натисніть «Оновити» для повторної спроби.
