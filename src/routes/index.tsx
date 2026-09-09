@@ -2,6 +2,9 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
+import { backoffMs, sourceUnavailable } from "@/lib/backoff";
+import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
+import { selectVisibleLinks } from "@/lib/map-links";
 import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -119,21 +122,32 @@ function Console() {
   const powerTilesRef = useRef(powerTiles);
   powerTilesRef.current = powerTiles;
 
+  /*
+   * Порожні відповіді поспіль означають, що джерело не відповідає. Без цього
+   * лічильника консоль опитувала б його щохвилини вічно — навантажуючи те, що
+   * саме зараз не в порядку, і малюючи прогрес, якого немає.
+   */
+  const [powerEmpty, setPowerEmpty] = useState(0);
   const powerLinesQuery = useQuery({
     queryKey: ["power-lines"],
     queryFn: () => powerLinesFn({ data: { have: [...powerTilesRef.current.keys()] } }),
     staleTime: 60 * 1000,
-    // Мережа передачі змінюється роками, поспішати нікуди: раз на хвилину,
-    // доки не покрито всю країну.
+    // Мережа передачі змінюється роками, поспішати нікуди.
     refetchInterval: (q) => {
       const data = q.state.data;
-      return data && powerTilesRef.current.size < data.tilesTotal ? 60_000 : false;
+      if (!data || powerTilesRef.current.size >= data.tilesTotal) return false;
+      return backoffMs(powerEmpty);
     },
   });
 
   const newTiles = powerLinesQuery.data?.tiles;
   useEffect(() => {
-    if (!newTiles?.length) return;
+    if (!newTiles) return;
+    if (newTiles.length === 0) {
+      setPowerEmpty((n) => n + 1);
+      return;
+    }
+    setPowerEmpty(0);
     setPowerTiles((prev) =>
       mergeTiles(
         prev,
@@ -155,19 +169,26 @@ function Console() {
   const subTilesRef = useRef(subTiles);
   subTilesRef.current = subTiles;
 
+  const [subEmpty, setSubEmpty] = useState(0);
   const subTilesQuery = useQuery({
     queryKey: ["substation-tiles"],
     queryFn: () => substationTilesFn({ data: { have: [...subTilesRef.current.keys()] } }),
     staleTime: 60 * 1000,
     refetchInterval: (q) => {
       const data = q.state.data;
-      return data && subTilesRef.current.size < data.tilesTotal ? 60_000 : false;
+      if (!data || subTilesRef.current.size >= data.tilesTotal) return false;
+      return backoffMs(subEmpty);
     },
   });
 
   const newSubTiles = subTilesQuery.data?.tiles;
   useEffect(() => {
-    if (!newSubTiles?.length) return;
+    if (!newSubTiles) return;
+    if (newSubTiles.length === 0) {
+      setSubEmpty((n) => n + 1);
+      return;
+    }
+    setSubEmpty(0);
     setSubTiles((prev) =>
       mergeTiles(
         prev,
@@ -389,6 +410,30 @@ function Console() {
     () => facilitiesQuery.data?.truncatedCategories ?? [],
     [facilitiesQuery.data],
   );
+
+  const facilitiesAge = useMemo(
+    () =>
+      ageOf(
+        facilitiesQuery.data?.fetchedAt,
+        FRESHNESS_THRESHOLDS.facilities.aging,
+        FRESHNESS_THRESHOLDS.facilities.stale,
+      ),
+    [facilitiesQuery.data],
+  );
+  const eventsAge = useMemo(() => {
+    // Вік найсвіжішої події: якщо найновіша стара, стрічка не жива.
+    let newest: string | null = null;
+    for (const e of allEvents) if (!newest || e.time > newest) newest = e.time;
+    return ageOf(newest, FRESHNESS_THRESHOLDS.events.aging, FRESHNESS_THRESHOLDS.events.stale);
+  }, [allEvents]);
+
+  const sourceDown = sourceUnavailable(powerEmpty) || sourceUnavailable(subEmpty);
+  const { hiddenLinks, shownLinks } = useMemo(() => {
+    const known = new Set(allFacilities.map((f) => f.id));
+    const drawable = edges.filter((e) => known.has(e.from) && known.has(e.to));
+    const sel = selectVisibleLinks(drawable, 1200);
+    return { hiddenLinks: sel.hidden, shownLinks: sel.visible.length };
+  }, [edges, allFacilities]);
 
   const loading = facilitiesQuery.isLoading;
   const counts = useMemo(() => {
@@ -646,6 +691,35 @@ function Console() {
                 ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
                 : ""}
             </p>
+            {/*
+              Вік даних. Карта з учорашніми обʼєктами і карта, оновлена
+              хвилину тому, виглядають однаково — поки не сказати вголос.
+            */}
+            <p
+              className={`font-mono text-[10px] leading-relaxed ${
+                facilitiesAge.freshness === "stale" ? "text-amber-400/90" : "text-muted-foreground"
+              }`}
+            >
+              Обʼєкти: {facilitiesAge.label}. Події: {eventsAge.label}.
+              {facilitiesAge.freshness === "stale" ? " Дані застаріли." : ""}
+            </p>
+
+            {/* Джерело мовчить — це стан, а не прогрес. */}
+            {sourceDown ? (
+              <p className="font-mono text-[10px] leading-relaxed text-destructive">
+                Overpass не відповідає — довантаження призупинено, інтервал збільшено. Показане
+                лишається дійсним, але покриття не зростає.
+              </p>
+            ) : null}
+
+            {/* Приховані звʼязки: ховаються припущення, факти лишаються. */}
+            {hiddenLinks > 0 && showLinks ? (
+              <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
+                На карті показано {shownLinks} звʼязків, {hiddenLinks} приховано через стелю
+                малювання — ховаються виведені, спостережені показуються завжди.
+              </p>
+            ) : null}
+
             {/*
               Обрізаний набір виглядає точнісінько як повний. Категорія, що
               вперлася у власну стелю, — це не «стільки об'єктів існує», а

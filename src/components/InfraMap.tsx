@@ -16,6 +16,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { type AlertZone, type Threat } from "@/lib/air";
+import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { type AlertRegion } from "@/lib/alerts";
 import {
   CATEGORIES,
@@ -288,17 +289,21 @@ export default function InfraMap({
   const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
 
+  /*
+   * Стеля на кількість ліній лишається — кілька тисяч полілайнів у Leaflet
+   * помітно гальмують карту. Але відкидання більше не випадкове: раніше
+   * бралися перші 1200 у порядку масиву, тож реальна лінія 330 кВ могла
+   * зникнути, а здогадка «найближча підстанція» лишитися. Тепер ховаються
+   * припущення, а факти показуються завжди.
+   */
   const lines = useMemo(() => {
     if (!showLinks) return [];
-    return edges
-      .map((e) => {
-        const a = byId.get(e.from);
-        const b = byId.get(e.to);
-        if (!a || !b) return null;
-        return { e, a, b };
-      })
-      .filter((x): x is { e: GraphEdge; a: Facility; b: Facility } => x !== null)
-      .slice(0, 1200);
+    const drawable = edges.filter((e) => byId.has(e.from) && byId.has(e.to));
+    return selectVisibleLinks(drawable, 1200).visible.map((e) => ({
+      e,
+      a: byId.get(e.from)!,
+      b: byId.get(e.to)!,
+    }));
   }, [edges, byId, showLinks]);
 
   return (
@@ -360,11 +365,9 @@ export default function InfraMap({
             [a.lat, a.lon],
             [b.lat, b.lon],
           ]}
-          pathOptions={{
-            color: impactedIds.has(e.to) ? "#ff9900" : e.kind === "supply" ? "#22d3ee" : "#475569",
-            weight: e.kind === "supply" ? 1 : 0.5,
-            opacity: impactedIds.has(e.to) ? 0.7 : 0.22,
-          }}
+          // Стиль за походженням, а не за видом звʼязку: на головному екрані
+          // факт і здогадка не мають виглядати однаково.
+          pathOptions={linkStyle(e, { impacted: impactedIds.has(e.to) })}
         />
       ))}
 
