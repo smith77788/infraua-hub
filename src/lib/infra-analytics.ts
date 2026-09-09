@@ -1,6 +1,7 @@
 import { type AlertRegion } from "./alerts";
 import {
   assessCriticality,
+  downstreamCounts,
   type CriticalityBand,
   type CriticalitySignal,
 } from "./infra-criticality";
@@ -56,33 +57,6 @@ export interface NetworkAnalysis {
   maxDependents: number;
 }
 
-/** Кількість низхідних (downstream) вузлів для кожного обʼєкта за графом живлення. */
-function dependentsMap(edges: GraphEdge[]): Map<string, number> {
-  const adj = new Map<string, string[]>();
-  for (const e of edges) {
-    const list = adj.get(e.from);
-    if (list) list.push(e.to);
-    else adj.set(e.from, [e.to]);
-  }
-  const memo = new Map<string, Set<string>>();
-  const reach = (id: string): Set<string> => {
-    const cached = memo.get(id);
-    if (cached) return cached;
-    const set = new Set<string>();
-    memo.set(id, set); // guard проти циклів
-    for (const n of adj.get(id) ?? []) {
-      if (!set.has(n)) {
-        set.add(n);
-        for (const m of reach(n)) set.add(m);
-      }
-    }
-    return set;
-  };
-  const out = new Map<string, number>();
-  for (const id of adj.keys()) out.set(id, reach(id).size);
-  return out;
-}
-
 /** Привʼязка обʼєкта до найближчого центру області. */
 export function assignRegions(facilities: Facility[], regions: AlertRegion[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -108,7 +82,7 @@ export function analyzeNetwork(
   events: InfraEvent[],
   regions: AlertRegion[],
 ): NetworkAnalysis {
-  const deps = dependentsMap(edges);
+  const deps = downstreamCounts(edges);
   const risk = facilitiesAtRisk(facilities, events);
   const region = assignRegions(facilities, regions);
   const activeCodes = new Set(regions.filter((r) => r.active).map((r) => r.code));

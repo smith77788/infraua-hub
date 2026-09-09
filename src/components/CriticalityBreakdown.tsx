@@ -1,3 +1,5 @@
+import { CircleHelp } from "lucide-react";
+
 import { BAND_LABEL, type CriticalityBand, type CriticalitySignal } from "@/lib/infra-criticality";
 
 /**
@@ -46,6 +48,7 @@ export default function CriticalityBreakdown({
   }
 
   const sum = signals.reduce((n, s) => n + s.contribution, 0);
+  const ungrounded = signals.filter((s) => !s.grounded).length;
 
   return (
     <div className="space-y-1.5">
@@ -59,12 +62,29 @@ export default function CriticalityBreakdown({
           </div>
           <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{s.evidence}</p>
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{s.reason}</p>
+          {s.grounded ? null : (
+            <p className="mt-1 flex items-start gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[10px] leading-relaxed text-amber-400">
+              <CircleHelp className="mt-px size-3 shrink-0" />
+              Тримається на виведених звʼязках: якщо прибрати припущення про живлення, сигнал
+              зникає. Це висновок про нашу модель мережі, а не про саму мережу.
+            </p>
+          )}
         </div>
       ))}
       <p className="pt-0.5 font-mono text-[10px] text-muted-foreground">
         Разом {sum}
         {sum > score ? ` → ${score} (обмеження сотнею)` : ""} · {BAND_LABEL[band].toLowerCase()}{" "}
         рівень
+        {ungrounded > 0 ? (
+          <>
+            {" "}
+            ·{" "}
+            <span className="text-amber-400">
+              {ungrounded} з {signals.length}
+            </span>{" "}
+            тримається лише на припущеннях
+          </>
+        ) : null}
       </p>
     </div>
   );

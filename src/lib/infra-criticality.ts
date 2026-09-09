@@ -1,4 +1,5 @@
 import { CATEGORIES, type Facility, type GraphEdge, type Tier } from "./infra-types";
+import { isObserved } from "./provenance";
 
 /**
  * Структурна критичність обʼєктів мережі живлення.
@@ -373,6 +374,38 @@ export function components(facilities: Facility[], edges: GraphEdge[]): string[]
   return componentsCsr(buildCsr(facilities, edges));
 }
 
+/**
+ * Скільки вузлів висить нижче за течією від кожного обʼєкта за графом
+ * живлення. Жила в `infra-analytics`, переїхала сюди: це метрика графа, і
+ * критичності вона потрібна, щоб порахувати те саме на самих лише
+ * спостережених ребрах.
+ */
+export function downstreamCounts(edges: GraphEdge[]): Map<string, number> {
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = adj.get(e.from);
+    if (list) list.push(e.to);
+    else adj.set(e.from, [e.to]);
+  }
+  const memo = new Map<string, Set<string>>();
+  const reach = (id: string): Set<string> => {
+    const cached = memo.get(id);
+    if (cached) return cached;
+    const set = new Set<string>();
+    memo.set(id, set); // guard проти циклів
+    for (const n of adj.get(id) ?? []) {
+      if (!set.has(n)) {
+        set.add(n);
+        for (const m of reach(n)) set.add(m);
+      }
+    }
+    return set;
+  };
+  const out = new Map<string, number>();
+  for (const id of adj.keys()) out.set(id, reach(id).size);
+  return out;
+}
+
 export interface CriticalitySignal {
   id: string;
   label: string;
@@ -382,6 +415,15 @@ export interface CriticalitySignal {
   reason: string;
   /** Що саме спрацювало — значення, сусід, кількість. */
   evidence: string;
+  /**
+   * Чи тримається сигнал на самих лише спостережених даних.
+   *
+   * Структурні сигнали рахуються на графі, де частина ребер виведена за
+   * найближчим сусідом. Сигнал, який зникає, щойно прибрати припущення, — це
+   * висновок про нашу здогадку, а не про мережу. `false` саме про це й
+   * попереджає.
+   */
+  grounded: boolean;
 }
 
 export type CriticalityBand = "low" | "elevated" | "high" | "severe";
@@ -484,16 +526,48 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
 
   // Один звід графа на всі три метрики: раніше він будувався двічі.
   const csr = buildCsr(facilities, edges);
-  const central = betweennessCsr(
-    csr,
-    input.centralitySources === undefined ? {} : { sources: input.centralitySources },
-  );
+  const sourceOpts =
+    input.centralitySources === undefined ? {} : { sources: input.centralitySources };
+  const central = betweennessCsr(csr, sourceOpts);
   const centrality = new Map(central.entries.map((c) => [c.id, c.score]));
   const bridgeEndpoints = new Set<string>();
   for (const b of bridgesCsr(csr)) {
     bridgeEndpoints.add(b.from);
     bridgeEndpoints.add(b.to);
   }
+
+  /*
+   * Та сама структура, порахована на самих лише спостережених ребрах.
+   *
+   * Граф живлення змішує реальні ЛЕП із кістяком «найближчий сусід». Сигнал
+   * «вузол-посередник», що спирається на вигадані ребра, — це висновок про
+   * нашу здогадку, а не про мережу, і виглядає він точнісінько так само, як
+   * висновок про факт. Тому кожен структурний сигнал перевіряється ще раз без
+   * припущень, і різниця стає видимою.
+   */
+  const observedEdges = edges.filter((e) => isObserved(e.provenance));
+  const hasMixedProvenance = observedEdges.length > 0 && observedEdges.length < edges.length;
+  const observedCsr = hasMixedProvenance ? buildCsr(facilities, observedEdges) : null;
+  const observedCentrality = observedCsr
+    ? new Map(betweennessCsr(observedCsr, sourceOpts).entries.map((c) => [c.id, c.score]))
+    : null;
+  const observedBridgeEndpoints = new Set<string>();
+  if (observedCsr) {
+    for (const b of bridgesCsr(observedCsr)) {
+      observedBridgeEndpoints.add(b.from);
+      observedBridgeEndpoints.add(b.to);
+    }
+  }
+  const observedDependents = hasMixedProvenance ? downstreamCounts(observedEdges) : null;
+
+  /**
+   * Коли всі ребра спостережені — структура і так стоїть на фактах. Коли
+   * жодного немає — вона цілком тримається на припущеннях. Проміжний випадок
+   * розвʼязується перерахунком.
+   */
+  const allObserved = observedEdges.length === edges.length;
+  const groundedStructural = (holdsWithoutGuesses: boolean) =>
+    allObserved ? true : hasMixedProvenance ? holdsWithoutGuesses : false;
 
   // Точність посередництва впливає на висновок, тож вона видима в доказі, а не
   // прихована: оцінка за вибіркою і точне число — різні твердження.
@@ -517,6 +591,7 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         reason:
           "Через нього проходить велика частка найкоротших шляхів мережі. Втрата такого вузла роз'єднує ділянки, навіть якщо прямих споживачів у нього небагато.",
         evidence: `посередництво ${brokerage.toFixed(2)} з 1.00${centralityNote}`,
+        grounded: groundedStructural((observedCentrality?.get(facility.id) ?? 0) >= 0.5),
       });
     }
 
@@ -528,6 +603,7 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         reason:
           "Кінець ребра, видалення якого розриває мережу на частини. Це єдина лінія, що тримає ділянку — її варто перевіряти першою.",
         evidence: "входить у міст графа живлення",
+        grounded: groundedStructural(observedBridgeEndpoints.has(facility.id)),
       });
     }
 
@@ -539,6 +615,9 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         contribution: 20,
         reason: "Під обʼєктом висить помітна частка мережі живлення.",
         evidence: `${deps} низхідних вузлів (максимум у мережі — ${maxDependents})`,
+        grounded: groundedStructural(
+          (observedDependents?.get(facility.id) ?? 0) >= maxDependents * 0.25,
+        ),
       });
     }
 
@@ -549,6 +628,7 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         contribution: 15,
         reason: "У радіусі обʼєкта зафіксована активна подія — пожежа, сейсміка, шторм чи повінь.",
         evidence: "потрапляє в радіус активної події",
+        grounded: true,
       });
     }
 
@@ -559,6 +639,7 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         contribution: 20,
         reason: "Обʼєкт у регіоні з активною повітряною тривогою.",
         evidence: "у зоні повітряної тривоги",
+        grounded: true,
       });
     }
 
@@ -571,6 +652,7 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         contribution: SECTOR_SIGNAL[tier].contribution,
         reason: SECTOR_SIGNAL[tier].reason,
         evidence: CATEGORIES[category].label,
+        grounded: true,
       });
     }
 

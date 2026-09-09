@@ -6,6 +6,7 @@ import {
   betweennessDetailed,
   bridges,
   components,
+  downstreamCounts,
 } from "./infra-criticality";
 import type { Facility, GraphEdge } from "./infra-types";
 
@@ -277,5 +278,106 @@ describe("паралельні ребра", () => {
     ]);
     expect(doubled).toEqual(single);
     expect(bridges(nodes, [edge("a", "b"), edge("b", "a")])).toHaveLength(1);
+  });
+});
+
+describe("сигнал проти припущень", () => {
+  function inferredEdge(from: string, to: string): GraphEdge {
+    return {
+      from,
+      to,
+      km: 1,
+      kind: "supply",
+      provenance: {
+        kind: "inferred",
+        method: "найближча підстанція",
+        params: { radiusKm: 120 },
+        confidence: 0.25,
+        caveat: "тест",
+      },
+    };
+  }
+
+  const empty = {
+    dependents: new Map<string, number>(),
+    atRisk: new Set<string>(),
+    underAlarm: new Set<string>(),
+  };
+
+  it("позначає структурний сигнал, який існує лише завдяки виведеним ребрам", () => {
+    // Спостережений трикутник a—b—c, у якому мостів немає за побудовою, плюс
+    // одна здогадка c—d. У змішаному графі c стає кінцем мосту — але це
+    // властивість нашого припущення, а не мережі.
+    const nodes = ["a", "b", "c", "d"].map(node);
+    const edges = [edge("a", "b"), edge("b", "c"), edge("c", "a"), inferredEdge("c", "d")];
+    const result = assessCriticality({ facilities: nodes, edges, ...empty });
+
+    const bridgeSignal = result.get("c")!.signals.find((s) => s.id === "bridge");
+    expect(bridgeSignal).toBeDefined();
+    expect(bridgeSignal!.grounded).toBe(false);
+
+    // А в самому трикутнику ніхто мостом не став — перевірка, що ми не
+    // позначаємо як необґрунтоване те, чого взагалі немає.
+    expect(result.get("a")!.signals.some((s) => s.id === "bridge")).toBe(false);
+  });
+
+  it("не чіпляє попередження до сигналу, що тримається і без припущень", () => {
+    // Той самий міст існує в спостереженому графі, тож здогадки поруч нічого
+    // не змінюють.
+    const nodes = ["a", "b", "c", "d", "e"].map(node);
+    const edges = [edge("a", "b"), edge("b", "c"), inferredEdge("c", "d"), inferredEdge("d", "e")];
+    const result = assessCriticality({ facilities: nodes, edges, ...empty });
+
+    const bridgeSignal = result.get("b")!.signals.find((s) => s.id === "bridge")!;
+    expect(bridgeSignal.grounded).toBe(true);
+  });
+
+  it("вважає структуру необґрунтованою, коли спостережених ребер немає взагалі", () => {
+    const nodes = ["a", "b", "c"].map(node);
+    const edges = [inferredEdge("a", "b"), inferredEdge("b", "c")];
+    const result = assessCriticality({ facilities: nodes, edges, ...empty });
+    for (const s of result.get("b")!.signals) {
+      if (s.id === "bridge" || s.id === "brokerage") expect(s.grounded).toBe(false);
+    }
+  });
+
+  it("вважає структуру обґрунтованою, коли всі ребра спостережені", () => {
+    const nodes = ["a", "b", "c"].map(node);
+    const result = assessCriticality({
+      facilities: nodes,
+      edges: [edge("a", "b"), edge("b", "c")],
+      ...empty,
+    });
+    for (const s of result.get("b")!.signals) expect(s.grounded).toBe(true);
+  });
+
+  it("сигнали не з графа обґрунтовані завжди", () => {
+    // Сектор, подія і тривога приходять із джерел напряму — граф їх не
+    // стосується, тож і попереджати нема про що.
+    const nodes = ["a", "b"].map(node);
+    const result = assessCriticality({
+      facilities: nodes,
+      edges: [inferredEdge("a", "b")],
+      dependents: new Map(),
+      atRisk: new Set(["a"]),
+      underAlarm: new Set(["a"]),
+    });
+    for (const s of result.get("a")!.signals) {
+      if (["sector", "event_nearby", "alarm"].includes(s.id)) expect(s.grounded).toBe(true);
+    }
+  });
+});
+
+describe("downstreamCounts", () => {
+  it("рахує всіх нижче за течією, не лише прямих сусідів", () => {
+    const counts = downstreamCounts([edge("a", "b"), edge("b", "c"), edge("c", "d")]);
+    expect(counts.get("a")).toBe(3);
+    expect(counts.get("b")).toBe(2);
+    expect(counts.get("c")).toBe(1);
+  });
+
+  it("не зациклюється на кільці", () => {
+    const counts = downstreamCounts([edge("a", "b"), edge("b", "c"), edge("c", "a")]);
+    expect(counts.get("a")).toBe(3);
   });
 });
