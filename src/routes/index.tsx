@@ -243,8 +243,10 @@ function Console() {
   const threatsQuery = useQuery({
     queryKey: ["threats"],
     queryFn: () => threatsFn(),
-    staleTime: 30 * 1000,
-    refetchInterval: 30 * 1000,
+    // Повітряна обстановка змінюється щохвилини під час нальотів — тримаємо
+    // короткий інтервал, щоб позначки зʼявлялись майже наживо.
+    staleTime: 12 * 1000,
+    refetchInterval: 15 * 1000,
   });
   /*
    * Звʼязок із платформою Palanter. Ключ лишається на сервері, тому і статус, і

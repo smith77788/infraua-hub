@@ -22,9 +22,13 @@ export interface Threat {
   count: number;
   since: string;
   expires: string;
+  /** OSM-ідентифікатор місця позначки — той самий пункт від різних каналів. */
+  osmId?: number;
   /** Скільки окремих повідомлень злилось у цю позначку та з яких каналів. */
   reports?: number;
   sources?: string[];
+  /** Час найсвіжішого повідомлення у злитій позначці (для індикації свіжості). */
+  lastSeen?: string;
 }
 
 function threatDistanceKm(a: Threat, b: Threat): number {
@@ -38,13 +42,18 @@ function threatDistanceKm(a: Threat, b: Threat): number {
 }
 
 /**
- * Зливає повітряні цілі, що стоять поруч (різні OSINT-канали повідомляють ту
- * саму ціль/район у радіусі `radiusKm`), в одну позначку — щоб на карті не було
- * стосів дублікатів над одним містом. Жадібна кластеризація: найраніша ціль стає
- * ядром, решта в радіусі приєднуються з підрахунком звітів і джерел.
+ * Зливає повітряні цілі-дублікати в одну позначку. Дублі бувають двох видів:
+ * різні OSINT-канали повідомляють (1) той самий пункт (однаковий `osmId`) або
+ * (2) сусідні точки в радіусі `radiusKm`. І те, й те стягується в одну позначку,
+ * щоб над містом не було стосу міток.
+ *
+ * Ядром стає найсвіжіше повідомлення (не найраніше): на карті першою має бути
+ * актуальна позиція, а `lastSeen` несе час останнього сигналу для індикації
+ * свіжості. Звіти й канали агрегуються.
  */
-export function fuseThreats(threats: Threat[], radiusKm = 6): Threat[] {
-  const sorted = [...threats].sort((a, b) => (a.since || "").localeCompare(b.since || ""));
+export function fuseThreats(threats: Threat[], radiusKm = 8): Threat[] {
+  // Свіжіші — раніше: ядром кластера стає останній за часом сигнал.
+  const sorted = [...threats].sort((a, b) => (b.since || "").localeCompare(a.since || ""));
   const used = new Set<number>();
   const out: Threat[] = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -56,17 +65,23 @@ export function fuseThreats(threats: Threat[], radiusKm = 6): Threat[] {
     for (let j = i + 1; j < sorted.length; j++) {
       if (used.has(j)) continue;
       const cand = sorted[j];
-      if (cand && threatDistanceKm(core, cand) <= radiusKm) {
+      if (!cand) continue;
+      // Той самий пункт (osmId) зливаємо завжди; інакше — за близькістю.
+      const samePlace = core.osmId != null && cand.osmId != null && core.osmId === cand.osmId;
+      if (samePlace || threatDistanceKm(core, cand) <= radiusKm) {
         used.add(j);
         members.push(cand);
       }
     }
     const sources = [...new Set(members.map((m) => m.source).filter(Boolean))];
+    let lastSeen = core.since;
+    for (const m of members) if ((m.since || "") > lastSeen) lastSeen = m.since;
     out.push({
       ...core,
       count: members.reduce((n, m) => n + (m.count || 1), 0),
       reports: members.length,
       sources,
+      lastSeen,
     });
   }
   return out;
