@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { parsePowerLines, powerLineQuery, type PowerLine } from "./power-grid";
 
-import { mercToLatLon, type AlertZone, type Threat } from "./air";
+import { fuseThreats, mercToLatLon, type AlertZone, type Threat } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { SEED_FACILITIES } from "./infra-seed";
 import {
@@ -466,7 +466,9 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
       });
     }
     return {
-      threats,
+      // Зливаємо близькі позначки (різні канали про ту саму ціль/район), щоб на
+      // карті не було стосів дублікатів над одним містом.
+      threats: fuseThreats(threats),
       fetchedAt: new Date().toISOString(),
       degraded: false,
     } satisfies ThreatsPayload;
