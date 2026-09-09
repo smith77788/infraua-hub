@@ -388,12 +388,11 @@ function Index() {
               Готові подивитись на свою інфраструктуру інакше?
             </h2>
             <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
-              Напишіть кілька слів про вашу задачу — покажемо платформу на ваших даних і обговоримо,
-              які джерела під неї підключити.
+              Відкрийте консоль і подивіться на реальні дані, або перегляньте код проєкту.
             </p>
             <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
               <Button asChild size="lg" className="font-mono text-xs uppercase tracking-[0.14em]">
-                <a href="mailto:hello@infraua.org">Написати команді</a>
+                <Link to="/">Відкрити консоль</Link>
               </Button>
               <Button
                 asChild
