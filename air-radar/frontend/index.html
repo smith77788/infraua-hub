@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TACTICAL AIR RADAR — COP</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <span class="brand">TACTICAL·AIR·<b>RADAR</b></span>
+        <div class="top-metrics">
+          <span class="metric">Цілі <b id="m-targets">0</b></span>
+          <span class="metric alarm">Тривоги <b id="m-zones">0</b></span>
+          <span class="metric">Швидкість потоку <b id="m-rate">0</b>/хв</span>
+          <span class="metric">Гео-база <b id="m-geo">—</b></span>
+        </div>
+      </header>
+
+      <aside class="panel left">
+        <div class="panel-head">
+          <span class="dot"></span> Матриця загроз
+          <span class="count" id="tm-count">0</span>
+        </div>
+        <div class="panel-body" id="threat-matrix"></div>
+      </aside>
+
+      <main class="center">
+        <div id="map"></div>
+        <div class="hud hud-status">
+          <span class="led off" id="ws-led"></span>
+          <span id="ws-text">зʼєднання…</span>
+        </div>
+        <div class="hud hud-count">
+          <div class="n" id="hud-count">0</div>
+          <div class="lbl">активних цілей</div>
+        </div>
+        <div class="hud hud-filters" id="filters">
+          <label class="fbtn on" data-layer="targets"><span class="sw"></span> Цілі</label>
+          <label class="fbtn on" data-layer="vectors"><span class="sw"></span> Вектори</label>
+          <label class="fbtn on" data-layer="zones"><span class="sw"></span> Зони тривог</label>
+          <label class="fbtn on" data-layer="sat"><span class="sw"></span> Супутник</label>
+        </div>
+      </main>
+
+      <aside class="panel right">
+        <div class="panel-head">
+          <span class="dot"></span> OSINT-потік · телеметрія
+          <span class="count" id="log-count">0</span>
+        </div>
+        <div class="panel-body" id="log-stream"></div>
+      </aside>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
