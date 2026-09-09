@@ -62,7 +62,7 @@ async def run_bridge(broadcaster, pipeline, poll_sec: int = 20) -> None:
                     obj = build_from_point(
                         oid, name, lat, lon, source="detoyshahed", channel=channel, ttype="unknown"
                     )
-                    await broadcaster.upsert(obj)
+                    await broadcaster.observe(obj)
                     if oid not in seen:
                         seen.add(oid)
                         await broadcaster.log(

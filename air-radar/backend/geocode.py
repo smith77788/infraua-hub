@@ -56,6 +56,23 @@ def compass(deg: float) -> str:
     return dirs[int((deg + 22.5) % 360 // 45)]
 
 
+def move_point(
+    lat: float, lon: float, bearing_deg: float, dist_km: float
+) -> tuple[float, float]:
+    """Dead reckoning: нова точка за азимутом і дистанцією (сферична модель)."""
+    r = 6371.0
+    d = dist_km / r
+    br = math.radians(bearing_deg)
+    la1 = math.radians(lat)
+    lo1 = math.radians(lon)
+    la2 = math.asin(math.sin(la1) * math.cos(d) + math.cos(la1) * math.sin(d) * math.cos(br))
+    lo2 = lo1 + math.atan2(
+        math.sin(br) * math.sin(d) * math.cos(la1),
+        math.cos(d) - math.sin(la1) * math.sin(la2),
+    )
+    return math.degrees(la2), (math.degrees(lo2) + 540) % 360 - 180
+
+
 def _decline_variants(key: str) -> list[str]:
     """Грубе зняття українських відмінкових закінчень для останнього слова.
 

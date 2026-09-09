@@ -1,7 +1,7 @@
-"""Стан радара в памʼяті + широкомовлення у всі WebSocket-клієнти.
+"""Стан радара (треки після фьюжну) + широкомовлення у WebSocket-клієнти.
 
-Тримає активні тактичні обʼєкти, зони тривог і потік OSINT-логів; розсилає
-дельти підключеним клієнтам. Прибирання прострочених обʼєктів — фоновим циклом.
+Джерело істини — TrackManager: сирі спостереження проходять асоціацію у треки,
+фоновий motion-крок екстраполює їх у часі та розсилає оновлення позицій.
 """
 
 from __future__ import annotations
@@ -10,17 +10,22 @@ import asyncio
 import time
 from collections import deque
 
+from .fusion import TrackManager
 from .models import TacticalObject
 
 
 class Broadcaster:
     def __init__(self, store=None):
-        self.objects: dict[str, TacticalObject] = {}
+        self.tracks = TrackManager()
         self.zones: list[dict] = []
         self.logs: deque[dict] = deque(maxlen=300)
         self.clients: set = set()
         self.store = store
         self._lock = asyncio.Lock()
+
+    @property
+    def object_count(self) -> int:
+        return len(self.tracks.tracks)
 
     # ── клієнти ──────────────────────────────────────────────────────────
     async def connect(self, ws) -> None:
@@ -45,25 +50,24 @@ class Broadcaster:
     def snapshot(self) -> dict:
         return {
             "type": "snapshot",
-            "objects": [o.to_dict() for o in self.objects.values()],
+            "objects": [t.to_dict() for t in self.tracks.tracks.values()],
             "zones": self.zones,
             "logs": list(self.logs)[-80:],
             "ts": time.time(),
         }
 
-    async def upsert(self, obj: TacticalObject) -> None:
+    async def observe(self, obj: TacticalObject) -> None:
+        """Приймає сире спостереження, проганяє через фьюжн і транслює трек."""
         async with self._lock:
-            self.objects[obj.id] = obj
+            track = self.tracks.observe(obj)
         if self.store:
             try:
                 self.store.record(obj)
             except Exception:  # noqa: BLE001
                 pass
-        await self._emit({"type": "upsert", "object": obj.to_dict()})
+        await self._emit({"type": "upsert", "object": track.to_dict()})
 
     async def remove(self, obj_id: str) -> None:
-        async with self._lock:
-            self.objects.pop(obj_id, None)
         await self._emit({"type": "remove", "id": obj_id})
 
     async def set_zones(self, zones: list[dict]) -> None:
@@ -75,11 +79,13 @@ class Broadcaster:
         self.logs.append(entry)
         await self._emit({"type": "log", "log": entry})
 
-    # ── фонове прибирання ────────────────────────────────────────────────
-    async def sweeper(self, interval: int = 30) -> None:
+    # ── motion + прибирання ──────────────────────────────────────────────
+    async def motion_loop(self, interval: int = 3) -> None:
         while True:
             await asyncio.sleep(interval)
-            now = time.time()
-            expired = [oid for oid, o in list(self.objects.items()) if o.expired(now)]
-            for oid in expired:
-                await self.remove(oid)
+            async with self._lock:
+                changed, expired = self.tracks.step()
+            for t in changed:
+                await self._emit({"type": "upsert", "object": t.to_dict()})
+            for tid in expired:
+                await self.remove(tid)

@@ -49,7 +49,7 @@ async def run_telethon(broadcaster, geo: GeoDB) -> None:
             }
         )
         if obj is not None:
-            await broadcaster.upsert(obj)
+            await broadcaster.observe(obj)
 
     log.info("Telethon інжест запущено: канали=%s", settings.tg_channels)
     await client.start()

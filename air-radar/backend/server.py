@@ -34,7 +34,7 @@ _tasks: list[asyncio.Task] = []
 async def _lifespan(app: FastAPI):  # noqa: ANN201
     geo.load()
     log.info("Гео-база завантажена: %d назв", len(geo.index))
-    _tasks.append(asyncio.create_task(broadcaster.sweeper()))
+    _tasks.append(asyncio.create_task(broadcaster.motion_loop()))
     if settings.enable_bridge:
         from .bridge_detoyshahed import run_bridge
 
@@ -77,7 +77,7 @@ async def api_track(obj_id: str):
 async def api_health():
     return {
         "status": "ok",
-        "objects": len(broadcaster.objects),
+        "objects": broadcaster.object_count,
         "zones": len(broadcaster.zones),
         "clients": len(broadcaster.clients),
         "geo_names": len(geo.index),
