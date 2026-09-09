@@ -63,6 +63,20 @@
           <div class="risk-title">⚠ Тривожні сповіщення</div>
           <div id="alert-list"></div>
         </div>
+        <div class="hud hud-timeline" id="timeline">
+          <div class="tl-head">
+            <button class="tl-mode" id="tl-mode" data-mode="live">● LIVE</button>
+            <button class="tl-play" id="tl-play" disabled>⏵</button>
+            <span class="tl-clock" id="tl-clock">реальний час</span>
+            <select class="tl-window" id="tl-window">
+              <option value="30">30 хв</option>
+              <option value="60" selected>1 год</option>
+              <option value="180">3 год</option>
+              <option value="360">6 год</option>
+            </select>
+          </div>
+          <input class="tl-range" id="tl-range" type="range" min="0" max="1000" value="1000" disabled />
+        </div>
       </main>
 
       <aside class="panel right">

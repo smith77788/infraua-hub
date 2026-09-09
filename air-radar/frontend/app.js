@@ -33,6 +33,7 @@ const layerGroups = {
   assets: L.layerGroup().addTo(map),
   zones: L.layerGroup().addTo(map),
 };
+const replayLayer = L.layerGroup(); // рендериться лише в режимі реплею
 
 // ── State ──────────────────────────────────────────────────────────────
 const objects = new Map(); // id -> { data, marker, vector, row }
@@ -245,6 +246,121 @@ document.getElementById("filters").addEventListener("click", (e) => {
     if (on) map.addLayer(layerGroups[layer]);
     else map.removeLayer(layerGroups[layer]);
   }
+});
+
+// ── Часова шкала розслідування (LIVE / REPLAY) ───────────────────────────
+const replay = {
+  mode: "live", paths: null, t0: 0, t1: 0, t: 0, playing: false, timer: null, markers: new Map(),
+};
+const LIVE_LAYERS = ["targets", "vectors", "corridors"];
+
+function setLiveLayersVisible(v) {
+  for (const k of LIVE_LAYERS) {
+    if (v) { if (!map.hasLayer(layerGroups[k])) map.addLayer(layerGroups[k]); }
+    else map.removeLayer(layerGroups[k]);
+  }
+}
+
+async function enterReplay() {
+  const minutes = +document.getElementById("tl-window").value;
+  const clock = document.getElementById("tl-clock");
+  clock.textContent = "завантаження історії…";
+  let data;
+  try {
+    data = await fetch(`/api/history?minutes=${minutes}`).then((r) => r.json());
+  } catch { clock.textContent = "історія недоступна"; return false; }
+  const paths = data.paths || {};
+  let t0 = Infinity, t1 = -Infinity;
+  for (const oid of Object.keys(paths)) {
+    for (const p of paths[oid]) { if (p.ts < t0) t0 = p.ts; if (p.ts > t1) t1 = p.ts; }
+  }
+  if (!isFinite(t0) || t1 <= t0) { clock.textContent = "немає даних за період"; return false; }
+  replay.mode = "replay"; replay.paths = paths; replay.t0 = t0; replay.t1 = t1; replay.t = t0;
+  setLiveLayersVisible(false);
+  replayLayer.addTo(map);
+  document.getElementById("tl-range").disabled = false;
+  document.getElementById("tl-play").disabled = false;
+  document.getElementById("timeline").classList.add("replaying");
+  renderReplayAt(t0);
+  return true;
+}
+
+function exitReplay() {
+  replay.mode = "live"; replay.playing = false;
+  if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
+  replayLayer.clearLayers(); map.removeLayer(replayLayer); replay.markers.clear();
+  setLiveLayersVisible(true);
+  const rng = document.getElementById("tl-range");
+  rng.disabled = true; rng.value = 1000;
+  document.getElementById("tl-play").disabled = true;
+  document.getElementById("tl-play").textContent = "⏵";
+  document.getElementById("tl-clock").textContent = "реальний час";
+  document.getElementById("timeline").classList.remove("replaying");
+}
+
+function renderReplayAt(t) {
+  replay.t = t;
+  replayLayer.clearLayers();
+  replay.markers.clear();
+  const seen = new Set();
+  for (const oid of Object.keys(replay.paths)) {
+    const pts = replay.paths[oid].filter((p) => p.ts <= t);
+    if (!pts.length) continue;
+    seen.add(oid);
+    const latlngs = pts.map((p) => [p.lat, p.lon]);
+    const color = "#22d3ee";
+    L.polyline(latlngs, { color, weight: 1.2, opacity: 0.5, dashArray: "3 4" }).addTo(replayLayer);
+    const last = pts[pts.length - 1];
+    const fresh = t - last.ts < 90; // «активний» слід у момент t
+    L.circleMarker([last.lat, last.lon], {
+      radius: fresh ? 5 : 3, color, weight: 1.5,
+      fillColor: color, fillOpacity: fresh ? 0.85 : 0.3,
+    }).addTo(replayLayer);
+  }
+  const d = new Date(t * 1000);
+  document.getElementById("tl-clock").textContent =
+    `${d.toLocaleTimeString("uk-UA")} · ${seen.size} треків`;
+  const rng = document.getElementById("tl-range");
+  rng.value = Math.round(((t - replay.t0) / (replay.t1 - replay.t0)) * 1000);
+}
+
+function playReplay() {
+  if (replay.playing) { pauseReplay(); return; }
+  if (replay.t >= replay.t1) replay.t = replay.t0;
+  replay.playing = true;
+  document.getElementById("tl-play").textContent = "⏸";
+  const span = replay.t1 - replay.t0;
+  const stepSec = Math.max(span / 120, 5); // ~120 кадрів на весь період
+  replay.timer = setInterval(() => {
+    replay.t += stepSec;
+    if (replay.t >= replay.t1) { replay.t = replay.t1; renderReplayAt(replay.t); pauseReplay(); return; }
+    renderReplayAt(replay.t);
+  }, 120);
+}
+function pauseReplay() {
+  replay.playing = false;
+  if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
+  document.getElementById("tl-play").textContent = "⏵";
+}
+
+document.getElementById("tl-mode").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  if (replay.mode === "live") {
+    const ok = await enterReplay();
+    if (ok) { btn.textContent = "⏱ РЕПЛЕЙ"; btn.dataset.mode = "replay"; }
+  } else {
+    exitReplay(); btn.textContent = "● LIVE"; btn.dataset.mode = "live";
+  }
+});
+document.getElementById("tl-play").addEventListener("click", playReplay);
+document.getElementById("tl-range").addEventListener("input", (e) => {
+  if (replay.mode !== "replay") return;
+  pauseReplay();
+  const frac = +e.target.value / 1000;
+  renderReplayAt(replay.t0 + frac * (replay.t1 - replay.t0));
+});
+document.getElementById("tl-window").addEventListener("change", () => {
+  if (replay.mode === "replay") enterReplay();
 });
 
 // ── WebSocket ──────────────────────────────────────────────────────────

@@ -163,6 +163,19 @@ body {
 .alert-meta { font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 2px; }
 @keyframes alertPulse { 0%, 100% { box-shadow: inset 2px 0 0 var(--red); } 50% { box-shadow: inset 2px 0 0 var(--red), 0 0 12px rgba(255,77,77,.35); } }
 
+/* ── Часова шкала розслідування ──────────────────────────── */
+.hud-timeline { bottom: 12px; left: 50%; transform: translateX(-50%); width: min(560px, 60vw); padding: 8px 12px 10px; }
+.hud-timeline.replaying { box-shadow: 0 0 0 1px var(--cyan), 0 0 18px rgba(34,211,238,.25); }
+.tl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.tl-mode { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--green); background: rgba(0,255,102,.08); border: 1px solid rgba(0,255,102,.35); border-radius: 4px; padding: 3px 9px; cursor: pointer; }
+.tl-mode[data-mode="replay"] { color: var(--cyan); background: rgba(34,211,238,.1); border-color: rgba(34,211,238,.45); }
+.tl-play { font-size: 12px; color: var(--text); background: var(--border); border: none; border-radius: 4px; width: 26px; height: 22px; cursor: pointer; }
+.tl-play:disabled { opacity: 0.4; cursor: default; }
+.tl-clock { font-family: var(--mono); font-size: 10px; color: var(--muted); flex: 1; }
+.tl-window { font-family: var(--mono); font-size: 10px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; }
+.tl-range { width: 100%; accent-color: var(--cyan); cursor: pointer; }
+.tl-range:disabled { opacity: 0.4; }
+
 .asset-pin { background: transparent !important; border: none !important; }
 .asset-pin .a { width: 8px; height: 8px; transform: rotate(45deg); border: 1px solid #64748b; background: rgba(100,116,139,.25); }
 .asset-pin.hot .a { border-color: var(--red); background: rgba(255,77,77,.5); box-shadow: 0 0 8px var(--red); }
