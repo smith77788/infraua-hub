@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   MapContainer,
   TileLayer,
+  LayersControl,
   CircleMarker,
   Circle,
   Marker,
@@ -40,14 +41,6 @@ interface Props {
   onSelect: (f: Facility) => void;
 }
 
-const threatIcon = L.divIcon({
-  html: '<span class="threat-mark"></span>',
-  className: "threat-pin",
-  iconSize: [12, 12],
-  iconAnchor: [6, 6],
-  popupAnchor: [0, -6],
-});
-
 /** Мінімальні SVG-гліфи (у стилі lucide) для кожної категорії. */
 const ICON_PATHS: Record<CategoryId, string> = {
   power_plant: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
@@ -72,48 +65,46 @@ const ICON_PATHS: Record<CategoryId, string> = {
   industry: '<path d="M3 22V10l6 4V10l6 4V6l6 4v12z"/>',
 };
 
-// Безключові базові тайли з автоперемиканням.
-const BASEMAPS = [
-  {
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-    attribution:
-      'Tiles &copy; Esri · Джерела: Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    maxZoom: 16,
-  },
-  {
-    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    maxZoom: 19,
-  },
-] as const;
+const threatIcon = L.divIcon({
+  html: '<span class="threat-mark"></span>',
+  className: "threat-pin",
+  iconSize: [12, 12],
+  iconAnchor: [6, 6],
+  popupAnchor: [0, -6],
+});
 
-function ResilientTileLayer() {
-  const [idx, setIdx] = useState(0);
-  const errors = useRef(0);
-  // BASEMAPS is a non-empty `as const` tuple, but the index is computed, so
-  // TypeScript cannot prove the lookup lands inside it. Destructuring the first
-  // element gives a genuinely non-optional fallback without an assertion.
-  const [firstBasemap] = BASEMAPS;
-  const bm = BASEMAPS[Math.min(idx, BASEMAPS.length - 1)] ?? firstBasemap;
+function BaseLayers() {
   return (
-    <TileLayer
-      key={idx}
-      url={bm.url}
-      attribution={bm.attribution}
-      maxZoom={bm.maxZoom}
-      eventHandlers={{
-        load: () => {
-          errors.current = 0;
-        },
-        tileerror: () => {
-          errors.current += 1;
-          if (errors.current >= 8 && idx < BASEMAPS.length - 1) {
-            errors.current = 0;
-            setIdx((i) => i + 1);
-          }
-        },
-      }}
-    />
+    <LayersControl position="topright">
+      <LayersControl.BaseLayer checked name="Темна">
+        <TileLayer
+          attribution="Tiles &copy; Esri"
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+          maxZoom={16}
+        />
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Супутник">
+        <TileLayer
+          attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics"
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          maxZoom={18}
+        />
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Гібрид (мітки)">
+        <TileLayer
+          attribution="Labels &copy; Esri"
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+          maxZoom={18}
+        />
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Схема (OSM)">
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={19}
+        />
+      </LayersControl.BaseLayer>
+    </LayersControl>
   );
 }
 
@@ -126,11 +117,11 @@ function facilityIcon(
   const cached = iconCache.get(key);
   if (cached) return cached;
   const color = CATEGORIES[category].color;
-  const ring = state.danger ? "#ef4444" : state.warn ? "#f59e0b" : "rgba(255,255,255,.35)";
-  const size = state.selected ? 30 : 24;
+  const ring = state.danger ? "#ff4d4d" : state.warn ? "#ff9900" : "rgba(255,255,255,.28)";
+  const size = state.selected ? 30 : 22;
   const g = size * 0.58;
-  const html = `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 ${state.danger || state.warn ? 2.5 : 1.5}px ${ring},0 1px 4px rgba(0,0,0,.7)">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="none" stroke="#0a0d12" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[category]}</svg></div>`;
+  const html = `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 ${state.danger || state.warn ? 2.5 : 1.5}px ${ring},0 1px 5px rgba(0,0,0,.8)">
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="none" stroke="#0a0e14" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[category]}</svg></div>`;
   const icon = L.divIcon({
     html,
     className: "infra-pin",
@@ -140,6 +131,17 @@ function facilityIcon(
   });
   iconCache.set(key, icon);
   return icon;
+}
+
+function clusterIcon(count: number): L.DivIcon {
+  const size = count > 200 ? 46 : count > 50 ? 40 : count > 10 ? 34 : 28;
+  const html = `<div style="width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(10,14,20,.82);border:1.5px solid rgba(34,211,238,.7);color:#67e8f9;font:600 ${size > 36 ? 12 : 11}px 'JetBrains Mono',monospace;box-shadow:0 0 12px rgba(34,211,238,.25)">${count}</div>`;
+  return L.divIcon({
+    html,
+    className: "infra-cluster",
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
 }
 
 function FacilityPopup({ f }: { f: Facility }) {
@@ -159,19 +161,46 @@ function FacilityPopup({ f }: { f: Facility }) {
   );
 }
 
-/** Зум-залежний шар обʼєктів: точки на огляді країни, іконки з прорідженням при наближенні. */
+interface Cluster {
+  lat: number;
+  lon: number;
+  count: number;
+}
+
+function gridClusters(facilities: Facility[], zoom: number): Cluster[] {
+  const step = zoom <= 5 ? 1.3 : zoom === 6 ? 0.8 : 0.45;
+  const cells = new Map<string, { lat: number; lon: number; count: number }>();
+  for (const f of facilities) {
+    const gy = Math.round(f.lat / step);
+    const gx = Math.round(f.lon / step);
+    const key = `${gy}|${gx}`;
+    const c = cells.get(key);
+    if (c) {
+      c.lat += f.lat;
+      c.lon += f.lon;
+      c.count++;
+    } else {
+      cells.set(key, { lat: f.lat, lon: f.lon, count: 1 });
+    }
+  }
+  return [...cells.values()].map((c) => ({
+    lat: c.lat / c.count,
+    lon: c.lon / c.count,
+    count: c.count,
+  }));
+}
+
+/** Обʼєкти: кластери на огляді країни, іконки з прорідженням при наближенні. */
 function FacilityLayer({
   facilities,
   riskIds,
   impactedIds,
-  alarmIds,
   selectedId,
   onSelect,
 }: {
   facilities: Facility[];
   riskIds: Set<string>;
   impactedIds: Set<string>;
-  alarmIds: Set<string>;
   selectedId: string | null;
   onSelect: (f: Facility) => void;
 }) {
@@ -186,40 +215,30 @@ function FacilityLayer({
     moveend: () => setBounds(map.getBounds()),
   });
 
-  const useIcons = zoom >= 8;
-
-  if (!useIcons) {
+  // На огляді країни — кластери (щоб не було каші з точок).
+  if (zoom < 8) {
+    const clusters = gridClusters(facilities, zoom);
     return (
       <>
-        {facilities.map((f) => {
-          const danger = riskIds.has(f.id) || alarmIds.has(f.id);
-          const warn = impactedIds.has(f.id);
-          return (
-            <CircleMarker
-              key={f.id}
-              center={[f.lat, f.lon]}
-              radius={selectedId === f.id ? 7 : danger ? 5 : 3.5}
-              eventHandlers={{ click: () => onSelect(f) }}
-              pathOptions={{
-                color: danger ? "#ef4444" : warn ? "#f59e0b" : CATEGORIES[f.category].color,
-                fillColor: CATEGORIES[f.category].color,
-                fillOpacity: 0.85,
-                weight: danger || warn ? 2 : 1,
-              }}
-            >
-              <FacilityPopup f={f} />
-            </CircleMarker>
-          );
-        })}
+        {clusters.map((c, i) => (
+          <Marker
+            key={`cl-${i}`}
+            position={[c.lat, c.lon]}
+            icon={clusterIcon(c.count)}
+            eventHandlers={{
+              click: () => map.flyTo([c.lat, c.lon], Math.min(zoom + 3, 10), { duration: 0.6 }),
+            }}
+          />
+        ))}
       </>
     );
   }
 
+  // Наближено — реальні іконки, лише у видимій області, з пріоритетом небезпечних.
   const inView = facilities.filter((f) => bounds.contains([f.lat, f.lon]));
-  // пріоритет під час прорідження: небезпечні та важливі — першими
   const sorted = inView.sort((a, b) => {
-    const da = (riskIds.has(a.id) || alarmIds.has(a.id) ? 2 : 0) + (a.id === selectedId ? 4 : 0);
-    const db = (riskIds.has(b.id) || alarmIds.has(b.id) ? 2 : 0) + (b.id === selectedId ? 4 : 0);
+    const da = (riskIds.has(a.id) ? 2 : 0) + (a.id === selectedId ? 4 : 0);
+    const db = (riskIds.has(b.id) ? 2 : 0) + (b.id === selectedId ? 4 : 0);
     return db - da;
   });
   const capped = sorted.slice(0, 500);
@@ -232,7 +251,7 @@ function FacilityLayer({
           position={[f.lat, f.lon]}
           icon={facilityIcon(f.category, {
             selected: selectedId === f.id,
-            danger: riskIds.has(f.id) || alarmIds.has(f.id),
+            danger: riskIds.has(f.id),
             warn: impactedIds.has(f.id),
           })}
           eventHandlers={{ click: () => onSelect(f) }}
@@ -260,7 +279,6 @@ export default function InfraMap({
   alerts,
   zones,
   threats,
-  alarmIds,
   showLinks,
   riskIds,
   impactedIds,
@@ -290,11 +308,11 @@ export default function InfraMap({
       minZoom={5}
       scrollWheelZoom
       className="size-full"
-      style={{ background: "#0a0d12" }}
+      style={{ background: "#0a0e14" }}
     >
-      <ResilientTileLayer />
+      <BaseLayers />
 
-      {/* Зони тривог: реальні полігони регіонів, або кола-фолбек, якщо полігони недоступні */}
+      {/* Зони тривог: реальні полігони регіонів, або кола-фолбек */}
       {zones.length > 0
         ? zones.flatMap((z) =>
             z.polygons.map((ring, i) => (
@@ -302,9 +320,9 @@ export default function InfraMap({
                 key={`zone-${z.region}-${i}`}
                 positions={ring}
                 pathOptions={{
-                  color: "#ef4444",
-                  fillColor: "#ef4444",
-                  fillOpacity: 0.14,
+                  color: "#ff4d4d",
+                  fillColor: "#ff4d4d",
+                  fillOpacity: 0.1,
                   weight: 1,
                 }}
               >
@@ -326,21 +344,13 @@ export default function InfraMap({
                 center={[r.lat, r.lon]}
                 radius={62000}
                 pathOptions={{
-                  color: "#ef4444",
-                  fillColor: "#ef4444",
-                  fillOpacity: 0.12,
+                  color: "#ff4d4d",
+                  fillColor: "#ff4d4d",
+                  fillOpacity: 0.1,
                   weight: 1.2,
                   dashArray: "5 5",
                 }}
-              >
-                <Popup>
-                  <div className="space-y-1 font-sans text-xs">
-                    <p className="font-semibold text-red-600">Повітряна тривога</p>
-                    <p className="opacity-80">{r.name}</p>
-                    {r.since ? <p className="opacity-70">Від {r.since}</p> : null}
-                  </div>
-                </Popup>
-              </Circle>
+              />
             ))}
 
       {lines.map(({ e, a, b }) => (
@@ -351,9 +361,9 @@ export default function InfraMap({
             [b.lat, b.lon],
           ]}
           pathOptions={{
-            color: impactedIds.has(e.to) ? "#f87171" : e.kind === "supply" ? "#22d3ee" : "#64748b",
-            weight: e.kind === "supply" ? 1.1 : 0.6,
-            opacity: impactedIds.has(e.to) ? 0.7 : 0.28,
+            color: impactedIds.has(e.to) ? "#ff9900" : e.kind === "supply" ? "#22d3ee" : "#475569",
+            weight: e.kind === "supply" ? 1 : 0.5,
+            opacity: impactedIds.has(e.to) ? 0.7 : 0.22,
           }}
         />
       ))}
@@ -392,7 +402,6 @@ export default function InfraMap({
         facilities={facilities}
         riskIds={riskIds}
         impactedIds={impactedIds}
-        alarmIds={alarmIds}
         selectedId={selectedId}
         onSelect={onSelect}
       />
