@@ -306,14 +306,15 @@ function Console() {
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
   const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
+  // Одна привʼязка на консоль: її потребують і тривоги, і фокус по області.
+  const regionOf = useMemo(() => assignRegions(allFacilities, regions), [allFacilities, regions]);
   const alarmIds = useMemo(() => {
     const active = new Set(regions.filter((r) => r.active).map((r) => r.code));
     if (!active.size) return new Set<string>();
-    const reg = assignRegions(allFacilities, regions);
     const s = new Set<string>();
-    for (const [id, code] of reg) if (active.has(code)) s.add(id);
+    for (const [id, code] of regionOf) if (active.has(code)) s.add(id);
     return s;
-  }, [allFacilities, regions]);
+  }, [regionOf, regions]);
 
   const windowHours = TIME_WINDOWS.find((w) => w.id === windowId)!.hours;
   const eventsInWindow = useMemo(() => {
@@ -380,8 +381,8 @@ function Console() {
         active.has(f.category) &&
         (!q || f.name.toLowerCase().includes(q) || (f.operator ?? "").toLowerCase().includes(q)),
     );
-    return applyFocus(byFilters, focus, { riskIds, alarmIds });
-  }, [allFacilities, active, query, focus, riskIds, alarmIds]);
+    return applyFocus(byFilters, focus, { riskIds, alarmIds, regionOf });
+  }, [allFacilities, active, query, focus, riskIds, alarmIds, regionOf]);
 
   const summary = useMemo(
     () => summarize(allFacilities, riskMap, events, activeAlarms),

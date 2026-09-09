@@ -18,13 +18,16 @@ export type Focus =
   | { kind: "life-risk" }
   | { kind: "alarm" }
   | { kind: "tier"; tier: Tier }
-  | { kind: "operator"; operator: string };
+  | { kind: "operator"; operator: string }
+  | { kind: "region"; code: string; name: string };
 
 export interface FocusContext {
   /** Обʼєкти в радіусі активної події. */
   riskIds: ReadonlySet<string>;
   /** Обʼєкти в областях з активною тривогою. */
   alarmIds: ReadonlySet<string>;
+  /** Обʼєкт → код області, з `assignRegions`. */
+  regionOf?: ReadonlyMap<string, string>;
 }
 
 export function applyFocus(facilities: Facility[], focus: Focus, ctx: FocusContext): Facility[] {
@@ -42,6 +45,10 @@ export function applyFocus(facilities: Facility[], focus: Focus, ctx: FocusConte
       return facilities.filter((f) => CATEGORIES[f.category].tier === focus.tier);
     case "operator":
       return facilities.filter((f) => f.operator === focus.operator);
+    case "region":
+      // Без привʼязки нікого не показуємо: порожній результат чесніший за
+      // випадковий набір, зібраний за відсутнім критерієм.
+      return ctx.regionOf ? facilities.filter((f) => ctx.regionOf!.get(f.id) === focus.code) : [];
   }
 }
 
@@ -68,6 +75,8 @@ export function focusLabel(focus: Focus): string {
       return `лише сектор «${TIER_LABEL[focus.tier]}»`;
     case "operator":
       return `лише обʼєкти оператора «${focus.operator}»`;
+    case "region":
+      return `лише ${focus.name}`;
   }
 }
 
@@ -77,5 +86,6 @@ export function sameFocus(a: Focus, b: Focus): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "tier" && b.kind === "tier") return a.tier === b.tier;
   if (a.kind === "operator" && b.kind === "operator") return a.operator === b.operator;
+  if (a.kind === "region" && b.kind === "region") return a.code === b.code;
   return true;
 }

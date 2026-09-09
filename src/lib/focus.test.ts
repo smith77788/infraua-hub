@@ -77,3 +77,39 @@ describe("sameFocus", () => {
     expect(sameFocus({ kind: "tier", tier: "life" }, { kind: "tier", tier: "energy" })).toBe(false);
   });
 });
+
+describe("фокус по області", () => {
+  const regionOf = new Map([
+    ["plant", "UA-32"],
+    ["hosp", "UA-32"],
+    ["rail", "UA-12"],
+  ]);
+
+  it("звужує до обʼєктів області", () => {
+    const out = applyFocus(
+      facilities,
+      { kind: "region", code: "UA-32", name: "Київщина" },
+      {
+        ...ctx,
+        regionOf,
+      },
+    );
+    expect(out.map((x) => x.id)).toEqual(["plant", "hosp"]);
+  });
+
+  it("без привʼязки не показує нікого, а не всіх", () => {
+    // Порожній результат чесніший за випадковий набір, зібраний за
+    // відсутнім критерієм.
+    const out = applyFocus(facilities, { kind: "region", code: "UA-32", name: "Київщина" }, ctx);
+    expect(out).toEqual([]);
+  });
+
+  it("розрізняє області між собою", () => {
+    expect(
+      sameFocus(
+        { kind: "region", code: "UA-32", name: "Київщина" },
+        { kind: "region", code: "UA-12", name: "Дніпропетровщина" },
+      ),
+    ).toBe(false);
+  });
+});

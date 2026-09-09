@@ -8,6 +8,7 @@ import {
   Layers,
   MapPin,
   Network,
+  MapPinned,
   ShieldAlert,
   Siren,
   TrendingUp,
@@ -18,7 +19,13 @@ import { type AlertRegion } from "@/lib/alerts";
 import CriticalityBreakdown, { BAND_TONE } from "@/components/CriticalityBreakdown";
 import { rankContingencies } from "@/lib/contingency";
 import type { Focus } from "@/lib/focus";
-import { eventTimeline, operatorRollup, type NetworkAnalysis } from "@/lib/infra-analytics";
+import {
+  assignRegions,
+  eventTimeline,
+  operatorRollup,
+  type NetworkAnalysis,
+} from "@/lib/infra-analytics";
+import { regionReadiness, rollupRegions } from "@/lib/regions";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -103,6 +110,17 @@ export default function AnalyticsView({
     [facilities, edges],
   );
   const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
+  const regionOf = useMemo(() => assignRegions(facilities, alerts), [facilities, alerts]);
+  const regionRows = useMemo(
+    () =>
+      rollupRegions({
+        facilities,
+        analytics: analysis.perFacility,
+        regionOf,
+        regions: alerts,
+      }),
+    [facilities, analysis.perFacility, regionOf, alerts],
+  );
   const operators = useMemo(() => operatorRollup(facilities, analysis), [facilities, analysis]);
   const activeAlarms = useMemo(() => alerts.filter((r) => r.active), [alerts]);
 
@@ -237,30 +255,68 @@ export default function AnalyticsView({
         </section>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          {/* Active alarms */}
+          {/*
+            Області, найгірші першими. Раніше тут був лише перелік тривог —
+            факт про область без жодного звʼязку з тим, що в ній стоїть.
+            Порядок навмисний: тривога, потім життєзабезпечення під загрозою,
+            потім будь-яка загроза.
+          */}
           <section className="rounded border border-border bg-card p-3">
             <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              <Siren className="size-3" /> Повітряні тривоги
+              <MapPinned className="size-3" /> Області
+              {activeAlarms.length > 0 ? (
+                <span className="ml-auto flex items-center gap-1.5 text-red-400">
+                  <Siren className="size-3" />
+                  {activeAlarms.length} у тривозі
+                </span>
+              ) : (
+                <span className="ml-auto text-emerald-400">тривог немає</span>
+              )}
             </p>
-            {activeAlarms.length === 0 ? (
-              <p className="mt-2 font-mono text-[11px] text-emerald-400">
-                Наразі активних тривог немає.
+            {regionRows.length === 0 ? (
+              <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+                Немає даних по областях.
               </p>
             ) : (
-              <div className="mt-2 space-y-1.5">
-                {activeAlarms.map((r) => (
-                  <div
+              <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+                {regionRows.map((r) => (
+                  <button
                     key={r.code}
-                    className="flex items-center justify-between rounded border border-red-500/40 bg-red-500/5 px-2.5 py-1.5"
+                    onClick={() => onFocus({ kind: "region", code: r.code, name: r.name })}
+                    title={`Показати на карті лише ${r.name}`}
+                    className={`flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left transition-colors hover:bg-muted ${
+                      r.active ? "border-red-500/40 bg-red-500/5" : "border-transparent"
+                    }`}
                   >
-                    <span className="flex items-center gap-2 text-[11px]">
-                      <span className="size-2 animate-pulse rounded-full bg-red-500" />
-                      {r.name}
-                    </span>
-                    {r.since ? (
-                      <span className="font-mono text-[10px] text-muted-foreground">{r.since}</span>
+                    {r.active ? (
+                      <span className="size-2 shrink-0 animate-pulse rounded-full bg-red-500" />
+                    ) : (
+                      <span className="size-2 shrink-0 rounded-full bg-muted" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[11px]">{r.name}</span>
+                    {r.lifeAtRisk > 0 ? (
+                      <span className="shrink-0 font-mono text-[9px] text-red-400">
+                        {r.lifeAtRisk} життєзабезп.
+                      </span>
                     ) : null}
-                  </div>
+                    {r.atRisk > 0 ? (
+                      <span className="shrink-0 font-mono text-[9px] text-amber-400">
+                        {r.atRisk} під загрозою
+                      </span>
+                    ) : null}
+                    <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                      {r.total}
+                    </span>
+                    <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted">
+                      <span
+                        className="block h-full rounded-full"
+                        style={{
+                          width: `${regionReadiness(r)}%`,
+                          background: READINESS_TONE(regionReadiness(r)),
+                        }}
+                      />
+                    </span>
+                  </button>
                 ))}
               </div>
             )}
