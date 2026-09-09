@@ -13,8 +13,18 @@ interface Props {
 
 /** Плеєр часу: прокручує курсор по 30-денному вікну та анімує розвиток подій. */
 export default function TimelinePlayer({ onCursor }: Props) {
-  const now = useRef(Date.now());
-  const min = now.current - SPAN_MS;
+  /*
+   * Час беремо лише після монтування: на сервері й у браузері Date.now()
+   * різний, і зчитування його під час рендеру ламало гідратацію (min/max
+   * повзунка розходилися на кілька секунд).
+   */
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  const now = useRef(0);
+  useEffect(() => {
+    now.current = Date.now();
+    setNowMs(now.current);
+  }, []);
+  const min = (nowMs ?? 0) - SPAN_MS;
   const [cursor, setCursor] = useState<number | null>(null); // null = live
   const [playing, setPlaying] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
