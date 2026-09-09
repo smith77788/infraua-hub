@@ -39,6 +39,7 @@ const replayLayer = L.layerGroup(); // рендериться лише в реж
 const objects = new Map(); // id -> { data, marker, vector, row }
 const assetMarkers = new Map(); // name -> marker
 let logCount = 0, rateWindow = [];
+let lastThreatened = {}; // track_id -> [hits] (для графа звʼязків)
 
 function assetIcon(hot) {
   return L.divIcon({ html: `<div class="a"></div>`, className: "asset-pin" + (hot ? " hot" : ""), iconSize: [10, 10], iconAnchor: [5, 5] });
@@ -55,6 +56,8 @@ function renderAssets(assets) {
 }
 
 function applyThreatened(threatened) {
+  lastThreatened = threatened || {};
+  scheduleGraph();
   layerGroups.corridors.clearLayers();
   // мінімальний ETA по кожному обʼєкту + перелік для HUD
   const byAsset = new Map();
@@ -242,6 +245,8 @@ document.getElementById("filters").addEventListener("click", (e) => {
     map.removeLayer(baseLayer);
     baseLayer = L.tileLayer(on ? ESRI_SAT : ESRI_DARK, { maxZoom: on ? 18 : 16 }).addTo(map);
     baseLayer.bringToBack();
+  } else if (layer === "graph") {
+    toggleGraph(on);
   } else if (layerGroups[layer]) {
     if (on) map.addLayer(layerGroups[layer]);
     else map.removeLayer(layerGroups[layer]);
@@ -362,6 +367,125 @@ document.getElementById("tl-range").addEventListener("input", (e) => {
 document.getElementById("tl-window").addEventListener("change", () => {
   if (replay.mode === "replay") enterReplay();
 });
+
+// ── Граф звʼязків (link analysis) ────────────────────────────────────────
+const graph = { visible: false, raf: 0, nodes: [], edges: [], W: 800, H: 600 };
+const SVGNS = "http://www.w3.org/2000/svg";
+
+function toggleGraph(on) {
+  graph.visible = on;
+  document.getElementById("graph-overlay").hidden = !on;
+  if (on) buildGraph(); else cancelAnimationFrame(graph.raf);
+}
+
+function scheduleGraph() { if (graph.visible) buildGraph(); }
+
+function buildGraph() {
+  const svg = document.getElementById("graph-svg");
+  const rect = svg.getBoundingClientRect();
+  graph.W = rect.width || 800; graph.H = rect.height || 600;
+  const nodes = new Map(); // key -> node
+  const edges = [];
+  const node = (key, label, kind, weight) => {
+    let n = nodes.get(key);
+    if (!n) {
+      n = { key, label, kind, deg: 0,
+        x: graph.W / 2 + (Math.random() - 0.5) * 200,
+        y: graph.H / 2 + (Math.random() - 0.5) * 200, vx: 0, vy: 0,
+        r: kind === "asset" ? 9 : kind === "zone" ? 8 : kind === "chan" ? 6 : 7 };
+      nodes.set(key, n);
+    }
+    if (weight) n.deg += weight;
+    return n;
+  };
+  for (const [id, e] of objects) {
+    const o = e.data;
+    const tn = node("t:" + id, o.label + (o.count > 1 ? " ×" + o.count : ""), "track", 1);
+    if (o.channel || o.source) {
+      const ch = o.channel || o.source;
+      node("c:" + ch, ch, "chan", 1);
+      edges.push({ a: "t:" + id, b: "c:" + ch, kind: "src" });
+    }
+    if (o.in_zone && o.zone_region) {
+      node("z:" + o.zone_region, o.zone_region, "zone", 1);
+      edges.push({ a: "t:" + id, b: "z:" + o.zone_region, kind: "zone" });
+    }
+    const hits = lastThreatened[id] || [];
+    for (const h of hits.slice(0, 3)) {
+      node("a:" + h.name, h.name, "asset", 1);
+      edges.push({ a: "t:" + id, b: "a:" + h.name, kind: "threat", eta: h.eta_min });
+    }
+    tn.deg += hits.length;
+  }
+  graph.nodes = [...nodes.values()];
+  graph.edges = edges.filter((e) => nodes.has(e.a) && nodes.has(e.b));
+  if (!graph.nodes.length) {
+    svg.innerHTML = `<text x="50%" y="50%" fill="#6b7a8d" font-size="12" text-anchor="middle" font-family="var(--mono)">немає активних звʼязків</text>`;
+    return;
+  }
+  runForce(60);
+  drawGraph();
+}
+
+function runForce(iters) {
+  const { nodes, edges, W, H } = graph;
+  const idx = new Map(nodes.map((n, i) => [n.key, i]));
+  const K = Math.sqrt((W * H) / nodes.length) * 0.7;
+  for (let it = 0; it < iters; it++) {
+    for (const n of nodes) { n.fx = 0; n.fy = 0; }
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy || 0.01;
+        const rep = (K * K) / d2;
+        const d = Math.sqrt(d2);
+        a.fx += (dx / d) * rep; a.fy += (dy / d) * rep;
+        b.fx -= (dx / d) * rep; b.fy -= (dy / d) * rep;
+      }
+    }
+    for (const e of edges) {
+      const a = nodes[idx.get(e.a)], b = nodes[idx.get(e.b)];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const att = (d * d) / K;
+      a.fx -= (dx / d) * att; a.fy -= (dy / d) * att;
+      b.fx += (dx / d) * att; b.fy += (dy / d) * att;
+    }
+    const damp = 0.85, cx = W / 2, cy = H / 2;
+    for (const n of nodes) {
+      n.fx += (cx - n.x) * 0.01; n.fy += (cy - n.y) * 0.01; // легке тяжіння до центру
+      n.x += Math.max(-16, Math.min(16, n.fx * 0.02)) * damp;
+      n.y += Math.max(-16, Math.min(16, n.fy * 0.02)) * damp;
+      n.x = Math.max(n.r + 6, Math.min(W - n.r - 6, n.x));
+      n.y = Math.max(n.r + 20, Math.min(H - n.r - 6, n.y));
+    }
+  }
+}
+
+const NODE_COLOR = { track: "#ff9900", asset: "#ff4d4d", zone: "#22d3ee", chan: "#6b7a8d" };
+const EDGE_COLOR = { threat: "#ff4d4d", zone: "#22d3ee", src: "#3a4658" };
+function drawGraph() {
+  const svg = document.getElementById("graph-svg");
+  const { nodes, edges, W, H } = graph;
+  const idx = new Map(nodes.map((n) => [n.key, n]));
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  let s = "";
+  for (const e of edges) {
+    const a = idx.get(e.a), b = idx.get(e.b);
+    const w = e.kind === "threat" ? 1.8 : 1;
+    const dash = e.kind === "src" ? ' stroke-dasharray="2 4"' : "";
+    s += `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${EDGE_COLOR[e.kind]}" stroke-width="${w}" opacity="0.55"${dash}/>`;
+  }
+  for (const n of nodes) {
+    const c = NODE_COLOR[n.kind];
+    const rr = n.r + Math.min(4, n.deg);
+    s += `<g class="gnode"><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${rr.toFixed(1)}" fill="${c}22" stroke="${c}" stroke-width="1.5"/>`;
+    s += `<text x="${n.x.toFixed(1)}" y="${(n.y - rr - 3).toFixed(1)}" fill="#d7e0ea" font-size="9" text-anchor="middle" font-family="var(--mono)">${escapeXml(n.label).slice(0, 22)}</text></g>`;
+  }
+  svg.innerHTML = s;
+}
+function escapeXml(x) { return String(x).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
 
 // ── WebSocket ──────────────────────────────────────────────────────────
 function setWs(on) {

@@ -54,6 +54,17 @@
           <label class="fbtn on" data-layer="assets"><span class="sw"></span> Обʼєкти</label>
           <label class="fbtn on" data-layer="zones"><span class="sw"></span> Зони тривог</label>
           <label class="fbtn on" data-layer="sat"><span class="sw"></span> Супутник</label>
+          <label class="fbtn" data-layer="graph"><span class="sw"></span> Граф звʼязків</label>
+        </div>
+        <div class="graph-overlay" id="graph-overlay" hidden>
+          <div class="graph-head">
+            <span>Граф звʼязків · загроза → обʼєкт → зона → канал</span>
+            <span class="graph-legend">
+              <i class="lg lg-track"></i>ціль <i class="lg lg-asset"></i>обʼєкт
+              <i class="lg lg-zone"></i>зона <i class="lg lg-chan"></i>канал
+            </span>
+          </div>
+          <svg id="graph-svg" preserveAspectRatio="xMidYMid meet"></svg>
         </div>
         <div class="hud hud-risk" id="risk-hud" hidden>
           <div class="risk-title">Обʼєкти під загрозою</div>
