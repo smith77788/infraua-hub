@@ -12,6 +12,72 @@ export function mercToLatLon(x: number, y: number): [number, number] {
   return [lat, lon];
 }
 
+/**
+ * Тип повітряної цілі. Джерело позначок (detoyshahed) типу не віддає — його
+ * визначаємо з тексту Telegram-каналів (див. classifyThreatType). `unknown` —
+ * коли типу з тексту дістати не вдалось.
+ */
+export type ThreatType =
+  | "shahed" // ударний БпЛА (Shahed/Герань)
+  | "reactive" // реактивний БпЛА
+  | "cruise" // крилата ракета
+  | "missile" // ракета (загальне / С-300 / зен.)
+  | "ballistic" // балістика (Іскандер/Кинджал)
+  | "kab" // КАБ (керована авіабомба)
+  | "recon" // розвідувальний БпЛА
+  | "aircraft" // тактична авіація / пуск
+  | "unknown";
+
+// Порядок важливий: специфічніші типи перевіряємо раніше за загальні.
+// Увага: у JS \b працює лише для ASCII, тож для кирилиці межі слова задаємо
+// явно через lookbehind/lookahead за не-літерою.
+const NB = "(?<![а-яґєіїa-z0-9])"; // початок слова (кирилиця/латиниця/цифри)
+const NA = "(?![а-яґєіїa-z0-9])"; // кінець слова
+const TYPE_PATTERNS: [ThreatType, RegExp][] = [
+  ["ballistic", /баліст|кинджал|кинжал|іскандер|iskander|kh-?47|х-?47/i],
+  [
+    "kab",
+    new RegExp(
+      `${NB}каб(?:ів|ами|ах|и|ом|у|а)?${NA}|керован[аоі][^.]{0,8}авіабомб|умпк|${NB}фаб`,
+      "i",
+    ),
+  ],
+  ["cruise", /крилат|калібр|kalibr|kh-?101|х-?101|kh-?555|х-?555/i],
+  ["missile", new RegExp(`ракет|${NB}с-?300${NA}|onyx|онікс|зеніт`, "i")],
+  ["recon", /розвід|орлан|zala|supercam/i],
+  [
+    "aircraft",
+    new RegExp(
+      `${NB}міг${NA}|${NB}су-?\\d|бомбардувальн|тактичн[^.]{0,6}авіац|${NB}пуск|зліт|${NB}борт`,
+      "i",
+    ),
+  ],
+  ["reactive", /реактивн[а-яії]*\s*бпла|🏍/i],
+  ["shahed", /шахед|shahed|герань|geran|мопед|бпла|дрон|uav|drone|🛵/i],
+];
+
+/** Визначає тип цілі з тексту OSINT-повідомлення. */
+export function classifyThreatType(text: string): ThreatType {
+  for (const [type, re] of TYPE_PATTERNS) if (re.test(text)) return type;
+  return "unknown";
+}
+
+// Порядок «серйозності» — при злитті/виборі перемагає важчий тип.
+const TYPE_SEVERITY: Record<ThreatType, number> = {
+  ballistic: 8,
+  missile: 7,
+  cruise: 6,
+  kab: 5,
+  reactive: 4,
+  shahed: 3,
+  aircraft: 2,
+  recon: 1,
+  unknown: 0,
+};
+export function moreSevereType(a: ThreatType, b: ThreatType): ThreatType {
+  return TYPE_SEVERITY[b] > TYPE_SEVERITY[a] ? b : a;
+}
+
 export interface Threat {
   id: string;
   name: string;
@@ -19,6 +85,8 @@ export interface Threat {
   lon: number;
   /** OSINT-канал-джерело повідомлення. */
   source: string;
+  /** Тип цілі, визначений з тексту Telegram (може бути `unknown`). */
+  type?: ThreatType;
   count: number;
   since: string;
   expires: string;
@@ -81,8 +149,12 @@ export function fuseThreats(threats: Threat[], radiusKm = 8): Threat[] {
     const sources = [...new Set(members.map((m) => m.source).filter(Boolean))];
     let lastSeen = core.since;
     for (const m of members) if ((m.since || "") > lastSeen) lastSeen = m.since;
+    // Тип кластера — найсерйозніший серед членів (ракета важливіша за БпЛА).
+    let type: ThreatType = "unknown";
+    for (const m of members) type = moreSevereType(type, m.type ?? "unknown");
     out.push({
       ...core,
+      type,
       count: members.reduce((n, m) => n + (m.count || 1), 0),
       reports: members.length,
       sources,

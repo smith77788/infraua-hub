@@ -15,7 +15,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import { type AlertZone, type Threat } from "@/lib/air";
+import { type AlertZone, type Threat, type ThreatType } from "@/lib/air";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { type AlertRegion } from "@/lib/alerts";
 import {
@@ -67,14 +67,11 @@ const ICON_PATHS: Record<CategoryId, string> = {
 };
 
 /*
- * Позначка повітряної цілі. Джерело (detoyshahed) віддає лише пункт і час, без
- * типу цілі й курсу, тож гліф один — розпізнаваний силует загрози з повітря,
- * навмисно НЕ схожий на кружечки обʼєктів чи подій. Колір бурштиновий, щоб не
- * зливатися з червоним (обʼєкти під загрозою / зони тривог).
- *
- * Свіжість несе основну інформацію цього джерела: свіжий сигнал світиться й
- * пульсує, давніший — тьмяніє. Так на карті видно живу хвилю, а не 2-годинний
- * осад міток.
+ * Позначка повітряної цілі. Тип (дрон/ракета/КАБ…) визначається з тексту
+ * Telegram-каналів (getThreats), тож у кожного типу свій силует і колір — як у
+ * kontursystems/neptun. Де типу з тексту дістати не вдалось — нейтральний
+ * силует "unknown". Свіжість модулює розмір/яскравість/пульс: свіжий сигнал
+ * світиться, давніший тьмяніє.
  */
 type Freshness = "fresh" | "recent" | "stale";
 function freshnessOf(iso: string | undefined): Freshness {
@@ -85,27 +82,66 @@ function freshnessOf(iso: string | undefined): Freshness {
   return "stale";
 }
 
-const AIR_TONE: Record<Freshness, { color: string; opacity: number; size: number }> = {
-  fresh: { color: "#ffb020", opacity: 1, size: 26 },
-  recent: { color: "#ff9900", opacity: 0.92, size: 22 },
-  stale: { color: "#a86a2a", opacity: 0.55, size: 18 },
+const FRESH_TONE: Record<Freshness, { opacity: number; size: number }> = {
+  fresh: { opacity: 1, size: 26 },
+  recent: { opacity: 0.9, size: 22 },
+  stale: { opacity: 0.5, size: 18 },
+};
+
+// Силует + колір за типом цілі. Кольори узгоджені зі звичною семантикою:
+// БпЛА — жовтий, реактивний БпЛА — помаранчевий, ракети/балістика — червоне.
+const TYPE_STYLE: Record<ThreatType, { color: string; glyph: string; label: string }> = {
+  shahed: { color: "#ffd23f", glyph: '<path d="M12 3l7 16-7-3.6L5 19z"/>', label: "Ударний БпЛА" },
+  reactive: {
+    color: "#ff8c1a",
+    glyph: '<path d="M12 2l6 18-6-3.6L6 20z"/><path d="M12 5v11"/>',
+    label: "Реактивний БпЛА",
+  },
+  cruise: {
+    color: "#ff6a2a",
+    glyph: '<path d="M3 12h13l5-2-5-2H3z"/><path d="M7 12l-2 4M11 12l-2 4"/>',
+    label: "Крилата ракета",
+  },
+  missile: {
+    color: "#ff4d4d",
+    glyph: '<path d="M12 2c3.2 4 3.2 9 0 20-3.2-11-3.2-16 0-20z"/><path d="M9 16l-3 5M15 16l3 5"/>',
+    label: "Ракета",
+  },
+  ballistic: {
+    color: "#ff2d2d",
+    glyph: '<path d="M12 1c3.4 4.5 3.4 10 0 22-3.4-12-3.4-17.5 0-22z"/>',
+    label: "Балістика",
+  },
+  kab: { color: "#ffb020", glyph: '<path d="M12 3v11M8 14h8l-4 7z"/>', label: "КАБ" },
+  recon: {
+    color: "#22d3ee",
+    glyph: '<path d="M12 4l8 8-8 8-8-8z"/><circle cx="12" cy="12" r="2"/>',
+    label: "Розвід. БпЛА",
+  },
+  aircraft: { color: "#38bdf8", glyph: '<path d="M2 12l20-6-7 18-3-8z"/>', label: "Авіація" },
+  unknown: {
+    color: "#ffb020",
+    glyph: '<path d="M12 3l7 16-7-3.6L5 19z"/>',
+    label: "Повітряна ціль",
+  },
 };
 
 const threatIconCache = new Map<string, L.DivIcon>();
-function threatIcon(fresh: Freshness, reports: number): L.DivIcon {
+function threatIcon(type: ThreatType, fresh: Freshness, reports: number): L.DivIcon {
   const badge = reports > 1 ? Math.min(reports, 99) : 0;
-  const key = `${fresh}|${badge}`;
+  const key = `${type}|${fresh}|${badge}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
-  const { color, opacity, size } = AIR_TONE[fresh];
-  const g = Math.round(size * 0.72);
+  const { color, glyph } = TYPE_STYLE[type];
+  const { opacity, size } = FRESH_TONE[fresh];
+  const g = Math.round(size * 0.74);
   const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
   const badgeHtml =
     badge > 0
       ? `<b style="position:absolute;top:-5px;right:-5px;min-width:13px;height:13px;padding:0 2px;border-radius:7px;background:${color};color:#0a0e14;font:700 9px 'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0a0e14">${badge}</b>`
       : "";
   const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.2" stroke-linejoin="round"><path d="M12 3l7 15-7-3.4L5 18z"/></svg>${badgeHtml}</div>`;
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round">${glyph}</svg>${badgeHtml}</div>`;
   const icon = L.divIcon({
     html,
     className: "threat-pin",
@@ -321,9 +357,8 @@ function FacilityLayer({
 
 /*
  * Шар повітряних цілей. На огляді країни згортає позначки в бурштинові купки за
- * масштабом (щоб не було сотні стрілок), при наближенні — окремі силуети цілей
- * зі свіжістю. Джерело не дає типу цілі й курсу, тож гліф один; свіжість несе
- * основну інформацію.
+ * масштабом (щоб не було сотні стрілок), при наближенні — окремі силуети за
+ * типом (дрон/ракета/КАБ), із свіжістю як індикатором актуальності.
  */
 function ThreatLayer({ threats }: { threats: Threat[] }) {
   const map = useMap();
@@ -362,17 +397,19 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
       {inView.map((t) => {
         const seen = t.lastSeen ?? t.since;
         const fresh = freshnessOf(seen);
+        const type: ThreatType = t.type ?? "unknown";
+        const style = TYPE_STYLE[type];
         return (
           <Marker
             key={t.id}
             position={[t.lat, t.lon]}
-            icon={threatIcon(fresh, t.reports ?? 1)}
+            icon={threatIcon(type, fresh, t.reports ?? 1)}
             zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
           >
             <Popup>
               <div className="space-y-1 font-sans text-xs">
-                <p className="font-semibold" style={{ color: AIR_TONE[fresh].color }}>
-                  Повітряна ціль
+                <p className="font-semibold" style={{ color: style.color }}>
+                  {style.label}
                   {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
                 </p>
                 <p className="opacity-80">{t.name}</p>
@@ -384,6 +421,9 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   <p className="opacity-70">
                     Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
                   </p>
+                ) : null}
+                {type === "unknown" ? (
+                  <p className="opacity-50">Тип не визначено з тексту OSINT-каналів</p>
                 ) : null}
               </div>
             </Popup>

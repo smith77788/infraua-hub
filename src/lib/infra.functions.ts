@@ -2,7 +2,15 @@ import { createServerFn } from "@tanstack/react-start";
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
 
-import { fuseThreats, mercToLatLon, type AlertZone, type Threat } from "./air";
+import {
+  classifyThreatType,
+  fuseThreats,
+  mercToLatLon,
+  moreSevereType,
+  type AlertZone,
+  type Threat,
+  type ThreatType,
+} from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { SEED_FACILITIES } from "./infra-seed";
 import {
@@ -468,6 +476,70 @@ interface ThreatsPayload {
   degraded: boolean;
 }
 
+/*
+ * Тип цілі з тексту Telegram-каналів (те, як це роблять kontursystems/neptun):
+ * позиції в detoyshahed без типу, але ті самі канали в Telegram пишуть його
+ * текстом («Реактивний БпЛА», «ракета», «КАБ»…). Публічне вебпревʼю
+ * t.me/s/<канал> віддає останні повідомлення БЕЗ ключа — читаємо його прямо з
+ * Workers, класифікуємо тип і зіставляємо з позначкою за назвою пункту.
+ */
+const TG_CHANNELS = ["kpszsu", "radar_top_ua", "kudy_letyt", "eRadarrua", "kyivradar"];
+
+function normPlace(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/["'`ʼ’]/g, "")
+    .trim();
+}
+
+async function fetchThreatTypesByPlace(placeNames: string[]): Promise<Map<string, ThreatType>> {
+  const out = new Map<string, ThreatType>();
+  // Нормалізовані назви пунктів, за якими шукатимемо збіг у тексті.
+  const names = placeNames
+    .map((n) => ({ raw: n, norm: normPlace(n) }))
+    .filter((n) => n.norm.length >= 4);
+  if (!names.length) return out;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const pages = await Promise.allSettled(
+      TG_CHANNELS.map((ch) =>
+        fetch(`https://t.me/s/${ch}`, {
+          signal: controller.signal,
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
+        }).then((r) => (r.ok ? r.text() : "")),
+      ),
+    );
+    for (const p of pages) {
+      if (p.status !== "fulfilled" || !p.value) continue;
+      const blocks = p.value.match(
+        /<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/g,
+      );
+      if (!blocks) continue;
+      for (const raw of blocks) {
+        const text = raw
+          .replace(/<br\s*\/?>/g, " ")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&[a-z#0-9]+;/gi, " ");
+        const type = classifyThreatType(text);
+        if (type === "unknown") continue;
+        const low = normPlace(text);
+        for (const n of names) {
+          if (low.includes(n.norm)) {
+            out.set(n.raw, moreSevereType(out.get(n.raw) ?? "unknown", type));
+          }
+        }
+      }
+    }
+  } catch {
+    // Best-effort: без типів позначки просто лишаться "unknown".
+  } finally {
+    clearTimeout(timer);
+  }
+  return out;
+}
+
 export const getThreats = createServerFn({ method: "GET" }).handler(async () => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
@@ -505,6 +577,14 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
         expires: it.expires_at ?? "",
         ...(it.osm_id != null ? { osmId: it.osm_id } : {}),
       });
+    }
+    // Збагачуємо тип цілі з тексту Telegram-каналів (за назвою пункту).
+    const typeByPlace = await fetchThreatTypesByPlace(threats.map((t) => t.name));
+    if (typeByPlace.size) {
+      for (const t of threats) {
+        const ty = typeByPlace.get(t.name);
+        if (ty) t.type = ty;
+      }
     }
     return {
       // Зливаємо близькі позначки (різні канали про ту саму ціль/район), щоб на
