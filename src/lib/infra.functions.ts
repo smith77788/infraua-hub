@@ -466,7 +466,11 @@ export const getAlerts = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-// Повітряні цілі та зони тривог — відкрите джерело detoyshahed.in.ua (OSINT).
+// Повітряні цілі та зони тривог.
+// Основне джерело — neptun.in.ua/api/v1/threats: keyless, вже типізовані,
+// дедупльовані й геокодовані треки з курсом і рівнем впевненості (те, що інші
+// карти будують важким пайплайном). detoyshahed лишається фолбеком.
+const NEPTUN_ENDPOINT = "https://neptun.in.ua/api/v1/threats";
 const THREATS_ENDPOINT = "https://detoyshahed.in.ua/api/incidents/active";
 const ZONES_ENDPOINT = "https://detoyshahed.in.ua/api/alerts/active";
 
@@ -474,6 +478,81 @@ interface ThreatsPayload {
   threats: Threat[];
   fetchedAt: string;
   degraded: boolean;
+  source?: "neptun" | "detoyshahed";
+}
+
+/** Тип цілі neptun → наш ThreatType. Спираємось на текст (title+пояснення). */
+function mapNeptunType(type: string | undefined, text: string): ThreatType {
+  const byText = classifyThreatType(text);
+  if (byText !== "unknown") return byText;
+  const t = (type ?? "").toLowerCase();
+  if (/ballist/.test(t)) return "ballistic";
+  if (/cruise|krylat/.test(t)) return "cruise";
+  if (/missile|rocket|raket/.test(t)) return "missile";
+  if (/kab/.test(t)) return "kab";
+  if (/recon|rozvid/.test(t)) return "recon";
+  if (/aircraft|jet|avia/.test(t)) return "aircraft";
+  if (/fpv|uav|drone|bpla|shahed/.test(t)) return "shahed";
+  return "unknown";
+}
+
+interface NeptunThreat {
+  id: string;
+  type?: string;
+  title?: string;
+  region?: string;
+  district?: string;
+  locality?: string;
+  lat?: number;
+  lon?: number;
+  heading?: number | null;
+  confidenceLevel?: string;
+  sourceCount?: number;
+  count?: number;
+  updatedAt?: string;
+  confirmedAt?: string;
+  explanationShort?: string;
+  status?: string;
+}
+
+async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null> {
+  const res = await fetch(NEPTUN_ENDPOINT, {
+    signal,
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { threats?: NeptunThreat[] };
+  const list = data.threats;
+  if (!Array.isArray(list)) return null;
+  const out: Threat[] = [];
+  for (const t of list) {
+    if (typeof t.lat !== "number" || typeof t.lon !== "number") continue;
+    if (t.status && t.status !== "active") continue;
+    if (
+      t.lat < UA_BBOX.south ||
+      t.lat > UA_BBOX.north ||
+      t.lon < UA_BBOX.west ||
+      t.lon > UA_BBOX.east
+    )
+      continue;
+    const text = `${t.title ?? ""} ${t.explanationShort ?? ""}`;
+    out.push({
+      id: t.id,
+      name: t.locality || t.district || t.region || t.title || "Ціль",
+      lat: t.lat,
+      lon: t.lon,
+      source: "neptun.in.ua",
+      type: mapNeptunType(t.type, text),
+      count: t.count ?? 1,
+      since: t.confirmedAt ?? t.updatedAt ?? "",
+      expires: "",
+      reports: t.sourceCount ?? 1,
+      lastSeen: t.updatedAt ?? t.confirmedAt ?? "",
+      ...(typeof t.heading === "number" ? { heading: t.heading } : {}),
+      ...(t.confidenceLevel ? { confidence: t.confidenceLevel } : {}),
+    });
+  }
+  return out;
 }
 
 /*
@@ -544,6 +623,22 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
+    // 1) Основне джерело — neptun: вже типізовані, дедупльовані треки з курсом.
+    try {
+      const neptun = await fetchNeptunThreats(controller.signal);
+      if (neptun && neptun.length) {
+        return {
+          threats: neptun, // вже дедупльовано джерелом — не зливаємо повторно
+          fetchedAt: new Date().toISOString(),
+          degraded: false,
+          source: "neptun",
+        } satisfies ThreatsPayload;
+      }
+    } catch {
+      // Падаємо на фолбек detoyshahed нижче.
+    }
+
+    // 2) Фолбек — detoyshahed (позиції) + тип із тексту Telegram.
     const res = await fetch(THREATS_ENDPOINT, { signal: controller.signal });
     if (!res.ok) throw new Error(`threats ${res.status}`);
     const data = (await res.json()) as {
@@ -592,6 +687,7 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
       threats: fuseThreats(threats),
       fetchedAt: new Date().toISOString(),
       degraded: false,
+      source: "detoyshahed",
     } satisfies ThreatsPayload;
   } catch {
     return {

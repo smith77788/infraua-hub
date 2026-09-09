@@ -97,6 +97,10 @@ export interface Threat {
   sources?: string[];
   /** Час найсвіжішого повідомлення у злитій позначці (для індикації свіжості). */
   lastSeen?: string;
+  /** Курс цілі в градусах (0=Пн), якщо джерело його дає. */
+  heading?: number;
+  /** Рівень впевненості джерела: low/medium/high. */
+  confidence?: string;
 }
 
 function threatDistanceKm(a: Threat, b: Threat): number {
