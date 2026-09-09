@@ -17,7 +17,8 @@ export type Focus =
   | { kind: "risk" }
   | { kind: "life-risk" }
   | { kind: "alarm" }
-  | { kind: "tier"; tier: Tier };
+  | { kind: "tier"; tier: Tier }
+  | { kind: "operator"; operator: string };
 
 export interface FocusContext {
   /** Обʼєкти в радіусі активної події. */
@@ -39,6 +40,8 @@ export function applyFocus(facilities: Facility[], focus: Focus, ctx: FocusConte
       return facilities.filter((f) => ctx.alarmIds.has(f.id));
     case "tier":
       return facilities.filter((f) => CATEGORIES[f.category].tier === focus.tier);
+    case "operator":
+      return facilities.filter((f) => f.operator === focus.operator);
   }
 }
 
@@ -63,6 +66,8 @@ export function focusLabel(focus: Focus): string {
       return "лише обʼєкти в зоні тривоги";
     case "tier":
       return `лише сектор «${TIER_LABEL[focus.tier]}»`;
+    case "operator":
+      return `лише обʼєкти оператора «${focus.operator}»`;
   }
 }
 
@@ -71,5 +76,6 @@ export function sameFocus(a: Focus, b: Focus): boolean {
   if (a === null || b === null) return a === b;
   if (a.kind !== b.kind) return false;
   if (a.kind === "tier" && b.kind === "tier") return a.tier === b.tier;
+  if (a.kind === "operator" && b.kind === "operator") return a.operator === b.operator;
   return true;
 }

@@ -29,12 +29,15 @@ export default function EntityTable({
   analytics,
   selectedId,
   onSelect,
+  onOperator,
   onClose,
 }: {
   facilities: Facility[];
   analytics: Map<string, FacilityAnalytics>;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Оператор — теж сутність, а не текст у комірці. */
+  onOperator: (operator: string) => void;
   onClose: () => void;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("score");
@@ -127,7 +130,20 @@ export default function EntityTable({
                   </span>
                 </td>
                 <td className="max-w-[12rem] truncate px-2 py-1 text-muted-foreground">
-                  {r.operator || "—"}
+                  {r.operator ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOperator(r.operator);
+                      }}
+                      className="truncate underline decoration-dotted underline-offset-2 transition-colors hover:text-primary"
+                      title="Відкрити досьє оператора"
+                    >
+                      {r.operator}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground">
                   {r.dependents || "—"}

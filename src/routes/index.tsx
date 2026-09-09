@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
 import { backoffMs, sourceUnavailable } from "@/lib/backoff";
 import { applyFocus, focusLabel, type Focus } from "@/lib/focus";
+import { operatorProfile } from "@/lib/operators";
 import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
 import {
@@ -36,6 +37,7 @@ import {
 import CriticalityBreakdown, { BandChip } from "@/components/CriticalityBreakdown";
 import DependencyGraph from "@/components/DependencyGraph";
 import EntityTable from "@/components/EntityTable";
+import OperatorPanel from "@/components/OperatorPanel";
 import SourceHealth from "@/components/SourceHealth";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -280,6 +282,8 @@ function Console() {
   const [view, setView] = useState<"map" | "analytics">("map");
   const [showTable, setShowTable] = useState(false);
   const [focus, setFocus] = useState<Focus>(null);
+  const [operatorId, setOperatorId] = useState<string | null>(null);
+  const [eventKind, setEventKind] = useState<keyof typeof EVENT_KINDS | null>(null);
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
 
@@ -309,7 +313,7 @@ function Console() {
   }, [allFacilities, regions]);
 
   const windowHours = TIME_WINDOWS.find((w) => w.id === windowId)!.hours;
-  const events = useMemo(() => {
+  const eventsInWindow = useMemo(() => {
     if (playCursor != null) {
       const from = playCursor - TRAIL_MS;
       return allEvents.filter((e) => {
@@ -321,6 +325,14 @@ function Console() {
     const cutoff = Date.now() - windowHours * 3600_000;
     return allEvents.filter((e) => new Date(e.time).getTime() >= cutoff);
   }, [allEvents, windowId, windowHours, playCursor]);
+
+  // Вид події — окремий фільтр від фокуса по обʼєктах: перший звужує стрічку,
+  // другий набір обʼєктів, і плутати їх в одному перемикачі означало б
+  // сховати одне за іншим.
+  const events = useMemo(
+    () => (eventKind ? eventsInWindow.filter((e) => e.kind === eventKind) : eventsInWindow),
+    [eventsInWindow, eventKind],
+  );
   // Граф — це спостережені ребра з реальних ЛЕП плюс виведений кістяк там, де
   // фактів ще немає. Вузол, у якого вже є справжня лінія, здогадок не отримує.
   const powerLines = useMemo(() => [...powerTiles.values()].flat(), [powerTiles]);
@@ -412,6 +424,14 @@ function Console() {
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
   const selectedAnalytics = selectedId ? (analysis.perFacility.get(selectedId) ?? null) : null;
+  /*
+   * Досьє будується з усього набору, а не з відфільтрованого: воно описує
+   * організацію, а не те, що випадково пройшло поточний фільтр.
+   */
+  const operator = useMemo(
+    () => (operatorId ? operatorProfile(operatorId, allFacilities, analysis.perFacility) : null),
+    [operatorId, allFacilities, analysis.perFacility],
+  );
 
   useEffect(() => {
     if (selectedId && !byId.has(selectedId)) setSelectedId(null);
@@ -692,6 +712,8 @@ function Console() {
         threats={threats.length}
         focus={focus}
         onFocus={setFocus}
+        eventKind={eventKind}
+        onEventKind={setEventKind}
       />
 
       {/*
@@ -741,6 +763,10 @@ function Console() {
               }}
               onFocus={(f) => {
                 setFocus(f);
+                setView("map");
+              }}
+              onOperator={(op) => {
+                setOperatorId(op);
                 setView("map");
               }}
             />
@@ -985,6 +1011,7 @@ function Console() {
                 analytics={analysis.perFacility}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
+                onOperator={setOperatorId}
                 onClose={() => setShowTable(false)}
               />
             ) : null}
@@ -1040,6 +1067,17 @@ function Console() {
                 </p>
               </section>
             ) : null}
+            {operator ? (
+              <OperatorPanel
+                profile={operator}
+                onSelect={(id) => {
+                  setSelectedId(id);
+                  setOperatorId(null);
+                }}
+                onClose={() => setOperatorId(null)}
+              />
+            ) : null}
+
             {selected ? (
               <section className="mb-5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -1051,9 +1089,13 @@ function Console() {
                   {selected.detail ? ` · ${selected.detail}` : ""}
                 </p>
                 {selected.operator ? (
-                  <p className="font-mono text-[11px] text-muted-foreground">
+                  <button
+                    onClick={() => setOperatorId(selected.operator!)}
+                    className="font-mono text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors hover:text-primary"
+                    title="Відкрити досьє оператора"
+                  >
                     Оператор: {selected.operator}
-                  </p>
+                  </button>
                 ) : null}
                 <p className="mt-1 font-mono text-[11px] text-muted-foreground">
                   {selected.lat.toFixed(4)}, {selected.lon.toFixed(4)}

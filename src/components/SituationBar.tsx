@@ -53,12 +53,17 @@ export default function SituationBar({
   threats = 0,
   focus = null,
   onFocus,
+  eventKind = null,
+  onEventKind,
 }: {
   summary: SituationSummary;
   loading: boolean;
   threats?: number;
   focus?: Focus;
   onFocus?: (focus: Focus) => void;
+  /** Обраний вид події — стрічка й карта показують лише його. */
+  eventKind?: keyof typeof EVENT_KINDS | null;
+  onEventKind?: (kind: keyof typeof EVENT_KINDS | null) => void;
 }) {
   const s = LEVEL_STYLE[summary.level];
 
@@ -135,14 +140,21 @@ export default function SituationBar({
         {(Object.keys(EVENT_KINDS) as (keyof typeof EVENT_KINDS)[])
           .filter((k) => summary.byKind[k] > 0)
           .map((k) => (
-            <span key={k} className="flex items-center gap-1.5">
+            <button
+              key={k}
+              onClick={() => onEventKind?.(eventKind === k ? null : k)}
+              title={`Показати лише «${EVENT_KINDS[k].label}»`}
+              className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors hover:text-foreground ${
+                eventKind === k ? "bg-primary/10 text-foreground ring-1 ring-primary/70" : ""
+              }`}
+            >
               <span
                 className="size-1.5 rounded-full"
                 style={{ background: EVENT_KINDS[k].color }}
               />
               {EVENT_KINDS[k].label}
               <span className="font-semibold text-foreground">{summary.byKind[k]}</span>
-            </span>
+            </button>
           ))}
         {summary.eventCount === 0 && !loading ? <span>Подій немає</span> : null}
       </span>

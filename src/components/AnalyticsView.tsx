@@ -37,27 +37,49 @@ interface Props {
   onSelect: (id: string) => void;
   /** Клік по сектору звужує карту до нього — число має бути входом у зріз. */
   onFocus: (focus: Focus) => void;
+  onOperator: (operator: string) => void;
 }
 
+/**
+ * Плитка показника. Якщо за числом стоїть зріз, вона ним і є — інакше це
+ * просто напис, і вигляд кнопки був би обіцянкою, якої вона не виконує.
+ */
 function Stat({
   icon,
   label,
   value,
   tone = "text-foreground",
+  onClick,
+  title,
 }: {
   icon: ReactNode;
   label: string;
   value: string | number;
   tone?: string;
+  onClick?: () => void;
+  title?: string;
 }) {
-  return (
-    <div className="rounded border border-border bg-card p-3">
+  const body = (
+    <>
       <p className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
         {icon}
         {label}
       </p>
       <p className={`mt-1 text-2xl font-semibold tabular-nums ${tone}`}>{value}</p>
-    </div>
+    </>
+  );
+
+  if (!onClick) {
+    return <div className="rounded border border-border bg-card p-3">{body}</div>;
+  }
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="rounded border border-border bg-card p-3 text-left transition-colors hover:border-primary/60 hover:bg-muted"
+    >
+      {body}
+    </button>
   );
 }
 
@@ -72,6 +94,7 @@ export default function AnalyticsView({
   analysis,
   onSelect,
   onFocus,
+  onOperator,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const timeline = useMemo(() => eventTimeline(events, 30), [events]);
@@ -113,12 +136,24 @@ export default function AnalyticsView({
             label="Під загрозою"
             value={totalAtRisk}
             tone={totalAtRisk ? "text-amber-400" : "text-foreground"}
+            {...(totalAtRisk
+              ? {
+                  onClick: () => onFocus({ kind: "risk" }),
+                  title: "Показати на карті лише обʼєкти під загрозою",
+                }
+              : {})}
           />
           <Stat
             icon={<Siren className="size-3" />}
             label="Тривоги"
             value={activeAlarms.length}
             tone={activeAlarms.length ? "text-red-400" : "text-foreground"}
+            {...(activeAlarms.length
+              ? {
+                  onClick: () => onFocus({ kind: "alarm" }),
+                  title: "Показати на карті лише обʼєкти в зоні тривоги",
+                }
+              : {})}
           />
         </div>
 
@@ -361,8 +396,14 @@ export default function AnalyticsView({
                 </thead>
                 <tbody>
                   {operators.map((o) => (
-                    <tr key={o.operator} className="border-t border-border/50">
-                      <td className="py-1 pr-2">{o.operator}</td>
+                    <tr
+                      key={o.operator}
+                      onClick={() => onOperator(o.operator)}
+                      className="cursor-pointer border-t border-border/50 transition-colors hover:bg-muted"
+                    >
+                      <td className="py-1 pr-2 underline decoration-dotted underline-offset-2">
+                        {o.operator}
+                      </td>
                       <td className="py-1 pr-2 text-right font-mono tabular-nums">{o.total}</td>
                       <td
                         className={`py-1 pr-2 text-right font-mono tabular-nums ${o.atRisk ? "text-amber-400" : "text-muted-foreground"}`}
