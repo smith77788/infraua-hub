@@ -49,6 +49,11 @@ import {
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
 import {
+  correlateAirThreats,
+  summarizeAirThreat,
+  type ThreatSeverity,
+} from "@/lib/threat-correlation";
+import {
   palanterStatus,
   pushSplit,
   pushToPalanter,
@@ -99,6 +104,17 @@ export const Route = createFileRoute("/")({
 });
 
 const ALL_CATEGORIES = Object.keys(CATEGORIES) as CategoryId[];
+
+const AIR_SEV_LABEL: Record<ThreatSeverity, string> = {
+  critical: "критично",
+  high: "висока",
+  medium: "середня",
+};
+const AIR_SEV_TONE: Record<ThreatSeverity, string> = {
+  critical: "border-red-500/50 bg-red-500/10 hover:bg-red-500/15 text-red-200",
+  high: "border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/15 text-amber-200",
+  medium: "border-border bg-card hover:bg-accent/40",
+};
 
 function Console() {
   const facilitiesFn = useServerFn(getFacilities);
@@ -350,6 +366,18 @@ function Console() {
     [allFacilities, riskMap, events, activeAlarms],
   );
 
+  /*
+   * Повітряна загроза обʼєктам — порт шару кореляції з тактичного радара.
+   * Курс цілі відкрите джерело не віддає, тож звʼязок рахується за близькістю
+   * позначки до обʼєкта; активна тривога в регіоні підсилює рівень. Це
+   * покадровий, безстановий розрахунок — працює прямо на Workers-деплої.
+   */
+  const airThreat = useMemo(
+    () => correlateAirThreats(allFacilities, threats, { alarmIds }),
+    [allFacilities, threats, alarmIds],
+  );
+  const airThreatSummary = useMemo(() => summarizeAirThreat(airThreat), [airThreat]);
+
   const atRiskList = useMemo(
     () =>
       [...riskMap.entries()]
@@ -562,6 +590,16 @@ function Console() {
         <span className="hidden sm:inline">
           факт {Math.round(groundedness.observedShare * 100)}% звʼязків
         </span>
+        {airThreatSummary.total > 0 ? (
+          <>
+            <span className="opacity-40">·</span>
+            <span className="flex items-center gap-1.5 text-red-300">
+              <span className="size-1.5 animate-pulse rounded-full bg-red-400" />
+              повітря: {airThreatSummary.total} обʼєкт(ів) під загрозою
+              {airThreatSummary.critical > 0 ? `, ${airThreatSummary.critical} критич.` : ""}
+            </span>
+          </>
+        ) : null}
       </div>
 
       <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
@@ -917,6 +955,54 @@ function Console() {
 
           {/* Right panel */}
           <aside className="order-3 flex shrink-0 flex-col overflow-y-auto border-border p-4 lg:w-80 lg:border-l">
+            {airThreat.length > 0 ? (
+              <section className="mb-5">
+                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
+                  <AlertTriangle className="size-3" /> Повітряна загроза обʼєктам
+                  <span className="ml-auto rounded bg-red-500/15 px-1.5 py-0.5 text-red-300">
+                    {airThreat.length}
+                  </span>
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {airThreat.slice(0, 8).map((c) => (
+                    <button
+                      key={c.facility.id}
+                      onClick={() => setSelectedId(c.facility.id)}
+                      className={`flex w-full items-start gap-2 rounded border p-2 text-left transition-colors ${AIR_SEV_TONE[c.severity]}`}
+                    >
+                      <span
+                        className="mt-1 size-2 shrink-0 rounded-full"
+                        style={{ background: CATEGORIES[c.facility.category].color }}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate text-[11px] font-medium">
+                            {c.facility.name}
+                          </span>
+                          <span className="ml-auto shrink-0 font-mono text-[9px] uppercase tracking-wider">
+                            {AIR_SEV_LABEL[c.severity]}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                          {CATEGORIES[c.facility.category].label} · ~{c.nearestKm} км
+                          {c.threatCount > 1 ? ` · ${c.threatCount} позначок` : ""}
+                          {c.inAlarmRegion ? " · ◎ тривога" : ""}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                  {airThreat.length > 8 ? (
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      …та ще {airThreat.length - 8} обʼєктів
+                    </p>
+                  ) : null}
+                </div>
+                <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-muted-foreground">
+                  Звʼязок рахується за близькістю OSINT-позначок до обʼєкта (курс джерело не
+                  віддає), тривога в регіоні підсилює рівень.
+                </p>
+              </section>
+            ) : null}
             {selected ? (
               <section className="mb-5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
