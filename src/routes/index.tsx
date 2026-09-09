@@ -1,6 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
+import { buildObservedGraph, mergeGraphs } from "@/lib/power-grid";
+import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
 import {
@@ -25,6 +27,7 @@ import {
   getAlertZones,
   getEvents,
   getFacilities,
+  getPowerLines,
   getThreats,
 } from "@/lib/infra.functions";
 import { assignRegions } from "@/lib/infra-analytics";
@@ -76,12 +79,27 @@ const ALL_CATEGORIES = Object.keys(CATEGORIES) as CategoryId[];
 function Console() {
   const facilitiesFn = useServerFn(getFacilities);
   const eventsFn = useServerFn(getEvents);
+  const powerLinesFn = useServerFn(getPowerLines);
 
   const facilitiesQuery = useQuery({
     queryKey: ["facilities"],
     queryFn: () => facilitiesFn(),
     staleTime: 30 * 60 * 1000,
   });
+  // Кожен виклик догружає кілька тайлів сітки, тож покриття (а з ним і доля
+  // фактів у графі) зростає, поки користувач працює. Повторний запит раз на
+  // хвилину, доки не покрито всю країну — мережа передачі змінюється роками,
+  // поспішати нікуди.
+  const powerLinesQuery = useQuery({
+    queryKey: ["power-lines"],
+    queryFn: () => powerLinesFn(),
+    staleTime: 6 * 60 * 60 * 1000,
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      return data && data.tilesLoaded < data.tilesTotal ? 60_000 : false;
+    },
+  });
+
   const eventsQuery = useQuery({
     queryKey: ["events"],
     queryFn: () => eventsFn(),
@@ -150,7 +168,21 @@ function Console() {
     const cutoff = Date.now() - windowHours * 3600_000;
     return allEvents.filter((e) => new Date(e.time).getTime() >= cutoff);
   }, [allEvents, windowId, windowHours, playCursor]);
-  const edges = useMemo(() => buildGraph(allFacilities), [allFacilities]);
+  // Граф — це спостережені ребра з реальних ЛЕП плюс виведений кістяк там, де
+  // фактів ще немає. Вузол, у якого вже є справжня лінія, здогадок не отримує.
+  const powerLines = powerLinesQuery.data?.lines;
+  const observedGraph = useMemo(
+    () =>
+      powerLines?.length
+        ? buildObservedGraph(allFacilities, powerLines, powerLinesQuery.data?.retrievedAt)
+        : null,
+    [allFacilities, powerLines, powerLinesQuery.data?.retrievedAt],
+  );
+  const edges = useMemo(() => {
+    const inferred = buildGraph(allFacilities);
+    return observedGraph ? mergeGraphs(observedGraph.edges, inferred) : inferred;
+  }, [allFacilities, observedGraph]);
+  const groundedness = useMemo(() => summarizeProvenance(edges), [edges]);
   const byId = useMemo(() => new Map(allFacilities.map((f) => [f.id, f])), [allFacilities]);
 
   const visible = useMemo(() => {
@@ -489,6 +521,33 @@ function Console() {
                     edges={edges}
                     onSelect={(f) => setSelectedId(f.id)}
                   />
+                  {/*
+                    Найважливіший підпис на цьому екрані. Граф змішує реальні
+                    лінії з припущеннями за найближчим сусідом, і без цього
+                    рядка вони виглядають однаково — аналітик діяв би на
+                    здогадці так само впевнено, як на факті.
+                  */}
+                  <p className="mt-2 border-t border-border/60 pt-2 text-[10px] leading-relaxed text-muted-foreground">
+                    {groundedness.observed > 0 ? (
+                      <>
+                        <span className="text-primary">
+                          {Math.round(groundedness.observedShare * 100)}% звʼязків
+                        </span>{" "}
+                        — реальні лінії 110 кВ+ з OSM, решта виведена за найближчим сусідом
+                        (припущення).
+                      </>
+                    ) : (
+                      <>Усі звʼязки виведені за найближчим сусідом — це припущення, не топологія.</>
+                    )}
+                    {powerLinesQuery.data &&
+                    powerLinesQuery.data.tilesLoaded < powerLinesQuery.data.tilesTotal ? (
+                      <>
+                        {" "}
+                        Завантажено {powerLinesQuery.data.tilesLoaded} з{" "}
+                        {powerLinesQuery.data.tilesTotal} ділянок — частка фактів ще зросте.
+                      </>
+                    ) : null}
+                  </p>
                 </div>
 
                 <div className="mt-2 flex gap-2">
