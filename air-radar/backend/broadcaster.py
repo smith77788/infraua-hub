@@ -10,8 +10,15 @@ import asyncio
 import time
 from collections import deque
 
+from .assets import ASSETS, CATEGORY_LABEL
+from .correlation import correlate_tracks
 from .fusion import TrackManager
 from .models import TacticalObject
+
+ASSET_LIST = [
+    {"name": a.name, "category": a.category, "category_label": CATEGORY_LABEL.get(a.category, a.category), "lat": a.lat, "lon": a.lon}
+    for a in ASSETS
+]
 
 
 class Broadcaster:
@@ -19,6 +26,7 @@ class Broadcaster:
         self.tracks = TrackManager()
         self.zones: list[dict] = []
         self.logs: deque[dict] = deque(maxlen=300)
+        self.threatened: dict[str, list[dict]] = {}
         self.clients: set = set()
         self.store = store
         self._lock = asyncio.Lock()
@@ -52,6 +60,8 @@ class Broadcaster:
             "type": "snapshot",
             "objects": [t.to_dict() for t in self.tracks.tracks.values()],
             "zones": self.zones,
+            "assets": ASSET_LIST,
+            "threatened": self.threatened,
             "logs": list(self.logs)[-80:],
             "ts": time.time(),
         }
@@ -85,7 +95,10 @@ class Broadcaster:
             await asyncio.sleep(interval)
             async with self._lock:
                 changed, expired = self.tracks.step()
+                # Кореляція «загроза → обʼєкт» по всіх рухомих треках.
+                self.threatened = correlate_tracks(list(self.tracks.tracks.values()))
             for t in changed:
                 await self._emit({"type": "upsert", "object": t.to_dict()})
             for tid in expired:
                 await self.remove(tid)
+            await self._emit({"type": "threatened", "threatened": self.threatened})

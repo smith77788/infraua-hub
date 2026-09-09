@@ -73,6 +73,18 @@ async def api_track(obj_id: str):
     return JSONResponse({"id": obj_id, "track": store.track(obj_id)})
 
 
+@app.get("/api/assets")
+async def api_assets():
+    from .broadcaster import ASSET_LIST
+
+    return JSONResponse({"assets": ASSET_LIST})
+
+
+@app.get("/api/threatened")
+async def api_threatened():
+    return JSONResponse({"threatened": broadcaster.threatened})
+
+
 @app.get("/api/health")
 async def api_health():
     return {

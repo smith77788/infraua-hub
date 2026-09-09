@@ -140,6 +140,15 @@ body {
 .hud-filters .fbtn .sw::after { content: ""; position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 50%; background: #fff; transition: left 0.15s; }
 .hud-filters .fbtn.on .sw::after { left: 13px; }
 
+.hud-risk { bottom: 12px; right: 12px; padding: 8px 10px; max-width: 260px; }
+.risk-title { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.risk-item { display: flex; align-items: baseline; gap: 8px; font-size: 11px; padding: 2px 0; }
+.risk-item .eta { margin-left: auto; color: var(--red); font-weight: 700; }
+.risk-item .cat { color: var(--muted); font-size: 9px; }
+.asset-pin { background: transparent !important; border: none !important; }
+.asset-pin .a { width: 8px; height: 8px; transform: rotate(45deg); border: 1px solid #64748b; background: rgba(100,116,139,.25); }
+.asset-pin.hot .a { border-color: var(--red); background: rgba(255,77,77,.5); box-shadow: 0 0 8px var(--red); }
+
 /* ── Map markers ─────────────────────────────────────────── */
 .tgt { background: transparent !important; border: none !important; }
 .tgt .core {

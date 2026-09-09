@@ -29,12 +29,59 @@ let baseLayer = L.tileLayer(ESRI_DARK, { maxZoom: 16 }).addTo(map);
 const layerGroups = {
   targets: L.layerGroup().addTo(map),
   vectors: L.layerGroup().addTo(map),
+  corridors: L.layerGroup().addTo(map),
+  assets: L.layerGroup().addTo(map),
   zones: L.layerGroup().addTo(map),
 };
 
 // ── State ──────────────────────────────────────────────────────────────
 const objects = new Map(); // id -> { data, marker, vector, row }
+const assetMarkers = new Map(); // name -> marker
 let logCount = 0, rateWindow = [];
+
+function assetIcon(hot) {
+  return L.divIcon({ html: `<div class="a"></div>`, className: "asset-pin" + (hot ? " hot" : ""), iconSize: [10, 10], iconAnchor: [5, 5] });
+}
+
+function renderAssets(assets) {
+  if (!assets || assetMarkers.size) return; // рендеримо один раз
+  for (const a of assets) {
+    const m = L.marker([a.lat, a.lon], { icon: assetIcon(false), interactive: true })
+      .bindPopup(`<b>${a.name}</b><br><span style="opacity:.7">${a.category_label || a.category}</span>`);
+    m.addTo(layerGroups.assets);
+    assetMarkers.set(a.name, m);
+  }
+}
+
+function applyThreatened(threatened) {
+  layerGroups.corridors.clearLayers();
+  // мінімальний ETA по кожному обʼєкту + перелік для HUD
+  const byAsset = new Map();
+  for (const tid of Object.keys(threatened || {})) {
+    const track = objects.get(tid);
+    const list = threatened[tid] || [];
+    for (const h of list) {
+      const cur = byAsset.get(h.name);
+      if (!cur || h.eta_min < cur.eta_min) byAsset.set(h.name, h);
+      if (track) {
+        L.polyline([[track.data.lat, track.data.lon], [h.lat, h.lon]], {
+          color: track.data.color, weight: 1, opacity: 0.5, dashArray: "2 5",
+        }).addTo(layerGroups.corridors);
+      }
+    }
+  }
+  // підсвітка обʼєктів
+  for (const [name, m] of assetMarkers) m.setIcon(assetIcon(byAsset.has(name)));
+  // HUD
+  const items = [...byAsset.values()].sort((a, b) => a.eta_min - b.eta_min).slice(0, 7);
+  const hud = document.getElementById("risk-hud");
+  const listEl = document.getElementById("risk-list");
+  if (!items.length) { hud.hidden = true; listEl.innerHTML = ""; return; }
+  hud.hidden = false;
+  listEl.innerHTML = items.map((h) =>
+    `<div class="risk-item"><span>${h.name}</span><span class="cat">${h.category_label || ""}</span><span class="eta">${Math.round(h.eta_min)}'</span></div>`
+  ).join("");
+}
 
 function targetIcon(o) {
   const glyph = TYPE_GLYPH[o.type] || TYPE_GLYPH.unknown;
@@ -192,12 +239,15 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "snapshot") {
+      renderAssets(msg.assets);
       msg.objects.forEach(upsertObject);
       setZones(msg.zones || []);
+      applyThreatened(msg.threatened || {});
       (msg.logs || []).slice().forEach(addLog);
     } else if (msg.type === "upsert") upsertObject(msg.object);
     else if (msg.type === "remove") removeObject(msg.id);
     else if (msg.type === "zones") setZones(msg.zones);
+    else if (msg.type === "threatened") applyThreatened(msg.threatened);
     else if (msg.type === "log") addLog(msg.log);
   };
 }
