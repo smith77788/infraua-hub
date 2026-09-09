@@ -411,9 +411,13 @@ export default function InfraMap({
         <Marker key={t.id} position={[t.lat, t.lon]} icon={threatIcon}>
           <Popup>
             <div className="space-y-1 font-sans text-xs">
-              <p className="font-semibold text-red-600">Повітряна ціль</p>
+              <p className="font-semibold text-red-600">
+                Повітряна ціль{t.reports && t.reports > 1 ? ` · ${t.reports} повідомлень` : ""}
+              </p>
               <p className="opacity-80">{t.name}</p>
-              <p className="opacity-70">Джерело: {t.source}</p>
+              <p className="opacity-70">
+                Джерело: {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
+              </p>
               {t.since ? (
                 <p className="opacity-70">{new Date(t.since).toLocaleString("uk-UA")}</p>
               ) : null}
