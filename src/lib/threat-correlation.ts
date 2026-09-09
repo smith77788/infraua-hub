@@ -128,3 +128,89 @@ export function summarizeAirThreat(correlations: ThreatCorrelation[]): {
   }
   return { total: correlations.length, critical, high };
 }
+
+// ── Граф звʼязків: обʼєкт ↔ повітряна ціль ↔ OSINT-канал ────────────────────
+
+export type GraphNodeKind = "asset" | "threat" | "channel";
+
+export interface ThreatGraphNode {
+  key: string;
+  label: string;
+  kind: GraphNodeKind;
+  /** Рівень для обʼєкта (щоб фарбувати вузол за терміновістю). */
+  severity?: ThreatSeverity;
+  /** Ступінь звʼязків — для розміру вузла. */
+  degree: number;
+}
+
+export interface ThreatGraphEdge {
+  a: string;
+  b: string;
+  kind: "threatens" | "reported-by";
+}
+
+export interface ThreatGraph {
+  nodes: ThreatGraphNode[];
+  edges: ThreatGraphEdge[];
+}
+
+export interface BuildGraphOptions {
+  radiusKm?: number;
+  /** Скільки обʼєктів під загрозою взяти (найтерміновіші). */
+  maxAssets?: number;
+}
+
+/**
+ * Будує граф звʼязків оперативної картини: обʼєкти під повітряною загрозою, самі
+ * позначки цілей поруч і OSINT-канали, що їх дали. Показує, коли кілька загроз
+ * сходяться на один обʼєкт або коли один канал живить багато позначок — це
+ * знаковий шар аналізу звʼязків Palantir-класу, тепер прямо в консолі.
+ *
+ * Чиста функція: працює покадрово, без серверної памʼяті.
+ */
+export function buildThreatGraph(
+  correlations: ThreatCorrelation[],
+  threats: Threat[],
+  opts: BuildGraphOptions = {},
+): ThreatGraph {
+  const radiusKm = opts.radiusKm ?? 30;
+  const maxAssets = opts.maxAssets ?? 14;
+  const nodes = new Map<string, ThreatGraphNode>();
+  const edges: ThreatGraphEdge[] = [];
+  const edgeSeen = new Set<string>();
+
+  const addNode = (key: string, label: string, kind: GraphNodeKind, severity?: ThreatSeverity) => {
+    let n = nodes.get(key);
+    if (!n) {
+      n = { key, label, kind, degree: 0, ...(severity ? { severity } : {}) };
+      nodes.set(key, n);
+    }
+    return n;
+  };
+  const addEdge = (a: string, b: string, kind: ThreatGraphEdge["kind"]) => {
+    const id = `${a}|${b}`;
+    if (edgeSeen.has(id)) return;
+    edgeSeen.add(id);
+    edges.push({ a, b, kind });
+    nodes.get(a)!.degree++;
+    nodes.get(b)!.degree++;
+  };
+
+  for (const c of correlations.slice(0, maxAssets)) {
+    const aKey = `a:${c.facility.id}`;
+    addNode(aKey, c.facility.name, "asset", c.severity);
+    for (const t of threats) {
+      if (distanceKm(c.facility, t) > radiusKm) continue;
+      const tKey = `t:${t.id}`;
+      addNode(tKey, t.name, "threat");
+      addEdge(tKey, aKey, "threatens");
+      for (const ch of t.sources ?? (t.source ? [t.source] : [])) {
+        const cKey = `c:${ch}`;
+        addNode(cKey, ch, "channel");
+        addEdge(cKey, tKey, "reported-by");
+      }
+    }
+  }
+
+  return { nodes: [...nodes.values()], edges };
+}

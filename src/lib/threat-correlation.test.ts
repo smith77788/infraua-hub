@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { correlateAirThreats, summarizeAirThreat } from "./threat-correlation";
+import { buildThreatGraph, correlateAirThreats, summarizeAirThreat } from "./threat-correlation";
 import type { CategoryId, Facility } from "./infra-types";
 import type { Threat } from "./air";
 
@@ -91,5 +91,43 @@ describe("correlateAirThreats", () => {
     const sum = summarizeAirThreat(correlateAirThreats(facs, threats));
     expect(sum.total).toBe(3);
     expect(sum.critical).toBe(2);
+  });
+});
+
+describe("buildThreatGraph", () => {
+  it("будує вузли обʼєкт/ціль/канал і звʼязки між ними", () => {
+    const facs = [fac("ps", "substation", 50.0, 30.0)];
+    const threats = [
+      threat("t1", 50.01, 30.01, { sources: ["@a", "@b"] }),
+      threat("t2", 50.02, 29.99, { source: "@c" }),
+    ];
+    const corr = correlateAirThreats(facs, threats);
+    const g = buildThreatGraph(corr, threats);
+    const kinds = g.nodes.reduce<Record<string, number>>((m, n) => {
+      m[n.kind] = (m[n.kind] ?? 0) + 1;
+      return m;
+    }, {});
+    expect(kinds["asset"]).toBe(1);
+    expect(kinds["threat"]).toBe(2);
+    expect(kinds["channel"]).toBe(3); // @a, @b, @c
+    expect(g.edges.filter((e) => e.kind === "threatens")).toHaveLength(2);
+    expect(g.edges.filter((e) => e.kind === "reported-by")).toHaveLength(3);
+  });
+
+  it("виявляє схід кількох цілей на один обʼєкт (ступінь обʼєкта)", () => {
+    const facs = [fac("hub", "power_plant", 50.0, 30.0)];
+    const threats = [
+      threat("t1", 50.01, 30.0),
+      threat("t2", 49.99, 30.0),
+      threat("t3", 50.0, 30.02),
+    ];
+    const g = buildThreatGraph(correlateAirThreats(facs, threats), threats);
+    const asset = g.nodes.find((n) => n.kind === "asset")!;
+    expect(asset.degree).toBe(3);
+    expect(asset.severity).toBe("critical");
+  });
+
+  it("порожня кореляція — порожній граф", () => {
+    expect(buildThreatGraph([], []).nodes).toHaveLength(0);
   });
 });
