@@ -20,6 +20,8 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  FileText,
+  Info,
   Loader2,
   Map as MapIcon,
   RefreshCw,
