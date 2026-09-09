@@ -20,6 +20,8 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  FileText,
+  Info,
   Loader2,
   Map as MapIcon,
   RefreshCw,
@@ -564,8 +566,8 @@ function Console() {
         </span>
       </div>
 
-      <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
-        <div className="flex items-center gap-2.5">
+      <header className="z-20 grid h-14 shrink-0 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2.5">
           <span className="relative flex size-2.5">
             <span className="animate-pulse-dot absolute inline-flex size-full rounded-full bg-primary" />
           </span>
@@ -577,15 +579,15 @@ function Console() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center rounded border border-border p-0.5">
+        <div className="flex min-w-0 items-center justify-end gap-1.5 sm:gap-2">
+          <div className="flex shrink-0 items-center rounded border border-border p-0.5">
             <button
               onClick={() => setView("map")}
               className={`flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
                 view === "map" ? "bg-card text-foreground" : "text-muted-foreground"
               }`}
             >
-              <MapIcon className="size-3" /> Карта
+              <MapIcon className="size-3" /> <span className="hidden sm:inline">Карта</span>
             </button>
             <button
               onClick={() => setView("analytics")}
@@ -593,7 +595,7 @@ function Console() {
                 view === "analytics" ? "bg-card text-foreground" : "text-muted-foreground"
               }`}
             >
-              <BarChart3 className="size-3" /> Аналітика
+              <BarChart3 className="size-3" /> <span className="hidden sm:inline">Аналітика</span>
             </button>
           </div>
           {view === "map" ? (
@@ -610,7 +612,9 @@ function Console() {
           <Button
             size="sm"
             variant="outline"
-            className="font-mono text-[10px] uppercase tracking-[0.12em]"
+            title="Оновити дані"
+            aria-label="Оновити дані"
+            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
             onClick={() => {
               void facilitiesQuery.refetch();
               void eventsQuery.refetch();
@@ -620,23 +624,29 @@ function Console() {
             }}
           >
             <RefreshCw className={eventsQuery.isFetching ? "animate-spin" : ""} />
-            Оновити
+            <span className="hidden sm:inline">Оновити</span>
           </Button>
           <Button
             asChild
             size="sm"
             variant="outline"
-            className="font-mono text-[10px] uppercase tracking-[0.12em]"
+            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
           >
-            <Link to="/brief">Брифінг</Link>
+            <Link to="/brief" title="Ситуаційний брифінг" aria-label="Ситуаційний брифінг">
+              <FileText className="size-3" />
+              <span className="hidden sm:inline">Брифінг</span>
+            </Link>
           </Button>
           <Button
             asChild
             size="sm"
             variant="ghost"
-            className="hidden font-mono text-[10px] uppercase tracking-[0.12em] sm:inline-flex"
+            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
           >
-            <Link to="/about">Про платформу</Link>
+            <Link to="/about" title="Про платформу" aria-label="Про платформу">
+              <Info className="size-3" />
+              <span className="hidden sm:inline">Про платформу</span>
+            </Link>
           </Button>
         </div>
       </header>

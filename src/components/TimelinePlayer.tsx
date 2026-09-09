@@ -13,8 +13,18 @@ interface Props {
 
 /** Плеєр часу: прокручує курсор по 30-денному вікну та анімує розвиток подій. */
 export default function TimelinePlayer({ onCursor }: Props) {
-  const now = useRef(Date.now());
-  const min = now.current - SPAN_MS;
+  /*
+   * Час беремо лише після монтування: на сервері й у браузері Date.now()
+   * різний, і зчитування його під час рендеру ламало гідратацію (min/max
+   * повзунка розходилися на кілька секунд).
+   */
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  const now = useRef(0);
+  useEffect(() => {
+    now.current = Date.now();
+    setNowMs(now.current);
+  }, []);
+  const min = (nowMs ?? 0) - SPAN_MS;
   const [cursor, setCursor] = useState<number | null>(null); // null = live
   const [playing, setPlaying] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -41,7 +51,7 @@ export default function TimelinePlayer({ onCursor }: Props) {
   }, [playing, min]);
 
   const live = cursor === null;
-  const value = cursor ?? now.current;
+  const value = cursor ?? nowMs ?? 0;
   const label = live
     ? "Живий режим"
     : new Date(cursor).toLocaleString("uk-UA", {
@@ -50,6 +60,17 @@ export default function TimelinePlayer({ onCursor }: Props) {
         hour: "2-digit",
         minute: "2-digit",
       });
+
+  // До монтування показуємо нейтральну заглушку — без часу, тож без розбіжності.
+  if (nowMs === null) {
+    return (
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex h-[43px] items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
+        <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+          Шкала часу…
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-[500] flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
