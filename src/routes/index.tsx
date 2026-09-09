@@ -25,12 +25,14 @@ import {
   RefreshCw,
   Search,
   Share2,
+  Table2,
   Waypoints,
   Zap,
 } from "lucide-react";
 
 import CriticalityBreakdown, { BandChip } from "@/components/CriticalityBreakdown";
 import DependencyGraph from "@/components/DependencyGraph";
+import EntityTable from "@/components/EntityTable";
 import SourceHealth from "@/components/SourceHealth";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -255,6 +257,7 @@ function Console() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
+  const [showTable, setShowTable] = useState(false);
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
 
@@ -593,6 +596,17 @@ function Console() {
               <BarChart3 className="size-3" /> Аналітика
             </button>
           </div>
+          {view === "map" ? (
+            <Button
+              size="sm"
+              variant={showTable ? "secondary" : "outline"}
+              className="font-mono text-[10px] uppercase tracking-[0.12em]"
+              onClick={() => setShowTable((v) => !v)}
+              aria-pressed={showTable}
+            >
+              <Table2 className="size-3" /> Таблиця
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="outline"
@@ -840,48 +854,66 @@ function Console() {
           </aside>
 
           {/* Map */}
-          <main className="relative order-1 min-h-[52svh] flex-1 lg:order-2">
-            <ClientOnly fallback={<MapSkeleton />}>
-              <Suspense fallback={<MapSkeleton />}>
-                <InfraMap
-                  facilities={visible}
-                  events={events}
-                  edges={edges}
-                  alerts={regions}
-                  zones={zones}
-                  threats={threats}
-                  alarmIds={alarmIds}
-                  showLinks={showLinks}
-                  riskIds={riskIds}
-                  impactedIds={impactedIds}
-                  selectedId={selectedId}
-                  onSelect={(f) => setSelectedId(f.id)}
-                />
-              </Suspense>
-            </ClientOnly>
+          <div className="order-1 flex min-h-[52svh] min-w-0 flex-1 flex-col lg:order-2">
+            <main className="relative min-h-0 flex-1">
+              <ClientOnly fallback={<MapSkeleton />}>
+                <Suspense fallback={<MapSkeleton />}>
+                  <InfraMap
+                    facilities={visible}
+                    events={events}
+                    edges={edges}
+                    alerts={regions}
+                    zones={zones}
+                    threats={threats}
+                    alarmIds={alarmIds}
+                    showLinks={showLinks}
+                    riskIds={riskIds}
+                    impactedIds={impactedIds}
+                    selectedId={selectedId}
+                    onSelect={(f) => setSelectedId(f.id)}
+                  />
+                </Suspense>
+              </ClientOnly>
 
-            {loading ? (
-              <div className="pointer-events-none absolute inset-x-0 top-3 z-[500] flex justify-center">
-                <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                  <Loader2 className="size-3 animate-spin" /> Завантаження обʼєктів з OpenStreetMap
-                </span>
-              </div>
+              {loading ? (
+                <div className="pointer-events-none absolute inset-x-0 top-3 z-[500] flex justify-center">
+                  <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" /> Завантаження обʼєктів з
+                    OpenStreetMap
+                  </span>
+                </div>
+              ) : null}
+
+              {facilitiesQuery.isPlaceholderData ? (
+                <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin" /> Опорний набір показано; вантажимо
+                  повні дані з OpenStreetMap…
+                </div>
+              ) : facilitiesQuery.data?.source === "baseline" ? (
+                <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
+                  Live-джерело OpenStreetMap недоступне — показано опорний перелік ключових
+                  обʼєктів. Натисніть «Оновити» для повторної спроби.
+                </div>
+              ) : null}
+
+              <TimelinePlayer onCursor={setPlayCursor} />
+            </main>
+
+            {/*
+            Таблиця показує рівно те, що зараз на карті — ті самі фільтри й
+            пошук. Два зрізи одних даних, що суперечать одне одному на сусідніх
+            панелях, гірші за один.
+          */}
+            {showTable ? (
+              <EntityTable
+                facilities={visible}
+                analytics={analysis.perFacility}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onClose={() => setShowTable(false)}
+              />
             ) : null}
-
-            {facilitiesQuery.isPlaceholderData ? (
-              <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
-                <Loader2 className="size-3 animate-spin" /> Опорний набір показано; вантажимо повні
-                дані з OpenStreetMap…
-              </div>
-            ) : facilitiesQuery.data?.source === "baseline" ? (
-              <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
-                Live-джерело OpenStreetMap недоступне — показано опорний перелік ключових обʼєктів.
-                Натисніть «Оновити» для повторної спроби.
-              </div>
-            ) : null}
-
-            <TimelinePlayer onCursor={setPlayCursor} />
-          </main>
+          </div>
 
           {/* Right panel */}
           <aside className="order-3 flex shrink-0 flex-col overflow-y-auto border-border p-4 lg:w-80 lg:border-l">
