@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { parsePowerLines, powerLineQuery, type PowerLine } from "./power-grid";
 
 import { mercToLatLon, type AlertZone, type Threat } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
@@ -94,6 +95,8 @@ interface OverpassElement {
   lon?: number;
   center?: { lat: number; lon: number };
   tags?: Record<string, string>;
+  /** Присутнє лише в запитах `out geom` — потрібне для ліній електропередач. */
+  geometry?: { lat: number; lon: number }[];
 }
 
 async function overpass(body: string, signal: AbortSignal): Promise<OverpassElement[]> {
@@ -543,4 +546,105 @@ export const getAlertZones = createServerFn({ method: "GET" }).handler(async () 
   } finally {
     clearTimeout(timer);
   }
+});
+
+/**
+ * Реальні лінії електропередач 110 кВ+ — основа **спостереженої** топології.
+ *
+ * Решта графа виводиться за найближчим сусідом, тобто є припущенням. Ці лінії
+ * — зафіксовані обʼєкти OSM з напругою і геометрією; зведені з підстанціями,
+ * вони дають ребра, які можна відкрити в OSM і перевірити очима.
+ *
+ * ## Чому по тайлах, а не одним запитом
+ *
+ * Перевірено запитами до Overpass (вересень 2026), а не припущено:
+ *
+ *   вся Україна одним запитом   → відмова (HTML замість JSON)
+ *   чверть країни               → відмова
+ *   тайл 2°×2°                  → 470 ліній, 911 КБ, успішно
+ *   тайл 1°×1°                  → 319 ліній, 523 КБ, успішно
+ *
+ * Тобто повний набір (близько 16.9 тис. ліній) через один запит не проходить
+ * узагалі. Країна розбивається на сітку по 2°, і кожен виклик догружає кілька
+ * тайлів, повертаючи все, що вже накопичено. Мережа передачі змінюється
+ * роками, тож кеш живе довго, а покриття зростає від виклику до виклику.
+ *
+ * Наслідок, який видно в інтерфейсі: доля фактів у графі не фіксована — вона
+ * росте, поки тайли підвантажуються. Це чесніше за «все або нічого»: система
+ * показує рівно те, що встигла підтвердити.
+ */
+
+/** Розмір тайла в градусах — найбільший, який Overpass віддає стабільно. */
+const TILE_DEG = 2;
+
+/** Скільки тайлів догружати за один виклик, щоб не впертися в таймаут. */
+const TILES_PER_CALL = 3;
+
+interface TileKey {
+  south: number;
+  west: number;
+}
+
+function tileGrid(): TileKey[] {
+  const tiles: TileKey[] = [];
+  for (let lat = Math.floor(UA_BBOX.south); lat < UA_BBOX.north; lat += TILE_DEG) {
+    for (let lon = Math.floor(UA_BBOX.west); lon < UA_BBOX.east; lon += TILE_DEG) {
+      tiles.push({ south: lat, west: lon });
+    }
+  }
+  return tiles;
+}
+
+/** Накопичені тайли живуть окремо від payload, щоб покриття не скидалося. */
+const powerLineTiles = new Map<string, PowerLine[]>();
+
+export interface PowerLinesPayload {
+  lines: PowerLine[];
+  retrievedAt: string;
+  /** Скільки тайлів сітки вже завантажено. */
+  tilesLoaded: number;
+  /** Скільки всього тайлів покриває країну. */
+  tilesTotal: number;
+  /**
+   * false означає «джерело недоступне», а не «ліній не існує». Без цього
+   * прапорця відсутність фактів виглядала б як доведена відсутність звʼязків.
+   */
+  available: boolean;
+}
+
+export const getPowerLines = createServerFn({ method: "GET" }).handler(async () => {
+  const grid = tileGrid();
+  const pending = grid.filter((t) => !powerLineTiles.has(`${t.south}:${t.west}`));
+
+  if (pending.length > 0) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+    try {
+      for (const tile of pending.slice(0, TILES_PER_CALL)) {
+        const query = powerLineQuery({
+          south: tile.south,
+          west: tile.west,
+          north: tile.south + TILE_DEG,
+          east: tile.west + TILE_DEG,
+        });
+        const elements = await overpass(query, controller.signal);
+        // Порожній тайл записується теж: над морем чи за кордоном ліній справді
+        // немає, і без запису ми перезапитували б його вічно.
+        powerLineTiles.set(`${tile.south}:${tile.west}`, parsePowerLines({ elements }));
+      }
+    } catch (err) {
+      console.error("power line tile failed", err);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const lines = Array.from(powerLineTiles.values()).flat();
+  return {
+    lines,
+    retrievedAt: new Date().toISOString(),
+    tilesLoaded: powerLineTiles.size,
+    tilesTotal: grid.length,
+    available: powerLineTiles.size > 0,
+  } satisfies PowerLinesPayload;
 });
