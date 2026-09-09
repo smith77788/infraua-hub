@@ -22,11 +22,16 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # Every step below is the same package script `npm run check` runs, in
+      # the same order, so a local check and CI cannot drift apart. They stay
+      # separate steps here only so a failure names itself instead of being
+      # reported as "check failed".
+      #
       # The build does not typecheck — Vite strips types without checking them.
       # Every type error this repo has carried so far reached main precisely
       # because a green build was taken as proof, so this step runs first.
       - name: Typecheck
-        run: bunx tsc --noEmit
+        run: bun run typecheck
 
       - name: Lint and format
         run: bun run lint
