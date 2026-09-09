@@ -261,19 +261,13 @@ export function summarize(
   };
 }
 
-/** Cascade: everything downstream of the given nodes. */
-export function downstreamOf(ids: Set<string>, edges: GraphEdge[]): Set<string> {
-  const out = new Set(ids);
-  let changed = true;
-  let guard = 0;
-  while (changed && guard++ < 10) {
-    changed = false;
-    for (const e of edges) {
-      if (out.has(e.from) && !out.has(e.to)) {
-        out.add(e.to);
-        changed = true;
-      }
-    }
-  }
-  return out;
-}
+/*
+ * `downstreamOf` жив тут і рахував наслідки відмови як транзитивне замикання
+ * вниз за течією. Прибраний, а не залишений «про всяк випадок»: він давав
+ * неправильну відповідь одразу в два боки — перебільшував, бо не бачив
+ * резервного живлення, і недооцінював, бо обмежував поширення десятьма
+ * проходами (`guard++ < 10`) і на глибшому ланцюжку мовчки зупинявся.
+ *
+ * Заміна — `simulateOutage` у src/lib/contingency.ts: втрата шляху до
+ * генерації, критерій N-1.
+ */

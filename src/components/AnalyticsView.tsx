@@ -11,10 +11,12 @@ import {
   ShieldAlert,
   Siren,
   TrendingUp,
+  Unplug,
 } from "lucide-react";
 
 import { type AlertRegion } from "@/lib/alerts";
 import CriticalityBreakdown, { BAND_TONE } from "@/components/CriticalityBreakdown";
+import { rankContingencies } from "@/lib/contingency";
 import { eventTimeline, operatorRollup, type NetworkAnalysis } from "@/lib/infra-analytics";
 import {
   CATEGORIES,
@@ -69,6 +71,11 @@ export default function AnalyticsView({
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const timeline = useMemo(() => eventTimeline(events, 30), [events]);
+  const contingencies = useMemo(
+    () => rankContingencies(facilities, edges, 10),
+    [facilities, edges],
+  );
+  const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
   const operators = useMemo(() => operatorRollup(facilities, analysis), [facilities, analysis]);
   const activeAlarms = useMemo(() => alerts.filter((r) => r.active), [alerts]);
 
@@ -273,6 +280,58 @@ export default function AnalyticsView({
             </div>
           </section>
         </div>
+
+        {/* Одиничні відмови (N-1) */}
+        <section className="rounded border border-border bg-card p-3">
+          <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            <Unplug className="size-3" /> Найдорожчі одиничні відмови
+          </p>
+          {contingencies.length === 0 ? (
+            <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+              Жодна одинична відмова нікого не лишає без живлення — або в наборі немає
+              електростанцій, від яких рахувати шлях до генерації.
+            </p>
+          ) : (
+            <div className="mt-2 space-y-1">
+              {contingencies.map((c) => {
+                const f = byId.get(c.id);
+                if (!f) return null;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => onSelect(c.id)}
+                    className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left transition-colors hover:bg-muted"
+                  >
+                    <span className="w-10 shrink-0 text-right font-mono text-[11px] font-semibold tabular-nums text-orange-400">
+                      −{c.lost}
+                    </span>
+                    <span
+                      className="size-2 shrink-0 rounded-full"
+                      style={{ background: CATEGORIES[f.category].color }}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px]">{f.name}</span>
+                      <span className="block truncate font-mono text-[9px] text-muted-foreground">
+                        {CATEGORIES[f.category].label}
+                      </span>
+                    </span>
+                    {c.lifeLost > 0 ? (
+                      <span className="shrink-0 rounded border border-red-500/50 bg-red-500/10 px-1.5 py-0.5 font-mono text-[9px] text-red-400">
+                        {c.lifeLost} життєзабезп.
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <p className="mt-2 border-t border-border/60 pt-2 text-[10px] leading-relaxed text-muted-foreground">
+            Перебір усіх одиничних відмов: скільки обʼєктів втратять шлях до генерації, якщо цей
+            один зникне. Обʼєкт із резервним живленням при цьому не гасне — саме цим відповідь
+            відрізняється від «усе, що нижче за течією». Спостережені лінії вважаються
+            двосторонніми, виведені — ні.
+          </p>
+        </section>
 
         {/* Operators */}
         {operators.length ? (

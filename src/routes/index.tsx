@@ -31,12 +31,12 @@ import {
   getPowerLines,
   getThreats,
 } from "@/lib/infra.functions";
+import { simulateOutage } from "@/lib/contingency";
 import { analyzeNetwork, assignRegions } from "@/lib/infra-analytics";
 import {
   buildGraph,
   CATEGORIES,
   EVENT_KINDS,
-  downstreamOf,
   facilitiesAtRisk,
   summarize,
   type CategoryId,
@@ -226,12 +226,17 @@ function Console() {
     [riskMap, byId],
   );
 
-  const impactedIds = useMemo(() => {
-    if (!outageId) return new Set<string>();
-    const set = downstreamOf(new Set([outageId]), edges);
-    set.delete(outageId);
-    return set;
-  }, [outageId, edges]);
+  /*
+   * Аналіз одиничної відмови замість транзитивного замикання вниз за течією.
+   * Замикання вважало знеструмленим усе, що нижче, — а підстанція на трьох
+   * реальних лініях відмову однієї з них переживає. Помилка була завжди в
+   * один бік: наслідки перебільшувалися.
+   */
+  const outage = useMemo(
+    () => (outageId ? simulateOutage(allFacilities, edges, outageId) : null),
+    [outageId, allFacilities, edges],
+  );
+  const impactedIds = useMemo(() => outage?.lost ?? new Set<string>(), [outage]);
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
   const selectedAnalytics = selectedId ? (analysis.perFacility.get(selectedId) ?? null) : null;
@@ -435,8 +440,26 @@ function Console() {
                   Симуляція відключення
                 </p>
                 <p className="mt-1 text-xs">
-                  {byId.get(outageId)?.name ?? "—"} → {impactedIds.size} залежних обʼєктів
+                  {byId.get(outageId)?.name ?? "—"} → {impactedIds.size}{" "}
+                  {impactedIds.size === 1 ? "обʼєкт втрачає" : "обʼєктів втрачають"} живлення
                 </p>
+                {outage && !outage.hasSources ? (
+                  <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                    У наборі немає жодної електростанції, тож рахувати шлях до генерації нема від
+                    чого. Увімкніть категорію «Електростанції».
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                    Рахується як втрата шляху до генерації: обʼєкт із резервним живленням не гасне.{" "}
+                    {impactedIds.size > 0 ? (
+                      <>
+                        <span className="text-primary">{outage?.grounded.size ?? 0}</span> з них
+                        підтверджено спостереженою топологією, решта тримається на виведених
+                        звʼязках.
+                      </>
+                    ) : null}
+                  </p>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
