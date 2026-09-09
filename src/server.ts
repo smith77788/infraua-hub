@@ -1,6 +1,7 @@
 import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
+import { baseReport, probe, type SourceProbe } from "./lib/health";
 import { renderErrorPage } from "./lib/error-page";
 
 type ServerEntry = {
@@ -44,8 +45,67 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+/**
+ * Кеш проби. Healthcheck, що ходить у зовнішній сервіс на кожен виклик,
+ * перетворює чужу недоступність на власну — Railway перезапустить справну
+ * службу через те, що Overpass у поганому настрої.
+ */
+let probeCache: { at: number; probes: SourceProbe[] } | null = null;
+const PROBE_TTL_MS = 60_000;
+
+async function runProbes(): Promise<SourceProbe[]> {
+  if (probeCache && Date.now() - probeCache.at < PROBE_TTL_MS) return probeCache.probes;
+  const probes = await Promise.all([
+    probe(
+      "overpass",
+      "https://overpass-api.de/api/interpreter",
+      {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        // Найдешевший осмислений запит: рахунок підстанцій 110 кВ+ по країні.
+        // Він же відповідає на питання, скільки їх насправді.
+        body:
+          "data=" +
+          encodeURIComponent(
+            '[out:json][timeout:60];(nwr["power"="substation"]["voltage"~"^(1[1-9][0-9]{4}|[2-9][0-9]{5})"](44.2,22.0,52.4,40.3););out count;',
+          ),
+      },
+      45_000,
+    ),
+    probe("usgs", "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1"),
+    probe("eonet", "https://eonet.gsfc.nasa.gov/api/v3/events?limit=1"),
+  ]);
+  probeCache = { at: Date.now(), probes };
+  return probes;
+}
+
+async function health(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const report = baseReport();
+  const body =
+    url.searchParams.get("probe") === "1" ? { ...report, probes: await runProbes() } : report;
+  return new Response(JSON.stringify(body, null, 2), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    // Перехоплюється до маршрутизатора: службова відповідь не має залежати
+    // від того, чи зібрався застосунок.
+    if (new URL(request.url).pathname === "/api/health") {
+      try {
+        return await health(request);
+      } catch (error) {
+        console.error(error);
+        return new Response(JSON.stringify({ status: "error" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
