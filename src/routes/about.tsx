@@ -388,12 +388,16 @@ function Index() {
               Готові подивитись на свою інфраструктуру інакше?
             </h2>
             <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
-              Напишіть кілька слів про вашу задачу — покажемо платформу на ваших даних і обговоримо,
-              які джерела під неї підключити.
+              Відкрийте консоль на живих даних або подивіться, як це влаштовано зсередини.
             </p>
+            {/*
+              Тут стояла адреса hello@infraua.org — її ніхто не реєстрував, вона
+              була просто вигадана. Кнопка «написати» без справжньої скриньки
+              обіцяє відповідь, якої не буде, тож прибрана до появи реальної.
+            */}
             <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
               <Button asChild size="lg" className="font-mono text-xs uppercase tracking-[0.14em]">
-                <a href="mailto:hello@infraua.org">Написати команді</a>
+                <Link to="/">Відкрити консоль</Link>
               </Button>
               <Button
                 asChild

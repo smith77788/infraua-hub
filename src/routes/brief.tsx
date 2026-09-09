@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 
 import { getAlerts, getEvents, getFacilities, getThreats } from "@/lib/infra.functions";
@@ -52,7 +52,16 @@ function Brief() {
 
   const loading = facilitiesQuery.isLoading || eventsQuery.isLoading || alertsQuery.isLoading;
 
-  const now = new Date();
+  /*
+   * Час формування зʼявляється після відкриття сторінки, а не під час першого
+   * малювання: сторінка збирається на сервері й довершується в браузері, і
+   * `new Date()` у тілі компонента дає там і там різні значення — розмітка
+   * розходиться, React перемальовує гілку з помилкою в консолі.
+   */
+  const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
+  useEffect(() => {
+    setGeneratedAt(new Date());
+  }, []);
   const top = analysis.ranked.slice(0, 20);
   const recent = [...events].sort((a, b) => b.time.localeCompare(a.time)).slice(0, 15);
 
@@ -87,7 +96,7 @@ function Brief() {
         </p>
         <h1 className="mt-1 text-2xl font-bold">Критична інфраструктура України</h1>
         <p className="mt-1 font-mono text-xs text-muted-foreground">
-          Сформовано {now.toLocaleString("uk-UA")}
+          Сформовано {generatedAt ? generatedAt.toLocaleString("uk-UA") : "…"}
           {loading ? " · завантаження…" : ""}
         </p>
       </header>

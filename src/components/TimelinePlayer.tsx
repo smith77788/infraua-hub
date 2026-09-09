@@ -11,10 +11,22 @@ interface Props {
   onCursor: (cursorMs: number | null) => void;
 }
 
-/** Плеєр часу: прокручує курсор по 30-денному вікну та анімує розвиток подій. */
+/**
+ * Плеєр часу: прокручує курсор по 30-денному вікну та анімує розвиток подій.
+ *
+ * «Зараз» береться після відкриття сторінки, а не під час першого малювання.
+ * Сторінка збирається на сервері й довершується в браузері; `Date.now()` у
+ * тілі компонента дає там і там різні значення, розмітка розходиться, і React
+ * перемальовує гілку з помилкою в консолі. Такий збій легко не помітити —
+ * виглядає все правильно, — тому час свідомо зʼявляється лише в браузері, а до
+ * того плеєр показує себе неактивним.
+ */
 export default function TimelinePlayer({ onCursor }: Props) {
-  const now = useRef(Date.now());
-  const min = now.current - SPAN_MS;
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  useEffect(() => {
+    setNowMs(Date.now());
+  }, []);
+  const min = (nowMs ?? 0) - SPAN_MS;
   const [cursor, setCursor] = useState<number | null>(null); // null = live
   const [playing, setPlaying] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -28,7 +40,7 @@ export default function TimelinePlayer({ onCursor }: Props) {
     timer.current = setInterval(() => {
       setCursor((c) => {
         const next = (c ?? min) + STEP_MS;
-        if (next >= now.current) {
+        if (nowMs === null || next >= nowMs) {
           setPlaying(false);
           return null; // повертаємось у живий режим
         }
@@ -38,10 +50,10 @@ export default function TimelinePlayer({ onCursor }: Props) {
     return () => {
       if (timer.current) clearInterval(timer.current);
     };
-  }, [playing, min]);
+  }, [playing, min, nowMs]);
 
   const live = cursor === null;
-  const value = cursor ?? now.current;
+  const value = cursor ?? nowMs ?? 0;
   const label = live
     ? "Живий режим"
     : new Date(cursor).toLocaleString("uk-UA", {
@@ -82,15 +94,17 @@ export default function TimelinePlayer({ onCursor }: Props) {
       <input
         type="range"
         min={min}
-        max={now.current}
+        max={nowMs ?? 0}
         step={STEP_MS}
         value={value}
+        // До того, як зʼявиться час, тягнути нема за що: діапазон порожній.
+        disabled={nowMs === null}
         onChange={(e) => {
           const v = Number(e.target.value);
           setPlaying(false);
-          setCursor(v >= now.current ? null : v);
+          setCursor(nowMs !== null && v >= nowMs ? null : v);
         }}
-        className="h-1 flex-1 cursor-pointer accent-primary"
+        className="h-1 flex-1 cursor-pointer accent-primary disabled:cursor-default disabled:opacity-40"
       />
 
       <span className="w-32 shrink-0 text-right font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">

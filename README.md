@@ -42,3 +42,22 @@ PALANTER_API_KEY=<ключ із PLATFORM_API_KEYS>
 стан, а не помилка.
 
 На боці Palanter потрібно дозволити походження консолі в `CORS_ORIGINS`.
+
+## Перевірка
+
+```
+bun install
+npm run typecheck   # tsc --noEmit
+npm run lint        # eslint + prettier
+npm test            # bun test src/
+npm run build
+```
+
+Тести написані під вбудований рушій Bun (`import { describe, expect, it } from "bun:test"`),
+бо цим самим Bun проєкт і збирається. `vitest` у залежностях немає — запуск його
+ззовні впаде на всіх файлах, і це не поламані тести, а не той рушій. Спосіб
+запуску один: `npm test`.
+
+Тими самими чотирма командами і в тому самому порядку йде CI
+(`.github/workflows/ci.yml`), тож локальний прогін означає те саме, що й
+перевірка на сервері.
