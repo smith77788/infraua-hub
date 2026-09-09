@@ -490,7 +490,12 @@ function ringToLatLon(ring: number[][]): [number, number][] {
   const out: [number, number][] = [];
   for (let i = 0; i < ring.length; i += step) {
     const p = ring[i];
-    if (Array.isArray(p) && p.length >= 2) out.push([p[1], p[0]]);
+    if (!p) continue;
+    // Destructure rather than index: `p.length >= 2` does not narrow the
+    // element type, so p[0]/p[1] stay `number | undefined` to the compiler —
+    // and a malformed ring really can carry a hole here.
+    const [lon, lat] = p;
+    if (typeof lon === "number" && typeof lat === "number") out.push([lat, lon]);
   }
   return out;
 }

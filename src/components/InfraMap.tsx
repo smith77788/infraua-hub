@@ -90,7 +90,11 @@ const BASEMAPS = [
 function ResilientTileLayer() {
   const [idx, setIdx] = useState(0);
   const errors = useRef(0);
-  const bm = BASEMAPS[Math.min(idx, BASEMAPS.length - 1)];
+  // BASEMAPS is a non-empty `as const` tuple, but the index is computed, so
+  // TypeScript cannot prove the lookup lands inside it. Destructuring the first
+  // element gives a genuinely non-optional fallback without an assertion.
+  const [firstBasemap] = BASEMAPS;
+  const bm = BASEMAPS[Math.min(idx, BASEMAPS.length - 1)] ?? firstBasemap;
   return (
     <TileLayer
       key={idx}

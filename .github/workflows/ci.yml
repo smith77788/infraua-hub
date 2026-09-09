@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # The build does not typecheck — Vite strips types without checking them.
+      # Every type error this repo has carried so far reached main precisely
+      # because a green build was taken as proof, so this step runs first.
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Lint and format
+        run: bun run lint
+
+      - name: Build
+        run: bun run build
