@@ -66,13 +66,56 @@ const ICON_PATHS: Record<CategoryId, string> = {
   industry: '<path d="M3 22V10l6 4V10l6 4V6l6 4v12z"/>',
 };
 
-const threatIcon = L.divIcon({
-  html: '<span class="threat-mark"></span>',
-  className: "threat-pin",
-  iconSize: [12, 12],
-  iconAnchor: [6, 6],
-  popupAnchor: [0, -6],
-});
+/*
+ * Позначка повітряної цілі. Джерело (detoyshahed) віддає лише пункт і час, без
+ * типу цілі й курсу, тож гліф один — розпізнаваний силует загрози з повітря,
+ * навмисно НЕ схожий на кружечки обʼєктів чи подій. Колір бурштиновий, щоб не
+ * зливатися з червоним (обʼєкти під загрозою / зони тривог).
+ *
+ * Свіжість несе основну інформацію цього джерела: свіжий сигнал світиться й
+ * пульсує, давніший — тьмяніє. Так на карті видно живу хвилю, а не 2-годинний
+ * осад міток.
+ */
+type Freshness = "fresh" | "recent" | "stale";
+function freshnessOf(iso: string | undefined): Freshness {
+  if (!iso) return "stale";
+  const min = (Date.now() - new Date(iso).getTime()) / 60000;
+  if (min <= 10) return "fresh";
+  if (min <= 30) return "recent";
+  return "stale";
+}
+
+const AIR_TONE: Record<Freshness, { color: string; opacity: number; size: number }> = {
+  fresh: { color: "#ffb020", opacity: 1, size: 26 },
+  recent: { color: "#ff9900", opacity: 0.92, size: 22 },
+  stale: { color: "#a86a2a", opacity: 0.55, size: 18 },
+};
+
+const threatIconCache = new Map<string, L.DivIcon>();
+function threatIcon(fresh: Freshness, reports: number): L.DivIcon {
+  const badge = reports > 1 ? Math.min(reports, 99) : 0;
+  const key = `${fresh}|${badge}`;
+  const cached = threatIconCache.get(key);
+  if (cached) return cached;
+  const { color, opacity, size } = AIR_TONE[fresh];
+  const g = Math.round(size * 0.72);
+  const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
+  const badgeHtml =
+    badge > 0
+      ? `<b style="position:absolute;top:-5px;right:-5px;min-width:13px;height:13px;padding:0 2px;border-radius:7px;background:${color};color:#0a0e14;font:700 9px 'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0a0e14">${badge}</b>`
+      : "";
+  const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.2" stroke-linejoin="round"><path d="M12 3l7 15-7-3.4L5 18z"/></svg>${badgeHtml}</div>`;
+  const icon = L.divIcon({
+    html,
+    className: "threat-pin",
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+  });
+  threatIconCache.set(key, icon);
+  return icon;
+}
 
 function BaseLayers() {
   return (
@@ -410,24 +453,37 @@ export default function InfraMap({
       />
 
       {/* Повітряні цілі (OSINT) */}
-      {threats.map((t) => (
-        <Marker key={t.id} position={[t.lat, t.lon]} icon={threatIcon}>
-          <Popup>
-            <div className="space-y-1 font-sans text-xs">
-              <p className="font-semibold text-red-600">
-                Повітряна ціль{t.reports && t.reports > 1 ? ` · ${t.reports} повідомлень` : ""}
-              </p>
-              <p className="opacity-80">{t.name}</p>
-              <p className="opacity-70">
-                Джерело: {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
-              </p>
-              {t.since ? (
-                <p className="opacity-70">{new Date(t.since).toLocaleString("uk-UA")}</p>
-              ) : null}
-            </div>
-          </Popup>
-        </Marker>
-      ))}
+      {threats.map((t) => {
+        const seen = t.lastSeen ?? t.since;
+        const fresh = freshnessOf(seen);
+        return (
+          <Marker
+            key={t.id}
+            position={[t.lat, t.lon]}
+            icon={threatIcon(fresh, t.reports ?? 1)}
+            zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
+          >
+            <Popup>
+              <div className="space-y-1 font-sans text-xs">
+                <p className="font-semibold" style={{ color: AIR_TONE[fresh].color }}>
+                  Повітряна ціль
+                  {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
+                </p>
+                <p className="opacity-80">{t.name}</p>
+                <p className="opacity-70">
+                  {t.reports && t.reports > 1 ? `${t.reports} повідомлень з каналів: ` : "Канал: "}
+                  {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
+                </p>
+                {seen ? (
+                  <p className="opacity-70">
+                    Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
+                  </p>
+                ) : null}
+              </div>
+            </Popup>
+          </Marker>
+        );
+      })}
 
       <FlyTo facility={selected} />
     </MapContainer>

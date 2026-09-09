@@ -476,6 +476,7 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
         id: string;
         location_name?: string;
         display_name?: string;
+        osm_id?: number;
         coordinates?: { lat: number; lng: number };
         channel_name?: string;
         count?: number;
@@ -499,6 +500,7 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
         count: it.count ?? 1,
         since: it.created_at ?? "",
         expires: it.expires_at ?? "",
+        ...(it.osm_id != null ? { osmId: it.osm_id } : {}),
       });
     }
     return {
