@@ -61,6 +61,17 @@ export default function TimelinePlayer({ onCursor }: Props) {
         minute: "2-digit",
       });
 
+  // До монтування показуємо нейтральну заглушку — без часу, тож без розбіжності.
+  if (nowMs === null) {
+    return (
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex h-[43px] items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
+        <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+          Шкала часу…
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-[500] flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
       <button
