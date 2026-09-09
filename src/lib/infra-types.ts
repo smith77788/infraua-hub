@@ -1,3 +1,5 @@
+import type { Provenance } from "./provenance";
+
 export type CategoryId =
   | "power_plant"
   | "substation"
@@ -91,9 +93,27 @@ export interface GraphEdge {
   to: string;
   km: number;
   kind: "supply" | "feed";
+  /**
+   * Звідки взялося це ребро. Обовʼязкове поле: ребро без походження нічим не
+   * відрізняється від вигаданого, а на цьому графі будуються висновки про те,
+   * що вимкнеться при аварії.
+   */
+  provenance: Provenance;
 }
 
-/** Derives a dependency graph: plants -> substations -> consumers (nearest-neighbour). */
+/**
+ * Виводить граф залежностей: станції → підстанції → споживачі, за найближчим
+ * сусідом.
+ *
+ * Це **не топологія мережі**, а припущення. Реальна лінія може йти повз
+ * найближчу підстанцію до дальшої, живлення буває резервованим з двох боків,
+ * а межі балансових зон нам невідомі. Метод дає правдоподібний кістяк там, де
+ * реальних даних немає, — і кожне ребро позначене як виведене, щоб цей кістяк
+ * не сплутали з фактом.
+ *
+ * Спостережені ребра з реальних ЛЕП будує `buildObservedGraph`
+ * (src/lib/power-grid.ts); там, де вони є, їм слід віддавати перевагу.
+ */
 export function buildGraph(facilities: Facility[]): GraphEdge[] {
   const plants = facilities.filter((f) => f.category === "power_plant");
   const subs = facilities.filter((f) => f.category === "substation");
@@ -113,13 +133,50 @@ export function buildGraph(facilities: Facility[]): GraphEdge[] {
     return best ? { node: best, km: bestKm } : null;
   };
 
+  const SUPPLY_RADIUS_KM = 250;
+  const FEED_RADIUS_KM = 120;
+
   for (const s of subs) {
     const n = nearest(s, plants);
-    if (n && n.km < 250) edges.push({ from: n.node.id, to: s.id, km: n.km, kind: "supply" });
+    if (n && n.km < SUPPLY_RADIUS_KM) {
+      edges.push({
+        from: n.node.id,
+        to: s.id,
+        km: n.km,
+        kind: "supply",
+        provenance: {
+          kind: "inferred",
+          method: "найближча електростанція",
+          params: { radiusKm: SUPPLY_RADIUS_KM, distanceKm: Math.round(n.km) },
+          // Слабке припущення: на такій відстані між станцією і підстанцією
+          // зазвичай стоїть ще кілька вузлів, яких ми не бачимо.
+          confidence: 0.35,
+          caveat:
+            "Живлення приписано найближчій станції в радіусі. Реальна лінія може йти від іншої, а підстанція часто живиться з двох боків.",
+        },
+      });
+    }
   }
   for (const c of consumers) {
     const n = nearest(c, subs.length ? subs : plants);
-    if (n && n.km < 120) edges.push({ from: n.node.id, to: c.id, km: n.km, kind: "feed" });
+    if (n && n.km < FEED_RADIUS_KM) {
+      edges.push({
+        from: n.node.id,
+        to: c.id,
+        km: n.km,
+        kind: "feed",
+        provenance: {
+          kind: "inferred",
+          method: "найближча підстанція",
+          params: { radiusKm: FEED_RADIUS_KM, distanceKm: Math.round(n.km) },
+          // Ще слабше: споживач майже завжди живиться через розподільчу
+          // мережу нижчої напруги, якої в наборі немає взагалі.
+          confidence: 0.25,
+          caveat:
+            "Споживача приписано найближчій підстанції. Розподільчої мережі нижчої напруги в даних немає, тож справжній шлях живлення майже напевно інший.",
+        },
+      });
+    }
   }
   return edges;
 }
