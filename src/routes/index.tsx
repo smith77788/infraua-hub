@@ -52,6 +52,7 @@ import {
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
 import {
+  buildThreatGraph,
   correlateAirThreats,
   summarizeAirThreat,
   type ThreatSeverity,
@@ -76,6 +77,7 @@ import {
 
 const InfraMap = lazy(() => import("@/components/InfraMap"));
 const AnalyticsView = lazy(() => import("@/components/AnalyticsView"));
+const ThreatGraph = lazy(() => import("@/components/ThreatGraph"));
 
 const TIME_WINDOWS = [
   { id: "24h", label: "24 год", hours: 24 },
@@ -275,6 +277,7 @@ function Console() {
   const [active, setActive] = useState<Set<CategoryId>>(new Set(ALL_CATEGORIES));
   const [query, setQuery] = useState("");
   const [showLinks, setShowLinks] = useState(true);
+  const [showGraph, setShowGraph] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
@@ -384,6 +387,7 @@ function Console() {
     [allFacilities, threats, alarmIds],
   );
   const airThreatSummary = useMemo(() => summarizeAirThreat(airThreat), [airThreat]);
+  const threatGraph = useMemo(() => buildThreatGraph(airThreat, threats), [airThreat, threats]);
 
   const atRiskList = useMemo(
     () =>
@@ -801,6 +805,21 @@ function Console() {
               <Waypoints className="size-3.5" /> Звʼязки живлення
             </button>
 
+            <button
+              onClick={() => setShowGraph((v) => !v)}
+              disabled={threatGraph.nodes.length === 0}
+              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
+                showGraph ? "border-red-500/60 text-red-300" : "border-border text-muted-foreground"
+              }`}
+            >
+              <Share2 className="size-3.5" /> Граф загроз «ціль → обʼєкт»
+              {threatGraph.nodes.length > 0 ? (
+                <span className="ml-auto font-mono text-[10px] opacity-70">
+                  {threatGraph.nodes.length}
+                </span>
+              ) : null}
+            </button>
+
             <div>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                 Вікно подій
@@ -972,6 +991,54 @@ function Console() {
               ) : null}
 
               <TimelinePlayer onCursor={setPlayCursor} />
+
+              {showGraph ? (
+                <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
+                  <div className="flex items-center justify-between border-b border-border px-4 py-2">
+                    <div className="flex items-center gap-3 font-mono text-[11px] uppercase tracking-[0.1em]">
+                      <span className="flex items-center gap-1.5 text-red-300">
+                        <Share2 className="size-3.5" /> Граф звʼязків: загроза → обʼєкт → канал
+                      </span>
+                      <span className="hidden items-center gap-2 text-[9px] text-muted-foreground sm:flex">
+                        <span className="flex items-center gap-1">
+                          <span className="size-2 rounded-full bg-red-500" /> обʼєкт
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="size-2 rounded-full bg-amber-400" /> ціль
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="size-2 rounded-full bg-slate-500" /> канал
+                        </span>
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 font-mono text-[10px] uppercase"
+                      onClick={() => setShowGraph(false)}
+                    >
+                      Закрити
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 p-2">
+                    <Suspense
+                      fallback={
+                        <div className="flex size-full items-center justify-center">
+                          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                        </div>
+                      }
+                    >
+                      <ThreatGraph
+                        graph={threatGraph}
+                        onSelectAsset={(id) => {
+                          setSelectedId(id);
+                          setShowGraph(false);
+                        }}
+                      />
+                    </Suspense>
+                  </div>
+                </div>
+              ) : null}
             </main>
 
             {/*
