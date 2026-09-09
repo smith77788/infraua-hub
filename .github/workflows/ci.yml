@@ -31,5 +31,36 @@ jobs:
       - name: Lint and format
         run: bun run lint
 
+      - name: Test
+        run: bun run test
+
       - name: Build
         run: bun run build
+
+  # The air-radar backend is Python with its own tests, and nothing was running
+  # them. Kept as a separate job so a failure there is attributable and does not
+  # mask a frontend failure.
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: air-radar
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: air-radar/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # Seven of the ten tests need the geocoding database and fail without it.
+      # It is built from a GeoNames dump rather than committed (162k records),
+      # so CI builds it the same way a developer does.
+      - name: Build the geocoding database
+        run: python -m backend.build_geodb
+
+      - name: Test
+        run: python -m pytest backend/tests -q
