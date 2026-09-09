@@ -627,9 +627,12 @@ function Console() {
             asChild
             size="sm"
             variant="ghost"
-            className="hidden font-mono text-[10px] uppercase tracking-[0.12em] sm:inline-flex"
+            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
           >
-            <Link to="/about">Про платформу</Link>
+            <Link to="/about" title="Про платформу" aria-label="Про платформу">
+              <Info className="size-3" />
+              <span className="hidden sm:inline">Про платформу</span>
+            </Link>
           </Button>
         </div>
       </header>
