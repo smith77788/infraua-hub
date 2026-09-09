@@ -73,3 +73,19 @@ def test_to_dict_shape():
     d = tr.to_dict()
     for k in ("id", "type", "label", "color", "lat", "lon", "speed_kmh", "confidence", "obs_count"):
         assert k in d
+
+
+def test_corroboration_by_independent_sources():
+    t0 = time.time()
+    # два підтвердження з РІЗНИХ каналів
+    tm1 = TrackManager()
+    tm1.observe(obs("a", 49.0, 31.0, t0, channel="chan_A"))
+    multi = tm1.observe(obs("b", 49.05, 31.0, t0 + 120, channel="chan_B"))
+    # два підтвердження з ОДНОГО каналу
+    tm2 = TrackManager()
+    tm2.observe(obs("a", 49.0, 31.0, t0, channel="chan_A"))
+    single = tm2.observe(obs("b", 49.05, 31.0, t0 + 120, channel="chan_A"))
+    assert multi.to_dict()["source_count"] == 2
+    assert single.to_dict()["source_count"] == 1
+    # незалежне підтвердження дає вищу впевненість
+    assert multi.confidence > single.confidence

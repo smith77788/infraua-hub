@@ -104,6 +104,8 @@ class Track:
             "channel": self.channel,
             "raw": self.raw,
             "obs_count": self.obs_count,
+            "sources": sorted(self.sources),
+            "source_count": len(self.sources),
             "ts": self.last_obs_ts,
             "expires": self.last_obs_ts + TTL_BY_TYPE.get(self.type, 1500),
             "extrapolated": abs(self.ex_lat - self.lat) > 1e-6 or abs(self.ex_lon - self.lon) > 1e-6,
@@ -187,7 +189,10 @@ class TrackManager:
             t.heading = round(azimuth_deg((prev[0], prev[1]), (o.lat, o.lon)), 1)
         elif o.heading is not None:
             t.heading = o.heading
-        t.confidence = min(0.99, max(t.confidence, o.confidence) + 0.03 * (t.obs_count - 1))
+        # Корроборація: підтвердження НЕЗАЛЕЖНИМИ каналами важить більше, ніж
+        # повтори з того самого джерела. Незалежні джерела складніше підробити.
+        corroboration = 0.1 * (len(t.sources) - 1) + 0.02 * (t.obs_count - 1)
+        t.confidence = min(0.99, max(t.confidence, o.confidence) + corroboration)
 
     def step(self, now: float | None = None) -> tuple[list[Track], list[str]]:
         """Екстраполює позиції; повертає (змінені треки, прострочені id)."""

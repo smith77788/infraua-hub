@@ -85,6 +85,13 @@ async def api_threatened():
     return JSONResponse({"threatened": broadcaster.threatened})
 
 
+@app.get("/api/metrics")
+async def api_metrics():
+    from . import metrics
+
+    return JSONResponse(metrics.compute(broadcaster))
+
+
 @app.get("/api/health")
 async def api_health():
     return {

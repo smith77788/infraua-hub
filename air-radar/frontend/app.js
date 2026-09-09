@@ -105,7 +105,7 @@ function popupHtml(o) {
     <div style="font-family:var(--mono);font-size:10px;opacity:.7;margin-top:3px">
       ${o.heading != null ? "Азимут " + Math.round(o.heading) + "° (" + compass(o.heading) + ") · " : ""}${o.speed_kmh} км/год${eta != null ? " · ETA ~" + eta + " хв" : ""}
     </div>
-    <div style="font-family:var(--mono);font-size:9px;opacity:.6;margin-top:3px">Джерело: ${o.channel || o.source} · впевненість ${(o.confidence * 100) | 0}%</div>
+    <div style="font-family:var(--mono);font-size:9px;opacity:.6;margin-top:3px">Джерело: ${o.channel || o.source}${o.source_count > 1 ? " · підтверджено " + o.source_count + " каналами" : ""} · впевненість ${(o.confidence * 100) | 0}%</div>
   </div>`;
 }
 
@@ -117,7 +117,7 @@ function rowHtml(o) {
     </div>
     <div class="main">
       <div class="name">${o.label}${o.count > 1 ? " ×" + o.count : ""}${o.destination ? " → " + o.destination : ""}</div>
-      <div class="sub">${o.channel || o.source} · ${compass(o.heading)}${o.heading != null ? " " + Math.round(o.heading) + "°" : ""}</div>
+      <div class="sub">${o.channel || o.source} · ${compass(o.heading)}${o.heading != null ? " " + Math.round(o.heading) + "°" : ""}${o.source_count > 1 ? ` · ✔${o.source_count} джерел` : ""}</div>
       <div class="conf-bar"><i style="width:${(o.confidence * 100) | 0}%;background:${o.color}"></i></div>
     </div>
     <div class="metrics"><span class="spd">${o.speed_kmh}</span> км/год${eta != null ? "<br>ETA " + eta + "'" : ""}</div>`;
