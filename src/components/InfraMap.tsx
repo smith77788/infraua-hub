@@ -188,6 +188,18 @@ function clusterIcon(count: number): L.DivIcon {
   });
 }
 
+/** Бурштинова купка повітряних цілей на огляді країни (за масштабом). */
+function threatClusterIcon(count: number): L.DivIcon {
+  const size = count > 50 ? 42 : count > 20 ? 36 : count > 8 ? 32 : 26;
+  const html = `<div style="width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(20,12,4,.85);border:1.5px solid rgba(255,160,32,.85);color:#ffb020;font:700 ${size > 34 ? 12 : 11}px 'JetBrains Mono',monospace;box-shadow:0 0 12px rgba(255,153,0,.35)">${count}</div>`;
+  return L.divIcon({
+    html,
+    className: "infra-cluster",
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
 function FacilityPopup({ f }: { f: Facility }) {
   const meta = CATEGORIES[f.category];
   return (
@@ -211,7 +223,7 @@ interface Cluster {
   count: number;
 }
 
-function gridClusters(facilities: Facility[], zoom: number): Cluster[] {
+function gridClusters(facilities: { lat: number; lon: number }[], zoom: number): Cluster[] {
   const step = zoom <= 5 ? 1.3 : zoom === 6 ? 0.8 : 0.45;
   const cells = new Map<string, { lat: number; lon: number; count: number }>();
   for (const f of facilities) {
@@ -303,6 +315,81 @@ function FacilityLayer({
           <FacilityPopup f={f} />
         </Marker>
       ))}
+    </>
+  );
+}
+
+/*
+ * Шар повітряних цілей. На огляді країни згортає позначки в бурштинові купки за
+ * масштабом (щоб не було сотні стрілок), при наближенні — окремі силуети цілей
+ * зі свіжістю. Джерело не дає типу цілі й курсу, тож гліф один; свіжість несе
+ * основну інформацію.
+ */
+function ThreatLayer({ threats }: { threats: Threat[] }) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(map.getZoom());
+  const [bounds, setBounds] = useState<L.LatLngBounds>(map.getBounds());
+  useMapEvents({
+    zoomend: () => {
+      setZoom(map.getZoom());
+      setBounds(map.getBounds());
+    },
+    moveend: () => setBounds(map.getBounds()),
+  });
+
+  if (zoom < 7) {
+    const clusters = gridClusters(threats, zoom);
+    return (
+      <>
+        {clusters.map((c, i) => (
+          <Marker
+            key={`tc-${i}`}
+            position={[c.lat, c.lon]}
+            icon={threatClusterIcon(c.count)}
+            zIndexOffset={800}
+            eventHandlers={{
+              click: () => map.flyTo([c.lat, c.lon], Math.min(zoom + 3, 10), { duration: 0.6 }),
+            }}
+          />
+        ))}
+      </>
+    );
+  }
+
+  const inView = threats.filter((t) => bounds.contains([t.lat, t.lon]));
+  return (
+    <>
+      {inView.map((t) => {
+        const seen = t.lastSeen ?? t.since;
+        const fresh = freshnessOf(seen);
+        return (
+          <Marker
+            key={t.id}
+            position={[t.lat, t.lon]}
+            icon={threatIcon(fresh, t.reports ?? 1)}
+            zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
+          >
+            <Popup>
+              <div className="space-y-1 font-sans text-xs">
+                <p className="font-semibold" style={{ color: AIR_TONE[fresh].color }}>
+                  Повітряна ціль
+                  {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
+                </p>
+                <p className="opacity-80">{t.name}</p>
+                <p className="opacity-70">
+                  {t.reports && t.reports > 1 ? `${t.reports} повідомлень з каналів: ` : "Канал: "}
+                  {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
+                </p>
+                {seen ? (
+                  <p className="opacity-70">
+                    Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
+                  </p>
+                ) : null}
+              </div>
+            </Popup>
+          </Marker>
+        );
+      })}
     </>
   );
 }
@@ -452,38 +539,8 @@ export default function InfraMap({
         onSelect={onSelect}
       />
 
-      {/* Повітряні цілі (OSINT) */}
-      {threats.map((t) => {
-        const seen = t.lastSeen ?? t.since;
-        const fresh = freshnessOf(seen);
-        return (
-          <Marker
-            key={t.id}
-            position={[t.lat, t.lon]}
-            icon={threatIcon(fresh, t.reports ?? 1)}
-            zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
-          >
-            <Popup>
-              <div className="space-y-1 font-sans text-xs">
-                <p className="font-semibold" style={{ color: AIR_TONE[fresh].color }}>
-                  Повітряна ціль
-                  {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
-                </p>
-                <p className="opacity-80">{t.name}</p>
-                <p className="opacity-70">
-                  {t.reports && t.reports > 1 ? `${t.reports} повідомлень з каналів: ` : "Канал: "}
-                  {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
-                </p>
-                {seen ? (
-                  <p className="opacity-70">
-                    Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
-                  </p>
-                ) : null}
-              </div>
-            </Popup>
-          </Marker>
-        );
-      })}
+      {/* Повітряні цілі (OSINT) — з кластеризацією за масштабом */}
+      <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />
     </MapContainer>
