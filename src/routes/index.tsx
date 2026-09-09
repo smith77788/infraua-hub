@@ -1,9 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { buildObservedGraph, mergeGraphs } from "@/lib/power-grid";
+import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
 import {
   Activity,
@@ -87,19 +87,45 @@ function Console() {
     queryFn: () => facilitiesFn(),
     staleTime: 30 * 60 * 1000,
   });
-  // Кожен виклик догружає кілька тайлів сітки, тож покриття (а з ним і доля
-  // фактів у графі) зростає, поки користувач працює. Повторний запит раз на
-  // хвилину, доки не покрито всю країну — мережа передачі змінюється роками,
-  // поспішати нікуди.
+  /*
+   * Покриття накопичується тут, а не на сервері.
+   *
+   * Збірка йде під Cloudflare Workers, де модульний стан живе в межах ізоляту:
+   * сервер не може нічого накопичувати між запитами, бо наступний запит може
+   * потрапити в інший ізолят. Тому клієнт тримає завантажені тайли сам,
+   * повідомляє серверові, що вже має, і отримує у відповідь тільки нові — це
+   * заразом прибирає пересилання всієї країни при кожному опитуванні.
+   */
+  const [powerTiles, setPowerTiles] = useState<Map<string, PowerLine[]>>(() => new Map());
+  const powerTilesRef = useRef(powerTiles);
+  powerTilesRef.current = powerTiles;
+
   const powerLinesQuery = useQuery({
     queryKey: ["power-lines"],
-    queryFn: () => powerLinesFn(),
-    staleTime: 6 * 60 * 60 * 1000,
+    queryFn: () => powerLinesFn({ data: { have: [...powerTilesRef.current.keys()] } }),
+    staleTime: 60 * 1000,
+    // Мережа передачі змінюється роками, поспішати нікуди: раз на хвилину,
+    // доки не покрито всю країну.
     refetchInterval: (q) => {
       const data = q.state.data;
-      return data && data.tilesLoaded < data.tilesTotal ? 60_000 : false;
+      return data && powerTilesRef.current.size < data.tilesTotal ? 60_000 : false;
     },
   });
+
+  const newTiles = powerLinesQuery.data?.tiles;
+  useEffect(() => {
+    if (!newTiles?.length) return;
+    setPowerTiles((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const tile of newTiles) {
+        if (next.has(tile.key)) continue;
+        next.set(tile.key, tile.lines);
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [newTiles]);
 
   const eventsQuery = useQuery({
     queryKey: ["events"],
@@ -171,13 +197,11 @@ function Console() {
   }, [allEvents, windowId, windowHours, playCursor]);
   // Граф — це спостережені ребра з реальних ЛЕП плюс виведений кістяк там, де
   // фактів ще немає. Вузол, у якого вже є справжня лінія, здогадок не отримує.
-  const powerLines = powerLinesQuery.data?.lines;
+  const powerLines = useMemo(() => [...powerTiles.values()].flat(), [powerTiles]);
+  const retrievedAt = powerLinesQuery.data?.retrievedAt;
   const observedGraph = useMemo(
-    () =>
-      powerLines?.length
-        ? buildObservedGraph(allFacilities, powerLines, powerLinesQuery.data?.retrievedAt)
-        : null,
-    [allFacilities, powerLines, powerLinesQuery.data?.retrievedAt],
+    () => (powerLines.length ? buildObservedGraph(allFacilities, powerLines, retrievedAt) : null),
+    [allFacilities, powerLines, retrievedAt],
   );
   const edges = useMemo(() => {
     const inferred = buildGraph(allFacilities);
@@ -596,12 +620,11 @@ function Console() {
                     ) : (
                       <>Усі звʼязки виведені за найближчим сусідом — це припущення, не топологія.</>
                     )}
-                    {powerLinesQuery.data &&
-                    powerLinesQuery.data.tilesLoaded < powerLinesQuery.data.tilesTotal ? (
+                    {powerLinesQuery.data && powerTiles.size < powerLinesQuery.data.tilesTotal ? (
                       <>
                         {" "}
-                        Завантажено {powerLinesQuery.data.tilesLoaded} з{" "}
-                        {powerLinesQuery.data.tilesTotal} ділянок — частка фактів ще зросте.
+                        Завантажено {powerTiles.size} з {powerLinesQuery.data.tilesTotal} ділянок —
+                        частка фактів ще зросте.
                       </>
                     ) : null}
                   </p>

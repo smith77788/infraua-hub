@@ -94,6 +94,26 @@ export function parsePowerLines(payload: unknown): PowerLine[] {
   return lines;
 }
 
+/**
+ * Лишає в лінії лише її кінці.
+ *
+ * Ребро будується з першої і останньої точки ламаної — проміжні не читає
+ * ніхто. Заміряно на реальному тайлі (50–52°N, 30–32°E): 470 ліній, у
+ * середньому 35.7 точки на лінію, 823 КБ повного JSON проти 66 КБ самих
+ * кінців — у 12.4 раза менше. На п'ятдесяти тайлах різниця вимірюється
+ * десятками мегабайт трафіку.
+ *
+ * Плата за це названа прямо: намалювати справжню трасу лінії на карті з
+ * такими даними вже не вийде. Коли це знадобиться, геометрію треба буде
+ * віддавати для видимої області, а не для всієї країни.
+ */
+export function toEndpoints(line: PowerLine): PowerLine {
+  const first = line.geometry[0];
+  const last = line.geometry[line.geometry.length - 1];
+  if (!first || !last || line.geometry.length <= 2) return line;
+  return { ...line, geometry: [first, last] };
+}
+
 /** Запит Overpass по лініях у межах bbox. Напруга — від 110 кВ. */
 export function powerLineQuery(bbox: {
   south: number;

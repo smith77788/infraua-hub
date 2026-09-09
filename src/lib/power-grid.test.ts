@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { buildObservedGraph, mergeGraphs, parsePowerLines, powerLineQuery } from "./power-grid";
+import {
+  buildObservedGraph,
+  mergeGraphs,
+  parsePowerLines,
+  powerLineQuery,
+  toEndpoints,
+} from "./power-grid";
 import { buildGraph, type Facility } from "./infra-types";
 import { isObserved, summarize } from "./provenance";
 
@@ -201,3 +207,68 @@ describe("buildGraph (виведений кістяк)", () => {
     }
   });
 });
+
+describe("toEndpoints", () => {
+  function polyline(id: number, points: [number, number][]) {
+    return {
+      type: "way",
+      id,
+      tags: { power: "line", voltage: "330000" },
+      geometry: points.map(([lat, lon]) => ({ lat, lon })),
+    };
+  }
+
+  it("лишає першу й останню точку, викидаючи проміжні", () => {
+    const [line] = parsePowerLines({
+      elements: [
+        polyline(1, [
+          [50, 30],
+          [50.2, 30.1],
+          [50.4, 30.2],
+          [50.6, 30.3],
+        ]),
+      ],
+    });
+    const trimmed = toEndpoints(line!);
+    expect(trimmed.geometry).toEqual([
+      { lat: 50, lon: 30 },
+      { lat: 50.6, lon: 30.3 },
+    ]);
+  });
+
+  it("не змінює ребро, яке з цієї лінії будується", () => {
+    // Головна властивість: обрізання геометрії не має впливати на топологію.
+    const facilities = [SUB_A, SUB_B];
+    const lines = parsePowerLines({
+      elements: [
+        polyline(2, [
+          [50.4, 30.5],
+          [50.44, 30.52],
+          [50.47, 30.49],
+          [50.5, 30.5],
+        ]),
+      ],
+    });
+    const full = buildObservedGraph(facilities, lines, "2026-09-09");
+    const trimmed = buildObservedGraph(facilities, lines.map(toEndpoints), "2026-09-09");
+    expect(trimmed.edges).toEqual(full.edges);
+    expect(trimmed.edges).toHaveLength(1);
+  });
+
+  it("не чіпає лінію, у якої й так дві точки", () => {
+    const [line] = parsePowerLines({ elements: [line2Point()] });
+    expect(toEndpoints(line!)).toBe(line!);
+  });
+});
+
+function line2Point() {
+  return {
+    type: "way",
+    id: 99,
+    tags: { power: "line", voltage: "110000" },
+    geometry: [
+      { lat: 50, lon: 30 },
+      { lat: 51, lon: 30 },
+    ],
+  };
+}

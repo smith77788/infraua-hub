@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { parsePowerLines, powerLineQuery, type PowerLine } from "./power-grid";
+import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 
 import { mercToLatLon, type AlertZone, type Threat } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
@@ -595,14 +595,33 @@ function tileGrid(): TileKey[] {
   return tiles;
 }
 
-/** Накопичені тайли живуть окремо від payload, щоб покриття не скидалося. */
+/**
+ * Кеш тайлів — **найкраще зусилля, а не сховище**.
+ *
+ * Збірка йде під Cloudflare Workers (див. `.output/server/wrangler.json`), а
+ * там модульний стан живе в межах ізоляту: ізолят створюється і зникає коли
+ * завгодно, сусідній запит може потрапити в інший. Тому накопичувати покриття
+ * тут не можна — раніше саме так і було, і в продакшені лічильник «завантажено
+ * N з 50» показував би що завгодно, а ті самі перші тайли перезапитувалися б в
+ * Overpass знову і знову з кожного холодного ізоляту.
+ *
+ * Накопичення переїхало на клієнт: він каже, які тайли вже має, сервер
+ * дозавантажує наступні й віддає лише їх. Цей кеш лишається як економія
+ * запитів до Overpass, коли ізолят таки живий, і від нього більше нічого не
+ * залежить.
+ */
 const powerLineTiles = new Map<string, PowerLine[]>();
 
-export interface PowerLinesPayload {
+export interface PowerLineTile {
+  /** Ключ тайла у сітці, `${south}:${west}`. */
+  key: string;
   lines: PowerLine[];
+}
+
+export interface PowerLinesPayload {
+  /** Лише щойно завантажені тайли — клієнт складає покриття сам. */
+  tiles: PowerLineTile[];
   retrievedAt: string;
-  /** Скільки тайлів сітки вже завантажено. */
-  tilesLoaded: number;
   /** Скільки всього тайлів покриває країну. */
   tilesTotal: number;
   /**
@@ -612,39 +631,54 @@ export interface PowerLinesPayload {
   available: boolean;
 }
 
-export const getPowerLines = createServerFn({ method: "GET" }).handler(async () => {
-  const grid = tileGrid();
-  const pending = grid.filter((t) => !powerLineTiles.has(`${t.south}:${t.west}`));
+export const getPowerLines = createServerFn({ method: "GET" })
+  .validator((input: unknown): { have: string[] } => {
+    const have = (input as { have?: unknown } | undefined)?.have;
+    if (!Array.isArray(have)) return { have: [] };
+    return { have: have.filter((k): k is string => typeof k === "string") };
+  })
+  .handler(async ({ data }) => {
+    const grid = tileGrid();
+    const held = new Set(data.have);
+    const pending = grid.filter((t) => !held.has(`${t.south}:${t.west}`));
+    const fetched: PowerLineTile[] = [];
 
-  if (pending.length > 0) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90_000);
-    try {
-      for (const tile of pending.slice(0, TILES_PER_CALL)) {
-        const query = powerLineQuery({
-          south: tile.south,
-          west: tile.west,
-          north: tile.south + TILE_DEG,
-          east: tile.west + TILE_DEG,
-        });
-        const elements = await overpass(query, controller.signal);
-        // Порожній тайл записується теж: над морем чи за кордоном ліній справді
-        // немає, і без запису ми перезапитували б його вічно.
-        powerLineTiles.set(`${tile.south}:${tile.west}`, parsePowerLines({ elements }));
+    if (pending.length > 0) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 90_000);
+      try {
+        for (const tile of pending.slice(0, TILES_PER_CALL)) {
+          const key = `${tile.south}:${tile.west}`;
+          const cached = powerLineTiles.get(key);
+          if (cached) {
+            fetched.push({ key, lines: cached });
+            continue;
+          }
+          const query = powerLineQuery({
+            south: tile.south,
+            west: tile.west,
+            north: tile.south + TILE_DEG,
+            east: tile.west + TILE_DEG,
+          });
+          const elements = await overpass(query, controller.signal);
+          // Порожній тайл віддається теж: над морем чи за кордоном ліній
+          // справді немає, і без запису клієнт просив би його вічно.
+          // Клієнтові потрібні лише кінці — див. `toEndpoints`.
+          const lines = parsePowerLines({ elements }).map(toEndpoints);
+          powerLineTiles.set(key, lines);
+          fetched.push({ key, lines });
+        }
+      } catch (err) {
+        console.error("power line tile failed", err);
+      } finally {
+        clearTimeout(timer);
       }
-    } catch (err) {
-      console.error("power line tile failed", err);
-    } finally {
-      clearTimeout(timer);
     }
-  }
 
-  const lines = Array.from(powerLineTiles.values()).flat();
-  return {
-    lines,
-    retrievedAt: new Date().toISOString(),
-    tilesLoaded: powerLineTiles.size,
-    tilesTotal: grid.length,
-    available: powerLineTiles.size > 0,
-  } satisfies PowerLinesPayload;
-});
+    return {
+      tiles: fetched,
+      retrievedAt: new Date().toISOString(),
+      tilesTotal: grid.length,
+      available: fetched.length > 0 || held.size > 0,
+    } satisfies PowerLinesPayload;
+  });
