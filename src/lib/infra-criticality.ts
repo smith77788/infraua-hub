@@ -1,5 +1,4 @@
-import type { Facility } from "./infra-types";
-import type { GraphEdge } from "./infra-types";
+import { CATEGORIES, type Facility, type GraphEdge, type Tier } from "./infra-types";
 
 /**
  * Структурна критичність обʼєктів мережі живлення.
@@ -21,23 +20,71 @@ import type { GraphEdge } from "./infra-types";
  * Обидва рахуються на неорієнтованому вигляді графа: для питання «що станеться,
  * якщо вузол зникне» напрям живлення не має значення — важлива сама наявність
  * звʼязку.
+ *
+ * ## Чому тут типізовані масиви, а не Map
+ *
+ * Перша версія цього модуля тримала граф у `Map<string, Set<string>>` і
+ * виділяла чотири Map розміром V на кожне джерело обходу. Заміряно на
+ * синтетичному графі того ж розміру, що й український набір: 500 вузлів —
+ * 0.5 с, 1000 — 1.5 с, 2000 — 6.9 с, 4000 — 26.6 с. Зростання квадратичне,
+ * і вся ця робота — виділення памʼяті, а не сам обхід.
+ *
+ * Тому граф зводиться один раз у CSR (offsets + targets у Int32Array), а
+ * буфери обходу виділяються теж один раз і перевикористовуються між
+ * джерелами. Складність та сама, O(V·E), але без алокацій у гарячому циклі.
  */
 
-export interface Adjacency {
-  neighbors: Map<string, Set<string>>;
+/**
+ * Граф у форматі CSR: `targets[offsets[v] .. offsets[v+1])` — сусіди `v`.
+ * Дублікати ребер прибираються: паралельна лінія між тією самою парою не має
+ * подвоювати кількість найкоротших шляхів.
+ */
+interface Csr {
+  ids: string[];
+  offsets: Int32Array;
+  targets: Int32Array;
 }
 
-function buildAdjacency(facilities: Facility[], edges: GraphEdge[]): Adjacency {
-  const neighbors = new Map<string, Set<string>>();
-  for (const f of facilities) neighbors.set(f.id, new Set());
+function buildCsr(facilities: Facility[], edges: GraphEdge[]): Csr {
+  const ids = facilities.map((f) => f.id);
+  const index = new Map<string, number>();
+  for (let i = 0; i < ids.length; i++) index.set(ids[i]!, i);
 
+  const v = ids.length;
+  const degree = new Int32Array(v);
+  // Пари (from,to) в обидва боки, без дублікатів і петель.
+  const pairs: number[] = [];
+  const seen = new Set<number>();
   for (const e of edges) {
+    const a = index.get(e.from);
+    const b = index.get(e.to);
     // Ребро до вузла поза набором — не звʼязок, який ми можемо показати.
-    if (!neighbors.has(e.from) || !neighbors.has(e.to) || e.from === e.to) continue;
-    neighbors.get(e.from)!.add(e.to);
-    neighbors.get(e.to)!.add(e.from);
+    if (a === undefined || b === undefined || a === b) continue;
+    const lo = a < b ? a : b;
+    const hi = a < b ? b : a;
+    // Ключ пари в одне число: V ≤ 2^21 для будь-якого реального набору.
+    const key = lo * 2097152 + hi;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push(a, b);
+    degree[a] = degree[a]! + 1;
+    degree[b] = degree[b]! + 1;
   }
-  return { neighbors };
+
+  const offsets = new Int32Array(v + 1);
+  for (let i = 0; i < v; i++) offsets[i + 1] = offsets[i]! + degree[i]!;
+  const targets = new Int32Array(offsets[v]!);
+  const cursor = offsets.slice(0, v);
+  for (let i = 0; i < pairs.length; i += 2) {
+    const a = pairs[i]!;
+    const b = pairs[i + 1]!;
+    targets[cursor[a]!] = b;
+    cursor[a] = cursor[a]! + 1;
+    targets[cursor[b]!] = a;
+    cursor[b] = cursor[b]! + 1;
+  }
+
+  return { ids, offsets, targets };
 }
 
 export interface CentralityEntry {
@@ -47,55 +94,181 @@ export interface CentralityEntry {
   raw: number;
 }
 
-/** Посередництво за Брандесом, O(V*E). */
-export function betweenness(facilities: Facility[], edges: GraphEdge[]): CentralityEntry[] {
-  const { neighbors } = buildAdjacency(facilities, edges);
-  const ids = facilities.map((f) => f.id);
-  const score = new Map<string, number>(ids.map((id) => [id, 0]));
+/**
+ * До скількох вузлів рахувати посередництво точно.
+ *
+ * Заміряно на цій реалізації: 1000 вузлів — 32 мс, 2000 — 55 мс, 3000 —
+ * 117 мс, 5000 — 314 мс, 8000 — 815 мс. Поточний набір обмежений 3210
+ * обʼєктами (сума ліміта́ по категоріях у `infra.functions.ts`), тож він увесь
+ * лежить у точній зоні; межа з запасом на випадок, якщо ліміти піднімуть.
+ *
+ * Вище неї береться вибірка опорних вузлів (Brandes–Pich): вартість стає
+ * лінійною, але значення перетворюється на оцінку.
+ */
+export const EXACT_SOURCE_LIMIT = 4000;
 
-  for (const source of ids) {
-    const stack: string[] = [];
-    const predecessors = new Map<string, string[]>(ids.map((id) => [id, []]));
-    const sigma = new Map<string, number>(ids.map((id) => [id, 0]));
-    const distance = new Map<string, number>(ids.map((id) => [id, -1]));
+/**
+ * Скільки опорних вузлів брати, коли точний розрахунок надто дорогий.
+ *
+ * Заміряно проти точного значення на графі з 3000 вузлів: 200 опорних дають
+ * збіг топ-50 42/50, 600 — 47/50, 1200 — 49/50. Рейтинг, за яким ухвалюють
+ * рішення, не повинен губити вузли, тому взято 1200; це все одно дешевше за
+ * точний розрахунок на графі, де вибірка взагалі вмикається.
+ */
+export const PIVOT_COUNT = 1200;
 
-    sigma.set(source, 1);
-    distance.set(source, 0);
+export interface BetweennessOptions {
+  /**
+   * Скільки джерел обходу використати. `undefined` — вирішити за розміром
+   * графа. Значення менше за кількість вузлів дає оцінку, а не точне число.
+   */
+  sources?: number;
+}
 
-    const queue: string[] = [source];
+export interface BetweennessResult {
+  entries: CentralityEntry[];
+  /** Скільки джерел обходу реально пройдено. */
+  sourcesUsed: number;
+  /** `false` означає, що значення — оцінка за вибіркою опорних вузлів. */
+  exact: boolean;
+}
+
+/**
+ * Детермінований вибір опорних вузлів.
+ *
+ * Випадкова вибірка змушувала б рейтинг сіпатися між перерахунками на тих
+ * самих даних, тож генератор із фіксованим зерном: та сама мережа завжди дає
+ * той самий результат. Часткове перемішування Фішера–Йетса, бо рівномірний
+ * крок по індексу корелював би з порядком завантаження обʼєктів (він
+ * згрупований за категорією і географією).
+ */
+function pickPivots(v: number, count: number): Int32Array {
+  const order = new Int32Array(v);
+  for (let i = 0; i < v; i++) order[i] = i;
+
+  let state = 0x9e3779b9;
+  const next = () => {
+    // xorshift32 — достатньо для вибірки і повністю відтворюваний.
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 4294967296;
+  };
+
+  const k = Math.min(count, v);
+  for (let i = 0; i < k; i++) {
+    const j = i + Math.floor(next() * (v - i));
+    const tmp = order[i]!;
+    order[i] = order[j]!;
+    order[j] = tmp;
+  }
+  return order.slice(0, k);
+}
+
+function betweennessCsr(g: Csr, options: BetweennessOptions = {}): BetweennessResult {
+  const v = g.ids.length;
+  if (v === 0) return { entries: [], sourcesUsed: 0, exact: true };
+
+  const requested = options.sources ?? (v > EXACT_SOURCE_LIMIT ? PIVOT_COUNT : v);
+  const sourceCount = Math.max(1, Math.min(v, requested));
+  const exact = sourceCount >= v;
+  const sources = exact ? null : pickPivots(v, sourceCount);
+
+  const score = new Float64Array(v);
+  const sigma = new Float64Array(v);
+  const delta = new Float64Array(v);
+  const dist = new Int32Array(v).fill(-1);
+  const queue = new Int32Array(v);
+  const order = new Int32Array(v);
+  // Списки попередників як звʼязані списки в спільному буфері: більше за
+  // кількість напрямлених ребер їх бути не може.
+  const predHead = new Int32Array(v).fill(-1);
+  const predNode = new Int32Array(g.targets.length);
+  const predNext = new Int32Array(g.targets.length);
+
+  for (let si = 0; si < sourceCount; si++) {
+    const s = sources ? sources[si]! : si;
+    let visited = 0;
+    let predCount = 0;
+
+    dist[s] = 0;
+    sigma[s] = 1;
+    queue[0] = s;
     let head = 0;
-    while (head < queue.length) {
-      const v = queue[head++]!;
-      stack.push(v);
-      for (const w of neighbors.get(v) ?? []) {
-        if (distance.get(w) === -1) {
-          distance.set(w, distance.get(v)! + 1);
-          queue.push(w);
+    let tail = 1;
+
+    while (head < tail) {
+      const node = queue[head++]!;
+      order[visited++] = node;
+      const dNode = dist[node]!;
+      const sNode = sigma[node]!;
+      const end = g.offsets[node + 1]!;
+      for (let i = g.offsets[node]!; i < end; i++) {
+        const w = g.targets[i]!;
+        if (dist[w] === -1) {
+          dist[w] = dNode + 1;
+          queue[tail++] = w;
         }
         // Накопичуємо лише вздовж найкоротших шляхів.
-        if (distance.get(w) === distance.get(v)! + 1) {
-          sigma.set(w, sigma.get(w)! + sigma.get(v)!);
-          predecessors.get(w)!.push(v);
+        if (dist[w] === dNode + 1) {
+          sigma[w] = sigma[w]! + sNode;
+          predNode[predCount] = node;
+          predNext[predCount] = predHead[w]!;
+          predHead[w] = predCount;
+          predCount++;
         }
       }
     }
 
-    const delta = new Map<string, number>(ids.map((id) => [id, 0]));
-    while (stack.length > 0) {
-      const w = stack.pop()!;
-      for (const v of predecessors.get(w)!) {
-        delta.set(v, delta.get(v)! + (sigma.get(v)! / sigma.get(w)!) * (1 + delta.get(w)!));
+    for (let i = visited - 1; i >= 0; i--) {
+      const w = order[i]!;
+      const coeff = (1 + delta[w]!) / sigma[w]!;
+      for (let p = predHead[w]!; p !== -1; p = predNext[p]!) {
+        const node = predNode[p]!;
+        delta[node] = delta[node]! + sigma[node]! * coeff;
       }
-      if (w !== source) score.set(w, score.get(w)! + delta.get(w)!);
+      if (w !== s) score[w] = score[w]! + delta[w]!;
+    }
+
+    // Скидаємо лише те, чого торкнулися: інакше повернулася б квадратична
+    // вартість, від якої ми й пішли.
+    for (let i = 0; i < visited; i++) {
+      const node = order[i]!;
+      dist[node] = -1;
+      sigma[node] = 0;
+      delta[node] = 0;
+      predHead[node] = -1;
     }
   }
 
   // На неорієнтованому графі кожна невпорядкована пара рахується двічі.
-  const raw = ids.map((id) => ({ id, raw: score.get(id)! / 2 }));
+  // За вибіркою значення масштабується до повного графа (Brandes–Pich).
+  const scale = (exact ? 1 : v / sourceCount) / 2;
+  const raw = g.ids.map((id, i) => ({ id, raw: score[i]! * scale }));
   const max = Math.max(0, ...raw.map((r) => r.raw));
-  return raw
+  const entries = raw
     .map((r) => ({ ...r, score: max > 0 ? r.raw / max : 0 }))
     .sort((a, b) => b.raw - a.raw || a.id.localeCompare(b.id));
+
+  return { entries, sourcesUsed: sourceCount, exact };
+}
+
+/** Посередництво за Брандесом. Точне на малих графах, оцінка на великих. */
+export function betweenness(
+  facilities: Facility[],
+  edges: GraphEdge[],
+  options?: BetweennessOptions,
+): CentralityEntry[] {
+  return betweennessCsr(buildCsr(facilities, edges), options).entries;
+}
+
+/** Те саме, але з відповіддю на питання «наскільки цьому числу вірити». */
+export function betweennessDetailed(
+  facilities: Facility[],
+  edges: GraphEdge[],
+  options?: BetweennessOptions,
+): BetweennessResult {
+  return betweennessCsr(buildCsr(facilities, edges), options);
 }
 
 export interface Bridge {
@@ -107,78 +280,86 @@ export interface Bridge {
  * Мости — ребра, видалення яких збільшує кількість компонент звʼязності.
  * Ітеративний DFS: рекурсивний переповнив би стек на мережі звичайного розміру.
  */
-export function bridges(facilities: Facility[], edges: GraphEdge[]): Bridge[] {
-  const { neighbors } = buildAdjacency(facilities, edges);
-  const discovery = new Map<string, number>();
-  const low = new Map<string, number>();
-  const parent = new Map<string, string | null>();
+function bridgesCsr(g: Csr): Bridge[] {
+  const v = g.ids.length;
+  const disc = new Int32Array(v).fill(-1);
+  const low = new Int32Array(v);
+  const parent = new Int32Array(v).fill(-1);
+  const stackNode = new Int32Array(v);
+  const stackIter = new Int32Array(v);
   const found: Bridge[] = [];
   let timer = 0;
 
-  for (const start of facilities.map((f) => f.id)) {
-    if (discovery.has(start)) continue;
-    parent.set(start, null);
-    discovery.set(start, timer);
-    low.set(start, timer);
+  for (let start = 0; start < v; start++) {
+    if (disc[start] !== -1) continue;
+    disc[start] = timer;
+    low[start] = timer;
     timer++;
 
-    const stack: { node: string; iterator: Iterator<string> }[] = [
-      { node: start, iterator: (neighbors.get(start) ?? new Set<string>()).values() },
-    ];
+    let sp = 0;
+    stackNode[0] = start;
+    stackIter[0] = g.offsets[start]!;
 
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1]!;
-      const next = frame.iterator.next();
-
-      if (next.done) {
-        stack.pop();
-        const p = parent.get(frame.node);
-        if (p != null) {
-          low.set(p, Math.min(low.get(p)!, low.get(frame.node)!));
-          if (low.get(frame.node)! > discovery.get(p)!) {
-            found.push({ from: p, to: frame.node });
-          }
+    while (sp >= 0) {
+      const node = stackNode[sp]!;
+      if (stackIter[sp]! < g.offsets[node + 1]!) {
+        const w = g.targets[stackIter[sp]!]!;
+        stackIter[sp] = stackIter[sp]! + 1;
+        if (w === parent[node]) continue;
+        if (disc[w] === -1) {
+          parent[w] = node;
+          disc[w] = timer;
+          low[w] = timer;
+          timer++;
+          sp++;
+          stackNode[sp] = w;
+          stackIter[sp] = g.offsets[w]!;
+        } else if (disc[w]! < low[node]!) {
+          low[node] = disc[w]!;
         }
         continue;
       }
 
-      const child = next.value;
-      if (child === parent.get(frame.node)) continue;
-      if (discovery.has(child)) {
-        low.set(frame.node, Math.min(low.get(frame.node)!, discovery.get(child)!));
-        continue;
-      }
-
-      parent.set(child, frame.node);
-      discovery.set(child, timer);
-      low.set(child, timer);
-      timer++;
-      stack.push({ node: child, iterator: (neighbors.get(child) ?? new Set<string>()).values() });
+      sp--;
+      if (sp < 0) continue;
+      const p = stackNode[sp]!;
+      if (low[node]! < low[p]!) low[p] = low[node]!;
+      // Жодного зворотного ребра з піддерева вище за `p` — значить, ребро
+      // (p, node) єдине тримає це піддерево.
+      if (low[node]! > disc[p]!) found.push({ from: g.ids[p]!, to: g.ids[node]! });
     }
   }
 
   return found;
 }
 
+export function bridges(facilities: Facility[], edges: GraphEdge[]): Bridge[] {
+  return bridgesCsr(buildCsr(facilities, edges));
+}
+
 /** Компоненти звʼязності, найбільша перша. */
-export function components(facilities: Facility[], edges: GraphEdge[]): string[][] {
-  const { neighbors } = buildAdjacency(facilities, edges);
-  const seen = new Set<string>();
+function componentsCsr(g: Csr): string[][] {
+  const v = g.ids.length;
+  const seen = new Uint8Array(v);
+  const queue = new Int32Array(v);
   const found: string[][] = [];
 
-  for (const f of facilities) {
-    if (seen.has(f.id)) continue;
-    const members: string[] = [];
-    const queue = [f.id];
-    seen.add(f.id);
+  for (let start = 0; start < v; start++) {
+    if (seen[start]) continue;
+    seen[start] = 1;
+    queue[0] = start;
     let head = 0;
-    while (head < queue.length) {
-      const current = queue[head++]!;
-      members.push(current);
-      for (const next of neighbors.get(current) ?? []) {
-        if (!seen.has(next)) {
-          seen.add(next);
-          queue.push(next);
+    let tail = 1;
+    const members: string[] = [];
+    while (head < tail) {
+      const node = queue[head++]!;
+      members.push(g.ids[node]!);
+      const end = g.offsets[node + 1]!;
+      for (let i = g.offsets[node]!; i < end; i++) {
+        const w = g.targets[i]!;
+        if (!seen[w]) {
+          seen[w] = 1;
+          queue[tail++] = w;
         }
       }
     }
@@ -186,6 +367,10 @@ export function components(facilities: Facility[], edges: GraphEdge[]): string[]
   }
 
   return found.sort((a, b) => b.length - a.length);
+}
+
+export function components(facilities: Facility[], edges: GraphEdge[]): string[][] {
+  return componentsCsr(buildCsr(facilities, edges));
 }
 
 export interface CriticalitySignal {
@@ -201,6 +386,20 @@ export interface CriticalitySignal {
 
 export type CriticalityBand = "low" | "elevated" | "high" | "severe";
 
+export const BAND_LABEL: Record<CriticalityBand, string> = {
+  severe: "Критичний",
+  high: "Високий",
+  elevated: "Підвищений",
+  low: "Базовий",
+};
+
+/** Порогові значення смуг — задокументовані, а не приховані в коді вигляду. */
+export const BAND_THRESHOLD: Record<Exclude<CriticalityBand, "low">, number> = {
+  severe: 70,
+  high: 45,
+  elevated: 20,
+};
+
 export interface CriticalityAssessment {
   id: string;
   score: number;
@@ -209,11 +408,54 @@ export interface CriticalityAssessment {
 }
 
 function bandFor(score: number): CriticalityBand {
-  if (score >= 70) return "severe";
-  if (score >= 45) return "high";
-  if (score >= 20) return "elevated";
+  if (score >= BAND_THRESHOLD.severe) return "severe";
+  if (score >= BAND_THRESHOLD.high) return "high";
+  if (score >= BAND_THRESHOLD.elevated) return "elevated";
   return "low";
 }
+
+/**
+ * Вага сектора.
+ *
+ * До цього вона жила в `analyzeNetwork` як `TIER_WEIGHT[tier] * 38` — число,
+ * що входило в оцінку без жодного пояснення. Тут воно те саме за суттю, але з
+ * назвою і причиною: аналітик має бачити, що лікарня стоїть високо саме тому,
+ * що це сектор життєзабезпечення, а не через якийсь прихований коефіцієнт.
+ */
+const SECTOR_SIGNAL: Record<Tier, { label: string; contribution: number; reason: string }> = {
+  life: {
+    label: "Життєзабезпечення",
+    contribution: 24,
+    reason:
+      "Відмова б'є по людях напряму й негайно: лікарні та водоканали не мають запасу часу, на відміну від решти секторів.",
+  },
+  energy: {
+    label: "Опора енергосистеми",
+    contribution: 22,
+    reason:
+      "Генерація і високовольтні підстанції живлять решту секторів, тож їх відмова поширюється далі за власний сектор.",
+  },
+  comms: {
+    label: "Звʼязок",
+    contribution: 16,
+    reason: "Без звʼязку решта секторів втрачає керованість, навіть лишаючись справною.",
+  },
+  gov: {
+    label: "Держуправління",
+    contribution: 16,
+    reason: "Вузол ухвалення рішень і координації реагування.",
+  },
+  mobility: {
+    label: "Мобільність",
+    contribution: 14,
+    reason: "Через ці вузли йде евакуація і підвіз ресурсу; відмова обмежує реагування.",
+  },
+  industry: {
+    label: "Промисловість",
+    contribution: 10,
+    reason: "Наслідки відмови переважно економічні й розгортаються повільніше.",
+  },
+};
 
 export interface CriticalityInput {
   facilities: Facility[];
@@ -224,6 +466,8 @@ export interface CriticalityInput {
   atRisk: Set<string>;
   /** Обʼєкти в зоні повітряної тривоги. */
   underAlarm: Set<string>;
+  /** Скільки джерел обходу брати для посередництва; за замовчуванням — за розміром. */
+  centralitySources?: number;
 }
 
 /**
@@ -238,12 +482,24 @@ export interface CriticalityInput {
 export function assessCriticality(input: CriticalityInput): Map<string, CriticalityAssessment> {
   const { facilities, edges, dependents, atRisk, underAlarm } = input;
 
-  const centrality = new Map(betweenness(facilities, edges).map((c) => [c.id, c.score]));
+  // Один звід графа на всі три метрики: раніше він будувався двічі.
+  const csr = buildCsr(facilities, edges);
+  const central = betweennessCsr(
+    csr,
+    input.centralitySources === undefined ? {} : { sources: input.centralitySources },
+  );
+  const centrality = new Map(central.entries.map((c) => [c.id, c.score]));
   const bridgeEndpoints = new Set<string>();
-  for (const b of bridges(facilities, edges)) {
+  for (const b of bridgesCsr(csr)) {
     bridgeEndpoints.add(b.from);
     bridgeEndpoints.add(b.to);
   }
+
+  // Точність посередництва впливає на висновок, тож вона видима в доказі, а не
+  // прихована: оцінка за вибіркою і точне число — різні твердження.
+  const centralityNote = central.exact
+    ? ""
+    : ` (оцінка за ${central.sourcesUsed} опорними вузлами з ${facilities.length})`;
 
   const maxDependents = Math.max(1, ...Array.from(dependents.values()));
   const byId = new Map(facilities.map((f) => [f.id, f]));
@@ -252,15 +508,15 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
   for (const facility of facilities) {
     const signals: CriticalitySignal[] = [];
 
-    const central = centrality.get(facility.id) ?? 0;
-    if (central >= 0.5) {
+    const brokerage = centrality.get(facility.id) ?? 0;
+    if (brokerage >= 0.5) {
       signals.push({
         id: "brokerage",
         label: "Вузол-посередник",
         contribution: 30,
         reason:
           "Через нього проходить велика частка найкоротших шляхів мережі. Втрата такого вузла роз'єднує ділянки, навіть якщо прямих споживачів у нього небагато.",
-        evidence: `посередництво ${central.toFixed(2)} з 1.00`,
+        evidence: `посередництво ${brokerage.toFixed(2)} з 1.00${centralityNote}`,
       });
     }
 
@@ -306,15 +562,15 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
       });
     }
 
-    const tier = byId.get(facility.id)?.category;
-    if (tier === "power_plant" || tier === "substation") {
+    const category = byId.get(facility.id)?.category;
+    if (category) {
+      const tier = CATEGORIES[category].tier;
       signals.push({
-        id: "energy_backbone",
-        label: "Опора енергосистеми",
-        contribution: 10,
-        reason:
-          "Генерація і високовольтні підстанції живлять решту секторів, тож їх відмова поширюється далі за власний сектор.",
-        evidence: tier === "power_plant" ? "електростанція" : "підстанція 110кВ+",
+        id: "sector",
+        label: SECTOR_SIGNAL[tier].label,
+        contribution: SECTOR_SIGNAL[tier].contribution,
+        reason: SECTOR_SIGNAL[tier].reason,
+        evidence: CATEGORIES[category].label,
       });
     }
 

@@ -1,5 +1,10 @@
 import { type AlertRegion } from "./alerts";
 import {
+  assessCriticality,
+  type CriticalityBand,
+  type CriticalitySignal,
+} from "./infra-criticality";
+import {
   CATEGORIES,
   distanceKm,
   facilitiesAtRisk,
@@ -18,22 +23,20 @@ export const TIER_LABEL: Record<Tier, string> = {
   industry: "Промисловість",
 };
 
-const TIER_WEIGHT: Record<Tier, number> = {
-  life: 1.0,
-  energy: 0.92,
-  comms: 0.72,
-  gov: 0.72,
-  mobility: 0.62,
-  industry: 0.5,
-};
-
 export interface FacilityAnalytics {
   id: string;
   dependents: number;
   atRisk: boolean;
   underAlarm: boolean;
   regionCode: string | null;
+  /** Індекс критичності 0..100 — сума внесків `signals`, обмежена сотнею. */
   score: number;
+  band: CriticalityBand;
+  /**
+   * З чого складається оцінка. Порожній масив означає нуль — інших причин
+   * для нуля тут немає, і жоден бал не приходить поза цим списком.
+   */
+  signals: CriticalitySignal[];
 }
 
 export interface SectorStat {
@@ -113,20 +116,45 @@ export function analyzeNetwork(
   let maxDependents = 1;
   for (const v of deps.values()) if (v > maxDependents) maxDependents = v;
 
+  // Хто в тривозі й під подією — це вхід для оцінки критичності, тож рахуємо
+  // до неї.
+  const underAlarmIds = new Set<string>();
+  for (const f of facilities) {
+    const code = region.get(f.id);
+    if (code && activeCodes.has(code)) underAlarmIds.add(f.id);
+  }
+
+  /*
+   * Оцінка більше не складається тут із безіменних доданків
+   * (`TIER_WEIGHT * 38 + depScore + riskScore + alarmScore`). Таке число
+   * неможливо оскаржити: аналітик бачив «73» і не міг сказати, звідки воно
+   * і з чим саме він не згоден. Тепер кожен бал приходить від названого
+   * сигналу з причиною і доказом, а структурні метрики (посередництво,
+   * мости) додають те, чого підрахунок споживачів не бачить узагалі.
+   */
+  const assessed = assessCriticality({
+    facilities,
+    edges,
+    dependents: deps,
+    atRisk: new Set(risk.keys()),
+    underAlarm: underAlarmIds,
+  });
+
   const perFacility = new Map<string, FacilityAnalytics>();
   for (const f of facilities) {
     const dependents = deps.get(f.id) ?? 0;
-    const atRisk = risk.has(f.id);
     const regionCode = region.get(f.id) ?? null;
-    const underAlarm = regionCode ? activeCodes.has(regionCode) : false;
-
-    const tierScore = TIER_WEIGHT[CATEGORIES[f.category].tier] * 38;
-    const depScore = (Math.min(dependents, maxDependents) / maxDependents) * 30;
-    const riskScore = atRisk ? 20 : 0;
-    const alarmScore = underAlarm ? 12 : 0;
-    const score = Math.round(tierScore + depScore + riskScore + alarmScore);
-
-    perFacility.set(f.id, { id: f.id, dependents, atRisk, underAlarm, regionCode, score });
+    const a = assessed.get(f.id);
+    perFacility.set(f.id, {
+      id: f.id,
+      dependents,
+      atRisk: risk.has(f.id),
+      underAlarm: underAlarmIds.has(f.id),
+      regionCode,
+      score: a?.score ?? 0,
+      band: a?.band ?? "low",
+      signals: a?.signals ?? [],
+    });
   }
 
   const ranked = facilities

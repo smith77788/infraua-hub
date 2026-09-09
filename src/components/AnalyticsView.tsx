@@ -1,9 +1,21 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from "recharts";
-import { Activity, Building2, Layers, Network, ShieldAlert, Siren, TrendingUp } from "lucide-react";
+import {
+  Activity,
+  Building2,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+  MapPin,
+  Network,
+  ShieldAlert,
+  Siren,
+  TrendingUp,
+} from "lucide-react";
 
 import { type AlertRegion } from "@/lib/alerts";
-import { analyzeNetwork, eventTimeline, operatorRollup } from "@/lib/infra-analytics";
+import CriticalityBreakdown, { BAND_TONE } from "@/components/CriticalityBreakdown";
+import { eventTimeline, operatorRollup, type NetworkAnalysis } from "@/lib/infra-analytics";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -17,6 +29,8 @@ interface Props {
   edges: GraphEdge[];
   events: InfraEvent[];
   alerts: AlertRegion[];
+  /** Рахується один раз у консолі, щоб інспектор і рейтинг не розходилися. */
+  analysis: NetworkAnalysis;
   onSelect: (id: string) => void;
 }
 
@@ -45,11 +59,15 @@ function Stat({
 const READINESS_TONE = (r: number) =>
   r >= 90 ? "#34d399" : r >= 70 ? "#f5a623" : r >= 40 ? "#fb923c" : "#ef4444";
 
-export default function AnalyticsView({ facilities, edges, events, alerts, onSelect }: Props) {
-  const analysis = useMemo(
-    () => analyzeNetwork(facilities, edges, events, alerts),
-    [facilities, edges, events, alerts],
-  );
+export default function AnalyticsView({
+  facilities,
+  edges,
+  events,
+  alerts,
+  analysis,
+  onSelect,
+}: Props) {
+  const [openId, setOpenId] = useState<string | null>(null);
   const timeline = useMemo(() => eventTimeline(events, 30), [events]);
   const operators = useMemo(() => operatorRollup(facilities, analysis), [facilities, analysis]);
   const activeAlarms = useMemo(() => alerts.filter((r) => r.active), [alerts]);
@@ -203,30 +221,55 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
               <ShieldAlert className="size-3" /> Індекс критичності · топ-15
             </p>
             <div className="mt-2 space-y-1">
-              {top.map(({ facility, a }) => (
-                <button
-                  key={facility.id}
-                  onClick={() => onSelect(facility.id)}
-                  className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left transition-colors hover:bg-muted"
-                >
-                  <span className="w-8 shrink-0 font-mono text-[11px] font-semibold tabular-nums text-primary">
-                    {a.score}
-                  </span>
-                  <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{ background: CATEGORIES[facility.category].color }}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11px]">{facility.name}</span>
-                    <span className="block truncate font-mono text-[9px] text-muted-foreground">
-                      {CATEGORIES[facility.category].label}
-                      {a.dependents ? ` · ${a.dependents} залежних` : ""}
-                    </span>
-                  </span>
-                  {a.underAlarm ? <Siren className="size-3 shrink-0 text-red-400" /> : null}
-                  {a.atRisk ? <span className="size-2 shrink-0 rounded-full bg-amber-400" /> : null}
-                </button>
-              ))}
+              {top.map(({ facility, a }) => {
+                const open = openId === facility.id;
+                return (
+                  <div key={facility.id}>
+                    <button
+                      onClick={() => setOpenId(open ? null : facility.id)}
+                      aria-expanded={open}
+                      className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left transition-colors hover:bg-muted"
+                    >
+                      {open ? (
+                        <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
+                      )}
+                      <span
+                        className={`w-8 shrink-0 font-mono text-[11px] font-semibold tabular-nums ${BAND_TONE[a.band].text}`}
+                      >
+                        {a.score}
+                      </span>
+                      <span
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ background: CATEGORIES[facility.category].color }}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11px]">{facility.name}</span>
+                        <span className="block truncate font-mono text-[9px] text-muted-foreground">
+                          {CATEGORIES[facility.category].label}
+                          {a.signals.length ? ` · ${a.signals.length} сигнал(и)` : ""}
+                        </span>
+                      </span>
+                      {a.underAlarm ? <Siren className="size-3 shrink-0 text-red-400" /> : null}
+                      {a.atRisk ? (
+                        <span className="size-2 shrink-0 rounded-full bg-amber-400" />
+                      ) : null}
+                    </button>
+                    {open ? (
+                      <div className="mb-1 ml-5 mt-1 border-l border-border/60 pl-2">
+                        <CriticalityBreakdown signals={a.signals} score={a.score} band={a.band} />
+                        <button
+                          onClick={() => onSelect(facility.id)}
+                          className="mt-1.5 flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-primary hover:underline"
+                        >
+                          <MapPin className="size-3" /> Показати на карті
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           </section>
         </div>
@@ -333,8 +376,11 @@ export default function AnalyticsView({ facilities, edges, events, alerts, onSel
         </section>
 
         <p className="pb-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
-          Індекс критичності враховує тир обʼєкта, кількість низхідних залежностей за графом
-          живлення, близькість активних подій та повітряну тривогу в регіоні.
+          Індекс критичності — це сума названих сигналів, і нічого понад них. Розгорніть рядок
+          рейтингу, щоб побачити, з чого складається оцінка: сектор обʼєкта, його роль у структурі
+          мережі (посередництво, мости), кількість низхідних залежностей, близькість активних подій
+          і повітряна тривога. Структурні сигнали рахуються на графі живлення, де частина звʼязків
+          виведена, а не спостережена — це видно в інспекторі обʼєкта.
         </p>
       </div>
     </div>

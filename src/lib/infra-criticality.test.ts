@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { assessCriticality, betweenness, bridges, components } from "./infra-criticality";
+import {
+  assessCriticality,
+  betweenness,
+  betweennessDetailed,
+  bridges,
+  components,
+} from "./infra-criticality";
 import type { Facility, GraphEdge } from "./infra-types";
 
 function node(id: string): Facility {
@@ -206,5 +212,70 @@ describe("assessCriticality", () => {
       else if (a.score >= 20) expect(a.band).toBe("elevated");
       else expect(a.band).toBe("low");
     }
+  });
+});
+
+describe("betweenness — вибірка опорних вузлів", () => {
+  /** Ланцюжок з n вузлів: посередництво зростає до середини. */
+  function chain(n: number) {
+    const nodes = Array.from({ length: n }, (_, i) => node(`n${i}`));
+    const edges = Array.from({ length: n - 1 }, (_, i) => edge(`n${i}`, `n${i + 1}`));
+    return { nodes, edges };
+  }
+
+  it("позначає точний розрахунок як точний, а вибірку — як оцінку", () => {
+    const { nodes, edges } = chain(40);
+    expect(betweennessDetailed(nodes, edges).exact).toBe(true);
+    const sampled = betweennessDetailed(nodes, edges, { sources: 10 });
+    expect(sampled.exact).toBe(false);
+    expect(sampled.sourcesUsed).toBe(10);
+  });
+
+  it("дає той самий результат на тих самих даних", () => {
+    // Випадкова вибірка змушувала б рейтинг сіпатися між перерахунками.
+    const { nodes, edges } = chain(60);
+    const a = betweennessDetailed(nodes, edges, { sources: 15 }).entries;
+    const b = betweennessDetailed(nodes, edges, { sources: 15 }).entries;
+    expect(a).toEqual(b);
+  });
+
+  it("за вибіркою відділяє середину ланцюжка від країв, але не називає точного лідера", () => {
+    // Межа методу, заміряна, а не припущена: на ланцюжку профіль посередництва
+    // — пологá парабола, сусідні вузли відрізняються на відсотки, тож вибірка
+    // з 12 джерел ставить першим n14 замість справжнього n20. Оцінка годиться,
+    // щоб відділити посередника від периферії, і не годиться, щоб обирати
+    // єдиний найважливіший вузол.
+    const { nodes, edges } = chain(41);
+    const entries = betweennessDetailed(nodes, edges, { sources: 12 }).entries;
+    const top = Number(entries[0]!.id.slice(1));
+    expect(top).toBeGreaterThanOrEqual(13);
+    expect(top).toBeLessThanOrEqual(27);
+
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    expect(byId.get("n20")!.raw).toBeGreaterThan(byId.get("n2")!.raw * 5);
+  });
+
+  it("не просить більше джерел, ніж є вузлів", () => {
+    const { nodes, edges } = chain(5);
+    const r = betweennessDetailed(nodes, edges, { sources: 999 });
+    expect(r.sourcesUsed).toBe(5);
+    expect(r.exact).toBe(true);
+  });
+});
+
+describe("паралельні ребра", () => {
+  it("рахуються як один звʼязок, а не подвоюють шляхи", () => {
+    // Дві лінії між тією ж парою — це один звʼязок у топології; інакше
+    // подвоїлася б кількість найкоротших шляхів і поїхало б посередництво.
+    const nodes = ["a", "b", "c"].map(node);
+    const single = betweenness(nodes, [edge("a", "b"), edge("b", "c")]);
+    const doubled = betweenness(nodes, [
+      edge("a", "b"),
+      edge("b", "a"),
+      edge("b", "c"),
+      edge("c", "b"),
+    ]);
+    expect(doubled).toEqual(single);
+    expect(bridges(nodes, [edge("a", "b"), edge("b", "a")])).toHaveLength(1);
   });
 });

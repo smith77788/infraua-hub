@@ -17,6 +17,7 @@ import {
   Zap,
 } from "lucide-react";
 
+import CriticalityBreakdown, { BandChip } from "@/components/CriticalityBreakdown";
 import DependencyGraph from "@/components/DependencyGraph";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -30,7 +31,7 @@ import {
   getPowerLines,
   getThreats,
 } from "@/lib/infra.functions";
-import { assignRegions } from "@/lib/infra-analytics";
+import { analyzeNetwork, assignRegions } from "@/lib/infra-analytics";
 import {
   buildGraph,
   CATEGORIES,
@@ -183,6 +184,13 @@ function Console() {
     return observedGraph ? mergeGraphs(observedGraph.edges, inferred) : inferred;
   }, [allFacilities, observedGraph]);
   const groundedness = useMemo(() => summarizeProvenance(edges), [edges]);
+  // Один розрахунок на консоль: інспектор і вкладка аналітики мають показувати
+  // одну й ту саму оцінку, інакше рейтинг і картка обʼєкта суперечили б одне
+  // одному на очах у користувача.
+  const analysis = useMemo(
+    () => analyzeNetwork(allFacilities, edges, events, regions),
+    [allFacilities, edges, events, regions],
+  );
   const byId = useMemo(() => new Map(allFacilities.map((f) => [f.id, f])), [allFacilities]);
 
   const visible = useMemo(() => {
@@ -226,6 +234,7 @@ function Console() {
   }, [outageId, edges]);
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
+  const selectedAnalytics = selectedId ? (analysis.perFacility.get(selectedId) ?? null) : null;
 
   useEffect(() => {
     if (selectedId && !byId.has(selectedId)) setSelectedId(null);
@@ -336,6 +345,7 @@ function Console() {
               edges={edges}
               events={allEvents}
               alerts={regions}
+              analysis={analysis}
               onSelect={(id) => {
                 setSelectedId(id);
                 setView("map");
@@ -512,6 +522,30 @@ function Console() {
                     <AlertTriangle className="mt-px size-3.5 shrink-0" />
                     Поруч активна подія: {riskMap.get(selected.id)!.title}
                   </p>
+                ) : null}
+
+                {/*
+                  Індекс критичності разом із розбором. Показувати саме число
+                  без розбору означало б дати привід до дії, який неможливо
+                  оскаржити: аналітик бачив би «73» і не міг сказати, з чим
+                  саме він не згоден.
+                */}
+                {selectedAnalytics ? (
+                  <div className="mt-3 rounded border border-border bg-card p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                        Індекс критичності
+                      </p>
+                      <BandChip band={selectedAnalytics.band} score={selectedAnalytics.score} />
+                    </div>
+                    <div className="mt-2">
+                      <CriticalityBreakdown
+                        signals={selectedAnalytics.signals}
+                        score={selectedAnalytics.score}
+                        band={selectedAnalytics.band}
+                      />
+                    </div>
+                  </div>
                 ) : null}
 
                 <div className="mt-3 rounded border border-border bg-card p-2">
