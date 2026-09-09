@@ -5,6 +5,13 @@ import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-gri
 import { backoffMs, sourceUnavailable } from "@/lib/backoff";
 import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
+import {
+  SOURCE_STATE_LABEL,
+  SOURCE_STATE_TONE,
+  statusOf,
+  worstState,
+  type SourceStatus,
+} from "@/lib/sources";
 import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +31,7 @@ import {
 
 import CriticalityBreakdown, { BandChip } from "@/components/CriticalityBreakdown";
 import DependencyGraph from "@/components/DependencyGraph";
+import SourceHealth from "@/components/SourceHealth";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
@@ -428,12 +436,93 @@ function Console() {
   }, [allEvents]);
 
   const sourceDown = sourceUnavailable(powerEmpty) || sourceUnavailable(subEmpty);
+
+  /*
+   * Сім джерел, кожне зі своїм способом бути не в порядку. Зведено в одне
+   * місце: стан виводиться з того, що вже відомо, і нічого понад це не
+   * припускається.
+   */
+  const sources = useMemo<SourceStatus[]>(() => {
+    const unknownAge = ageOf(null, 1, 1);
+    return [
+      statusOf({
+        id: "facilities",
+        label: "Обʼєкти (OSM)",
+        count: allFacilities.length,
+        age: facilitiesAge,
+        ...(facilitiesQuery.data?.degraded ? { degraded: true } : {}),
+        ...(truncated.length > 0 ? { truncated: true } : {}),
+      }),
+      statusOf({
+        id: "substations",
+        label: "Підстанції по ділянках",
+        count: [...subTiles.values()].reduce((n, t) => n + t.length, 0),
+        age: unknownAge,
+        ...(sourceUnavailable(subEmpty) ? { down: true } : {}),
+        ...(subTilesQuery.data
+          ? { coverage: { loaded: subTiles.size, total: subTilesQuery.data.tilesTotal } }
+          : {}),
+      }),
+      statusOf({
+        id: "power-lines",
+        label: "ЛЕП 110 кВ+ (OSM)",
+        count: powerLines.length,
+        age: ageOf(
+          powerLinesQuery.data?.retrievedAt,
+          FRESHNESS_THRESHOLDS.facilities.aging,
+          FRESHNESS_THRESHOLDS.facilities.stale,
+        ),
+        ...(sourceUnavailable(powerEmpty) ? { down: true } : {}),
+        ...(powerLinesQuery.data
+          ? { coverage: { loaded: powerTiles.size, total: powerLinesQuery.data.tilesTotal } }
+          : {}),
+      }),
+      statusOf({
+        id: "events",
+        label: "Події (NASA, USGS)",
+        count: allEvents.length,
+        age: eventsAge,
+      }),
+      statusOf({
+        id: "alerts",
+        label: "Повітряні тривоги",
+        count: regions.filter((r) => r.active).length,
+        age: unknownAge,
+      }),
+      statusOf({
+        id: "threats",
+        label: "Повітряні цілі (OSINT)",
+        count: threats.length,
+        age: unknownAge,
+      }),
+      statusOf({ id: "zones", label: "Полігони тривог", count: zones.length, age: unknownAge }),
+    ];
+  }, [
+    allFacilities.length,
+    facilitiesAge,
+    facilitiesQuery.data,
+    truncated.length,
+    subTiles,
+    subEmpty,
+    subTilesQuery.data,
+    powerLines.length,
+    powerLinesQuery.data,
+    powerEmpty,
+    powerTiles.size,
+    allEvents.length,
+    eventsAge,
+    regions,
+    threats.length,
+    zones.length,
+  ]);
   const { hiddenLinks, shownLinks } = useMemo(() => {
     const known = new Set(allFacilities.map((f) => f.id));
     const drawable = edges.filter((e) => known.has(e.from) && known.has(e.to));
     const sel = selectVisibleLinks(drawable, 1200);
     return { hiddenLinks: sel.hidden, shownLinks: sel.visible.length };
   }, [edges, allFacilities]);
+
+  const worstSource = useMemo(() => worstState(sources), [sources]);
 
   const loading = facilitiesQuery.isLoading;
   const counts = useMemo(() => {
@@ -444,6 +533,34 @@ function Console() {
 
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
+      {/*
+        Смуга стану замість декоративного банера класифікації. У консолях
+        такого класу зверху стоїть рядок, який каже, з чим саме ти працюєш; тут
+        він каже правду про дані: рівень обстановки, стан джерел і частку
+        звʼязків, що спираються на факт. Три речі, від яких залежить, чи можна
+        діяти на побаченому.
+      */}
+      <div
+        className={`flex h-6 shrink-0 items-center justify-center gap-4 border-b px-4 font-mono text-[10px] uppercase tracking-[0.16em] ${
+          summary.level === "critical"
+            ? "border-red-500/40 bg-red-500/10 text-red-300"
+            : summary.level === "elevated"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+              : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+        }`}
+      >
+        <span>{summary.label}</span>
+        <span className="opacity-40">·</span>
+        <span className="flex items-center gap-1.5">
+          <span className={`size-1.5 rounded-full ${SOURCE_STATE_TONE[worstSource]}`} />
+          джерела: {SOURCE_STATE_LABEL[worstSource]}
+        </span>
+        <span className="opacity-40">·</span>
+        <span className="hidden sm:inline">
+          факт {Math.round(groundedness.observedShare * 100)}% звʼязків
+        </span>
+      </div>
+
       <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
         <div className="flex items-center gap-2.5">
           <span className="relative flex size-2.5">
@@ -691,18 +808,7 @@ function Console() {
                 ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
                 : ""}
             </p>
-            {/*
-              Вік даних. Карта з учорашніми обʼєктами і карта, оновлена
-              хвилину тому, виглядають однаково — поки не сказати вголос.
-            */}
-            <p
-              className={`font-mono text-[10px] leading-relaxed ${
-                facilitiesAge.freshness === "stale" ? "text-amber-400/90" : "text-muted-foreground"
-              }`}
-            >
-              Обʼєкти: {facilitiesAge.label}. Події: {eventsAge.label}.
-              {facilitiesAge.freshness === "stale" ? " Дані застаріли." : ""}
-            </p>
+            <SourceHealth sources={sources} />
 
             {/* Джерело мовчить — це стан, а не прогрес. */}
             {sourceDown ? (
