@@ -51,7 +51,7 @@ export default function TimelinePlayer({ onCursor }: Props) {
   }, [playing, min]);
 
   const live = cursor === null;
-  const value = cursor ?? now.current;
+  const value = cursor ?? nowMs ?? 0;
   const label = live
     ? "Живий режим"
     : new Date(cursor).toLocaleString("uk-UA", {
