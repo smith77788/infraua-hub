@@ -12,13 +12,16 @@ from dataclasses import dataclass, field
 from .geocode import GeoDB, Place, azimuth_deg
 
 # Порядок важливий: перевіряємо від найспецифічнішого типу до загального.
+# Порядок важливий: специфічні типи перевіряємо раніше за загальні. Розвідку
+# та КАБ ставимо перед shahed/ракетою, бо їхні ключові слова конкретніші й часто
+# зустрічаються поруч із «БпЛА»/«ракета».
 TYPE_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("ballistic", re.compile(r"баліст|iskander|іскандер|кинджал|кинжал|kh-?47|х-?47", re.I)),
-    ("kab", re.compile(r"\bкаб\b|каб-|умпк|керован(а|ої)\s+авіабомб", re.I)),
+    ("kab", re.compile(r"\bкаби?\b|\bкабів\b|каб-|умпк|керован(а|ої)\s+авіабомб", re.I)),
+    ("recon", re.compile(r"розвід|орлан|zala|supercam", re.I)),
     ("cruise", re.compile(r"крилат|калібр|kalibr|kh-?101|х-?101|kh-?555|х-?555", re.I)),
     ("missile", re.compile(r"ракет|missile|c-?300|с-?300|onyx|онікс", re.I)),
     ("shahed", re.compile(r"шахед|shahed|герань|geran|мопед|бпла|дрон|uav|drone", re.I)),
-    ("recon", re.compile(r"розвід|орлан|zala|supercam|розвідуваль", re.I)),
     ("aircraft", re.compile(r"\bміг\b|\bсу-?\d|бомбардувальн|тактичн(а|ої)\s+авіац|вильот", re.I)),
 ]
 
@@ -40,7 +43,11 @@ DIRECTION_RE = re.compile(
 )
 
 # Маркери маршруту: «курс на X», «у напрямку X», «рухається на X».
-COURSE_RE = re.compile(r"(?:курс(?:ом)?\s+на|напрям(?:ку|ок)?\s+на|прямує\s+на|рухається\s+на)\s+", re.I)
+COURSE_RE = re.compile(
+    r"(?:курс(?:ом)?\s+на|(?:у|в)?\s*напрям(?:ку|ок)\s*(?:на\s+)?|прямує\s+на|"
+    r"рухається\s+на|(?:у|в)\s+бік|ціль|для)\s+",
+    re.I,
+)
 ORIGIN_RE = re.compile(r"(?:з боку|від|зі сторони)\s+", re.I)
 COUNT_RE = re.compile(r"(\d+)\s*(?:х|x|шт|од|бпла|шахед|ракет|ціл)", re.I)
 

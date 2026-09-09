@@ -16,6 +16,17 @@ from dataclasses import dataclass
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "geo.sqlite")
 
 # Символи-апострофи, які зустрічаються в українських назвах.
+# Слова, які не є цілями геокодування: назва країни та звичайні слова, що
+# збігаються з назвами дрібних сіл GeoNames (омоніми) і дають хибні спрацювання
+# у контексті повідомлень про загрозу.
+STOPWORDS = {
+    "україна", "україни", "україні", "україну", "україно", "украина",
+    "аеродром", "аеродрому", "аеродроми",
+    "слава", "славі", "славу",
+    "перемога", "перемоги", "мир", "миру", "дружба", "дружби",
+    "зоря", "праця", "схід", "захід", "південь", "північ", "центр",
+}
+
 _APOS = "'’ʼ`´"
 _PUNCT = re.compile(r"[^\w\sЀ-ӿ-]", re.UNICODE)
 _SPACES = re.compile(r"\s+")
@@ -96,15 +107,32 @@ def _decline_variants(key: str) -> list[str]:
     if last.endswith(("и", "і", "е")):
         emit(last[:-1] + "а")
         emit(last[:-1] + "я")
+        emit(last[:-1] + "ь")  # умані -> умань (мʼякий знак)
         emit(last[:-1])
+    # прикметникові форми міст: місцевий -ому/-ім, родовий -ського/-ської
+    if last.endswith("ому"):
+        emit(last[:-3])  # купʼянському -> купʼянськ
+    if last.endswith("ім"):
+        emit(last[:-2])
+    if last.endswith(("ського", "ської", "ській", "ською")):
+        emit(last[: -len("ського")] + "ськ")
     # чоловічий рід: родовий/місцевий (-а/-у/-і/-ові) з чергуванням о↔і
     if last.endswith(("ові", "еві")):
         emit(last[:-3] + "ів")  # харкові -> харків, львові -> львів
         emit(last[:-3])
+    # орудний відмінок: -ом/-ем/-ям/-ам/-євом
+    if last.endswith("євом"):
+        emit(last[:-4] + "їв")  # миколаєвом -> миколаїв
     if last.endswith(("ом", "ем")):
+        emit(last[:-2] + "о")  # дніпром -> дніпро
         emit(last[:-2])
+    if last.endswith(("ям", "ам")):
+        emit(last[:-2] + "я")  # запоріжжям -> запоріжжя
+        emit(last[:-2] + "а")
     if last.endswith("а"):
         emit(last[:-1] + "о")  # дніпра -> дніпро
+    if last.endswith(("у", "ю")):
+        emit(last[:-1] + "о")  # дніпру -> дніпро
     if last.endswith(("а", "у", "і")):
         emit(last[:-1])
     return [c for c in cands if c != key]
@@ -124,7 +152,16 @@ class GeoDB:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self.index: dict[str, Place] = {}
+        self.oblast_stems: list[tuple[list[str], Place]] = []
         self.max_words = 3
+
+    def _oblast_match(self, token: str) -> Place | None:
+        if len(token) < 6:
+            return None
+        for stems, place in self.oblast_stems:
+            if any(token.startswith(s) for s in stems):
+                return place
+        return None
 
     def load(self) -> "GeoDB":
         if not os.path.exists(self.db_path):
@@ -138,18 +175,37 @@ class GeoDB:
             if prev is None or pop > prev.pop:
                 self.index[norm] = Place(display, lat, lon, pop)
         con.close()
+        self._overlay_curated()
         return self
 
+    def _overlay_curated(self) -> None:
+        """Накладає кураторський шар великих міст та обласних прикметників."""
+        from .regions import CITIES, OBLAST_STEMS
+
+        for name, (lat, lon) in CITIES.items():
+            # високий «pop» гарантує перемогу над архаїчними альт-назвами з GeoNames
+            self.index[normalize(name)] = Place(name, lat, lon, 10_000_000)
+        self.oblast_stems = []
+        for stems, city in OBLAST_STEMS:
+            coord = CITIES.get(city)
+            if coord:
+                self.oblast_stems.append((stems, Place(city, coord[0], coord[1], 10_000_000)))
+
     def _resolve(self, key: str) -> Place | None:
-        """Точний збіг або спроба зняти українське відмінкове закінчення."""
-        place = self.index.get(key)
-        if place is not None:
-            return place
+        """Точний збіг, інакше — найкращий (за pop) серед відмінкових варіантів.
+
+        Пріоритет за pop гарантує, що кураторський центр (велике місто)
+        перемагає архаїчні альт-назви GeoNames для того самого написання.
+        """
+        exact = self.index.get(key)
+        if exact is not None:
+            return exact
+        best: Place | None = None
         for cand in _decline_variants(key):
             place = self.index.get(cand)
-            if place is not None:
-                return place
-        return None
+            if place is not None and (best is None or place.pop > best.pop):
+                best = place
+        return best
 
     def lookup(self, name: str) -> Place | None:
         return self._resolve(normalize(name))
@@ -166,12 +222,17 @@ class GeoDB:
             span = 1
             for w in range(min(self.max_words, n - i), 0, -1):
                 key = " ".join(words[i : i + w])
-                if len(key) < 3:
+                if len(key) < 3 or key in STOPWORDS:
                     continue
                 place = self._resolve(key)
                 if place is not None:
                     matched, span = place, w
                     break
+            # обласний прикметник як окреме слово → місто-центр
+            if matched is None:
+                obl = self._oblast_match(words[i])
+                if obl is not None:
+                    matched, span = obl, 1
             if matched is not None:
                 if matched.name not in seen:
                     seen.add(matched.name)
