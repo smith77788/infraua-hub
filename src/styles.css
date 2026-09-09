@@ -183,6 +183,66 @@
   background: #0f141b;
 }
 
+/*
+ * Контроли Leaflet у темі консолі.
+ *
+ * За замовчуванням вони світлі: білі кнопки й білий підпис на темній карті
+ * читаються як чужий елемент, що випадково потрапив на екран. Плюс підпис
+ * стоїть у нижньому правому куті з z-index 800, а плеєр часу — z-index 500,
+ * тож підпис лягав поверх смуги відтворення й перекривав її на вузькому
+ * екрані.
+ */
+.leaflet-bottom.leaflet-right {
+  /* Вище за плеєр часу (його висота ~2.5rem) плюс невеликий відступ. */
+  bottom: 3rem;
+}
+.leaflet-control-attribution {
+  background: rgba(15, 20, 27, 0.82) !important;
+  color: #64748b !important;
+  border: 1px solid #1f2937;
+  border-radius: 4px;
+  font-size: 9px;
+  padding: 1px 6px;
+  backdrop-filter: blur(4px);
+}
+.leaflet-control-attribution a {
+  color: #94a3b8 !important;
+}
+
+.leaflet-control-zoom a,
+.leaflet-control-layers-toggle,
+.leaflet-control-layers-expanded {
+  background-color: rgba(15, 20, 27, 0.92) !important;
+  color: #cbd5e1 !important;
+  border-color: #1f2937 !important;
+  backdrop-filter: blur(4px);
+}
+.leaflet-control-zoom a:hover,
+.leaflet-control-layers-toggle:hover {
+  background-color: rgba(31, 41, 55, 0.95) !important;
+  color: #e2e8f0 !important;
+}
+.leaflet-control-layers-expanded {
+  padding: 8px 10px;
+  font-size: 11px;
+}
+.leaflet-control-layers-separator {
+  border-top-color: #1f2937;
+}
+.leaflet-bar {
+  border: 1px solid #1f2937;
+  box-shadow: none;
+}
+
+/* Курсор і рамка виділення — щоб карта не виглядала статичною картинкою. */
+.leaflet-container {
+  background: #070a0f;
+}
+.leaflet-container:focus,
+.leaflet-container *:focus {
+  outline: none;
+}
+
 /* Пульсуюча позначка повітряної цілі */
 .threat-pin {
   background: transparent !important;

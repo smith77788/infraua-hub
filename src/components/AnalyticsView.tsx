@@ -17,6 +17,7 @@ import {
 import { type AlertRegion } from "@/lib/alerts";
 import CriticalityBreakdown, { BAND_TONE } from "@/components/CriticalityBreakdown";
 import { rankContingencies } from "@/lib/contingency";
+import type { Focus } from "@/lib/focus";
 import { eventTimeline, operatorRollup, type NetworkAnalysis } from "@/lib/infra-analytics";
 import {
   CATEGORIES,
@@ -34,6 +35,8 @@ interface Props {
   /** Рахується один раз у консолі, щоб інспектор і рейтинг не розходилися. */
   analysis: NetworkAnalysis;
   onSelect: (id: string) => void;
+  /** Клік по сектору звужує карту до нього — число має бути входом у зріз. */
+  onFocus: (focus: Focus) => void;
 }
 
 function Stat({
@@ -68,6 +71,7 @@ export default function AnalyticsView({
   alerts,
   analysis,
   onSelect,
+  onFocus,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const timeline = useMemo(() => eventTimeline(events, 30), [events]);
@@ -125,7 +129,12 @@ export default function AnalyticsView({
           </p>
           <div className="mt-3 space-y-2.5">
             {analysis.sectors.map((s) => (
-              <div key={s.tier}>
+              <button
+                key={s.tier}
+                onClick={() => onFocus({ kind: "tier", tier: s.tier })}
+                className="block w-full rounded px-1 py-0.5 text-left transition-colors hover:bg-muted"
+                title={`Показати на карті лише сектор «${s.label}»`}
+              >
                 <div className="mb-1 flex items-center justify-between text-[11px]">
                   <span>{s.label}</span>
                   <span className="font-mono text-muted-foreground">
@@ -140,7 +149,7 @@ export default function AnalyticsView({
                     style={{ width: `${s.readiness}%`, background: READINESS_TONE(s.readiness) }}
                   />
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </section>

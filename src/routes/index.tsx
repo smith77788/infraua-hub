@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
 import { backoffMs, sourceUnavailable } from "@/lib/backoff";
+import { applyFocus, focusLabel, type Focus } from "@/lib/focus";
 import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
 import {
@@ -23,10 +24,12 @@ import {
   Loader2,
   Map as MapIcon,
   RefreshCw,
+  Filter,
   Search,
   Share2,
   Table2,
   Waypoints,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -274,6 +277,7 @@ function Console() {
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
   const [showTable, setShowTable] = useState(false);
+  const [focus, setFocus] = useState<Focus>(null);
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
 
@@ -346,20 +350,21 @@ function Console() {
   );
   const byId = useMemo(() => new Map(allFacilities.map((f) => [f.id, f])), [allFacilities]);
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return allFacilities.filter(
-      (f) =>
-        active.has(f.category) &&
-        (!q || f.name.toLowerCase().includes(q) || (f.operator ?? "").toLowerCase().includes(q)),
-    );
-  }, [allFacilities, active, query]);
-
   const riskIds = useMemo(
     () => new Set(facilitiesAtRisk(allFacilities, events).keys()),
     [allFacilities, events],
   );
   const riskMap = useMemo(() => facilitiesAtRisk(allFacilities, events), [allFacilities, events]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const byFilters = allFacilities.filter(
+      (f) =>
+        active.has(f.category) &&
+        (!q || f.name.toLowerCase().includes(q) || (f.operator ?? "").toLowerCase().includes(q)),
+    );
+    return applyFocus(byFilters, focus, { riskIds, alarmIds });
+  }, [allFacilities, active, query, focus, riskIds, alarmIds]);
 
   const summary = useMemo(
     () => summarize(allFacilities, riskMap, events, activeAlarms),
@@ -679,7 +684,33 @@ function Console() {
         </div>
       </header>
 
-      <SituationBar summary={summary} loading={loading} threats={threats.length} />
+      <SituationBar
+        summary={summary}
+        loading={loading}
+        threats={threats.length}
+        focus={focus}
+        onFocus={setFocus}
+      />
+
+      {/*
+        Активний фокус завжди видимий і знімається одним рухом. Мовчазний
+        фільтр гірший за його відсутність: порожня карта читається як
+        відсутність даних, а не як застосована умова.
+      */}
+      {focus ? (
+        <div className="z-10 flex shrink-0 items-center gap-2 border-b border-primary/40 bg-primary/10 px-4 py-1.5">
+          <Filter className="size-3 text-primary" />
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-primary">
+            Фокус: {focusLabel(focus)} — {visible.length} обʼєктів
+          </span>
+          <button
+            onClick={() => setFocus(null)}
+            className="ml-auto flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="size-3" /> Зняти
+          </button>
+        </div>
+      ) : null}
 
       {view === "analytics" ? (
         <ClientOnly
@@ -704,6 +735,10 @@ function Console() {
               analysis={analysis}
               onSelect={(id) => {
                 setSelectedId(id);
+                setView("map");
+              }}
+              onFocus={(f) => {
+                setFocus(f);
                 setView("map");
               }}
             />
@@ -1021,6 +1056,13 @@ function Console() {
                 <p className="mt-1 font-mono text-[11px] text-muted-foreground">
                   {selected.lat.toFixed(4)}, {selected.lon.toFixed(4)}
                 </p>
+                {selected.origin === "baseline" ? (
+                  <p className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[10px] leading-relaxed text-amber-400">
+                    Опорний запис: вписаний вручну, щоб консоль не була порожньою, коли
+                    OpenStreetMap недоступний. Координати приблизні, запису в джерелі немає —
+                    перевірити його ніде.
+                  </p>
+                ) : null}
 
                 {riskMap.get(selected.id) ? (
                   <p className="mt-2 flex items-start gap-1.5 rounded border border-destructive/50 bg-destructive/10 p-2 text-[11px] text-destructive">
@@ -1115,16 +1157,23 @@ function Console() {
                   >
                     <Zap className="size-3" /> Змоделювати відключення
                   </Button>
-                  <Button
-                    asChild
-                    size="sm"
-                    variant="ghost"
-                    className="h-8 font-mono text-[10px] uppercase"
-                  >
-                    <a href={selected.source} target="_blank" rel="noreferrer">
-                      Джерело
-                    </a>
-                  </Button>
+                  {/*
+                    Кнопка є лише тоді, коли є що відкрити. Опорні записи не
+                    мають запису в джерелі, і посилання «в нікуди» видавало б
+                    їх за перевірені.
+                  */}
+                  {selected.source ? (
+                    <Button
+                      asChild
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 font-mono text-[10px] uppercase"
+                    >
+                      <a href={selected.source} target="_blank" rel="noreferrer">
+                        Джерело
+                      </a>
+                    </Button>
+                  ) : null}
                 </div>
               </section>
             ) : (

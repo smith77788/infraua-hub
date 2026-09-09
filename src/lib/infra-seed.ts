@@ -764,7 +764,15 @@ const SEED: Seed[] = [
   },
 ];
 
-/** Опорні обʼєкти у форматі Facility зі стабільними id та посиланням на OSM-координати. */
+/**
+ * Опорні обʼєкти у форматі Facility.
+ *
+ * `source` навмисно порожній, а `origin` — `baseline`. Раніше сюди
+ * підставлялося посилання `openstreetmap.org/#map=14/lat/lon`: воно відкриває
+ * карту в цій точці й через це виглядає як посилання на запис в OSM, хоча
+ * жодного запису не називає. Вбитий руками обʼєкт із приблизними координатами
+ * ставав у інтерфейсі не відрізнити від перевіреного.
+ */
 export const SEED_FACILITIES: Facility[] = SEED.map((s, i) => ({
   id: `seed/${s.category}/${i}`,
   name: s.name,
@@ -773,5 +781,6 @@ export const SEED_FACILITIES: Facility[] = SEED.map((s, i) => ({
   lon: s.lon,
   ...(s.operator ? { operator: s.operator } : {}),
   ...(s.detail ? { detail: s.detail } : {}),
-  source: `https://www.openstreetmap.org/#map=14/${s.lat}/${s.lon}`,
+  source: "",
+  origin: "baseline" as const,
 }));

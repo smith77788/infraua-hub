@@ -7,6 +7,7 @@ import {
   Siren,
 } from "lucide-react";
 
+import { focusLabel, sameFocus, type Focus } from "@/lib/focus";
 import { EVENT_KINDS, type SituationLevel, type SituationSummary } from "@/lib/infra-types";
 
 const LEVEL_STYLE: Record<
@@ -39,17 +40,32 @@ function LevelIcon({ level, className }: { level: SituationLevel; className?: st
   return <ShieldCheck className={className} />;
 }
 
-/** Compact operational-status strip shown under the header. */
+/**
+ * Смуга обстановки під шапкою.
+ *
+ * Кожне число тут — вхід у свій зріз, а не напис. «Під загрозою 14» без
+ * можливості побачити ці чотирнадцять змушувало шукати їх очима по карті
+ * серед тисяч інших.
+ */
 export default function SituationBar({
   summary,
   loading,
   threats = 0,
+  focus = null,
+  onFocus,
 }: {
   summary: SituationSummary;
   loading: boolean;
   threats?: number;
+  focus?: Focus;
+  onFocus?: (focus: Focus) => void;
 }) {
   const s = LEVEL_STYLE[summary.level];
+
+  /** Повторне натискання знімає фокус — інакше з нього не вийти тим же рухом. */
+  const toggle = (next: Focus) => () => onFocus?.(sameFocus(focus, next) ? null : next);
+  const active = (f: Focus) =>
+    sameFocus(focus, f) ? "ring-1 ring-primary/70 bg-primary/10 rounded-full" : "";
 
   return (
     <div className="z-10 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card/40 px-4 py-2">
@@ -81,25 +97,38 @@ export default function SituationBar({
       ) : null}
 
       {summary.alarms > 0 ? (
-        <span className="flex items-center gap-1.5 rounded-full border border-red-500/50 bg-red-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400">
+        <button
+          onClick={toggle({ kind: "alarm" })}
+          title={`Показати ${focusLabel({ kind: "alarm" })}`}
+          className={`flex items-center gap-1.5 rounded-full border border-red-500/50 bg-red-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400 transition-colors hover:bg-red-500/20 ${active({ kind: "alarm" })}`}
+        >
           <Siren className="size-3.5 animate-pulse" />
           Повітряна тривога
           <span>{summary.alarms} обл.</span>
-        </span>
+        </button>
       ) : null}
 
-      <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <button
+        onClick={toggle({ kind: "risk" })}
+        disabled={summary.atRisk === 0}
+        title={`Показати ${focusLabel({ kind: "risk" })}`}
+        className={`flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground ${active({ kind: "risk" })}`}
+      >
         <AlertTriangle className="size-3 text-amber-400" />
         Під загрозою
         <span className="font-semibold text-foreground">{summary.atRisk}</span>
-      </span>
+      </button>
 
       {summary.lifeAtRisk > 0 ? (
-        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-red-400">
+        <button
+          onClick={toggle({ kind: "life-risk" })}
+          title={`Показати ${focusLabel({ kind: "life-risk" })}`}
+          className={`flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-red-400 transition-colors hover:text-red-300 ${active({ kind: "life-risk" })}`}
+        >
           <HeartPulse className="size-3" />
           Життєзабезпечення
           <span className="font-semibold">{summary.lifeAtRisk}</span>
-        </span>
+        </button>
       ) : null}
 
       <span className="ml-auto flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">

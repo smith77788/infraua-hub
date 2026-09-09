@@ -158,7 +158,10 @@ function toFacility(el: OverpassElement, category: CategoryId): Facility | null 
     lon,
     ...(tags["operator"] ? { operator: tags["operator"] } : {}),
     ...(detailParts.length ? { detail: detailParts.join(" · ") } : {}),
+    // Посилання на конкретний запис, а не на вид карти: його можна відкрити
+    // й перевірити.
     source: `https://www.openstreetmap.org/${el.type}/${el.id}`,
+    origin: "osm" as const,
   };
 }
 
