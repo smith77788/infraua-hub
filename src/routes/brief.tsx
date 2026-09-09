@@ -90,7 +90,7 @@ function Brief() {
         </p>
         <h1 className="mt-1 text-2xl font-bold">Критична інфраструктура України</h1>
         <p className="mt-1 font-mono text-xs text-muted-foreground">
-          Сформовано {now.toLocaleString("uk-UA")}
+          Сформовано {now ? now.toLocaleString("uk-UA") : "…"}
           {loading ? " · завантаження…" : ""}
         </p>
       </header>
