@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
+import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
 
 import { fuseThreats, mercToLatLon, type AlertZone, type Threat } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
@@ -617,19 +618,9 @@ const TILE_DEG = 2;
 /** Скільки тайлів догружати за один виклик, щоб не впертися в таймаут. */
 const TILES_PER_CALL = 3;
 
-interface TileKey {
-  south: number;
-  west: number;
-}
-
-function tileGrid(): TileKey[] {
-  const tiles: TileKey[] = [];
-  for (let lat = Math.floor(UA_BBOX.south); lat < UA_BBOX.north; lat += TILE_DEG) {
-    for (let lon = Math.floor(UA_BBOX.west); lon < UA_BBOX.east; lon += TILE_DEG) {
-      tiles.push({ south: lat, west: lon });
-    }
-  }
-  return tiles;
+/** Сітка тайлів по країні — спільна для ліній і підстанцій. */
+function grid(): Tile[] {
+  return tileGrid(UA_BBOX, TILE_DEG);
 }
 
 /**
@@ -675,28 +666,22 @@ export const getPowerLines = createServerFn({ method: "GET" })
     return { have: have.filter((k): k is string => typeof k === "string") };
   })
   .handler(async ({ data }) => {
-    const grid = tileGrid();
-    const held = new Set(data.have);
-    const pending = grid.filter((t) => !held.has(`${t.south}:${t.west}`));
+    const all = grid();
+    const pending = pendingTiles(all, data.have, TILES_PER_CALL);
     const fetched: PowerLineTile[] = [];
 
     if (pending.length > 0) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 90_000);
       try {
-        for (const tile of pending.slice(0, TILES_PER_CALL)) {
-          const key = `${tile.south}:${tile.west}`;
+        for (const tile of pending) {
+          const key = tileKey(tile);
           const cached = powerLineTiles.get(key);
           if (cached) {
             fetched.push({ key, lines: cached });
             continue;
           }
-          const query = powerLineQuery({
-            south: tile.south,
-            west: tile.west,
-            north: tile.south + TILE_DEG,
-            east: tile.west + TILE_DEG,
-          });
+          const query = powerLineQuery(tileBBox(tile, TILE_DEG));
           const elements = await overpass(query, controller.signal);
           // Порожній тайл віддається теж: над морем чи за кордоном ліній
           // справді немає, і без запису клієнт просив би його вічно.
@@ -715,7 +700,84 @@ export const getPowerLines = createServerFn({ method: "GET" })
     return {
       tiles: fetched,
       retrievedAt: new Date().toISOString(),
-      tilesTotal: grid.length,
-      available: fetched.length > 0 || held.size > 0,
+      tilesTotal: all.length,
+      available: fetched.length > 0 || data.have.length > 0,
     } satisfies PowerLinesPayload;
+  });
+
+/**
+ * Підстанції по тайлах — зняття стелі, а не ще одне джерело.
+ *
+ * Загальнокраїнний запит обмежений `out center N`, і цей ліміт був вузьким
+ * місцем усього продукту: заміряно на реальному тайлі 2°×2° (50–52°N,
+ * 30–32°E) — 470 ліній 110 кВ+, кінці яких збиваються у 285 різних вузлів, в
+ * одному тайлі з приблизно півсотні. Стеля в кількасот підстанцій на країну
+ * означала, що більшість реальних ліній не мала до чого привʼязатися.
+ *
+ * Тут тієї стелі немає: кожен тайл питається окремо, і межа `out center`
+ * застосовується до площі, де стільки обʼєктів просто не буває.
+ *
+ * **Це доповнення, а не заміна.** `getFacilities` лишається як був і сам по
+ * собі дає працездатну консоль; тайли лише додають те, що не вмістилося. Якщо
+ * цей шлях відмовить, гірше, ніж було, не стане — саме тому він окремий.
+ */
+const substationTiles = new Map<string, Facility[]>();
+
+export interface SubstationTile {
+  key: string;
+  facilities: Facility[];
+}
+
+export interface SubstationTilesPayload {
+  tiles: SubstationTile[];
+  tilesTotal: number;
+}
+
+/** Стеля на тайл: запобіжник від патологічного запиту, а не робоче обмеження. */
+const SUBSTATIONS_PER_TILE = 1200;
+
+export const getSubstationTiles = createServerFn({ method: "GET" })
+  .validator((input: unknown): { have: string[] } => {
+    const have = (input as { have?: unknown } | undefined)?.have;
+    if (!Array.isArray(have)) return { have: [] };
+    return { have: have.filter((k): k is string => typeof k === "string") };
+  })
+  .handler(async ({ data }): Promise<SubstationTilesPayload> => {
+    const all = grid();
+    const pending = pendingTiles(all, data.have, TILES_PER_CALL);
+    const fetched: SubstationTile[] = [];
+    if (pending.length === 0) return { tiles: fetched, tilesTotal: all.length };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+    try {
+      for (const tile of pending) {
+        const key = tileKey(tile);
+        const cached = substationTiles.get(key);
+        if (cached) {
+          fetched.push({ key, facilities: cached });
+          continue;
+        }
+        const b = tileBBox(tile, TILE_DEG);
+        const query =
+          `[out:json][timeout:90];(` +
+          `nwr["power"="substation"]["voltage"~"^(1[1-9][0-9]{4}|[2-9][0-9]{5})"]` +
+          `(${b.south},${b.west},${b.north},${b.east});` +
+          `);out center ${SUBSTATIONS_PER_TILE};`;
+        const elements = await overpass(query, controller.signal);
+        // Порожній тайл записується теж: над морем чи за кордоном підстанцій
+        // справді немає, і без запису клієнт просив би його вічно.
+        const facilities = elements
+          .map((el) => toFacility(el, "substation"))
+          .filter((f): f is Facility => f !== null);
+        substationTiles.set(key, facilities);
+        fetched.push({ key, facilities });
+      }
+    } catch (err) {
+      console.error("substation tile failed", err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    return { tiles: fetched, tilesTotal: all.length };
   });

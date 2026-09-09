@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
+import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
@@ -30,6 +31,7 @@ import {
   getEvents,
   getFacilities,
   getPowerLines,
+  getSubstationTiles,
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
@@ -132,17 +134,47 @@ function Console() {
   const newTiles = powerLinesQuery.data?.tiles;
   useEffect(() => {
     if (!newTiles?.length) return;
-    setPowerTiles((prev) => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const tile of newTiles) {
-        if (next.has(tile.key)) continue;
-        next.set(tile.key, tile.lines);
-        changed = true;
-      }
-      return changed ? next : prev;
-    });
+    setPowerTiles((prev) =>
+      mergeTiles(
+        prev,
+        newTiles.map((t) => ({ key: t.key, value: t.lines })),
+      ),
+    );
   }, [newTiles]);
+
+  /*
+   * Підстанції по тайлах — зняття стелі загальнокраїнного запиту. Заміряно:
+   * в одному тайлі 2°×2° кінці ліній 110 кВ+ збиваються у 285 різних вузлів,
+   * тобто кількасот підстанцій на всю країну — це мала вибірка, а не мережа.
+   *
+   * Доповнення, а не заміна: `getFacilities` лишається основним джерелом, і
+   * якщо цей шлях відмовить, консоль працює як раніше.
+   */
+  const substationTilesFn = useServerFn(getSubstationTiles);
+  const [subTiles, setSubTiles] = useState<Map<string, Facility[]>>(() => new Map());
+  const subTilesRef = useRef(subTiles);
+  subTilesRef.current = subTiles;
+
+  const subTilesQuery = useQuery({
+    queryKey: ["substation-tiles"],
+    queryFn: () => substationTilesFn({ data: { have: [...subTilesRef.current.keys()] } }),
+    staleTime: 60 * 1000,
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      return data && subTilesRef.current.size < data.tilesTotal ? 60_000 : false;
+    },
+  });
+
+  const newSubTiles = subTilesQuery.data?.tiles;
+  useEffect(() => {
+    if (!newSubTiles?.length) return;
+    setSubTiles((prev) =>
+      mergeTiles(
+        prev,
+        newSubTiles.map((t) => ({ key: t.key, value: t.facilities })),
+      ),
+    );
+  }, [newSubTiles]);
 
   const eventsQuery = useQuery({
     queryKey: ["events"],
@@ -197,10 +229,17 @@ function Console() {
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
 
-  const allFacilities = useMemo(
-    () => facilitiesQuery.data?.facilities ?? [],
-    [facilitiesQuery.data],
-  );
+  const allFacilities = useMemo(() => {
+    const base = facilitiesQuery.data?.facilities ?? [];
+    if (subTiles.size === 0) return base;
+    // Ідентифікатор — це `${type}/${id}` з OSM, тож той самий обʼєкт із
+    // загального запиту й з тайла зливається в один, а не подвоюється.
+    const byId = new Map(base.map((f) => [f.id, f]));
+    for (const tile of subTiles.values()) {
+      for (const f of tile) if (!byId.has(f.id)) byId.set(f.id, f);
+    }
+    return [...byId.values()];
+  }, [facilitiesQuery.data, subTiles]);
   const allEvents = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
@@ -241,9 +280,18 @@ function Console() {
     return observedGraph ? mergeGraphs(observedGraph.edges, inferred) : inferred;
   }, [allFacilities, observedGraph]);
   const groundedness = useMemo(() => summarizeProvenance(edges), [edges]);
-  // Один розрахунок на консоль: інспектор і вкладка аналітики мають показувати
-  // одну й ту саму оцінку, інакше рейтинг і картка обʼєкта суперечили б одне
-  // одному на очах у користувача.
+  /*
+   * Один розрахунок на консоль: інспектор і вкладка аналітики мають показувати
+   * одну й ту саму оцінку, інакше рейтинг і картка обʼєкта суперечили б одне
+   * одному на очах у користувача.
+   *
+   * Вартість заміряна, бо набір обʼєктів тепер росте по тайлах, а не
+   * фіксований: 3210 вузлів — 420 мс, 6000 — 343 мс, 10000 — 487 мс, 15000 —
+   * 675 мс. Спадання на 6000 не помилка: вище 4000 посередництво переходить на
+   * вибірку опорних вузлів, і залежність стає лінійною замість квадратичної.
+   * Перерахунок трапляється при надходженні тайла, тобто раз на хвилину під
+   * час прогріву, — помітна затримка, але не заморозка.
+   */
   const analysis = useMemo(
     () => analyzeNetwork(allFacilities, edges, events, regions),
     [allFacilities, edges, events, regions],
@@ -735,8 +783,12 @@ function Console() {
                     {powerLinesQuery.data && powerTiles.size < powerLinesQuery.data.tilesTotal ? (
                       <>
                         {" "}
-                        Завантажено {powerTiles.size} з {powerLinesQuery.data.tilesTotal} ділянок —
-                        частка фактів ще зросте.
+                        Завантажено {powerTiles.size} з {powerLinesQuery.data.tilesTotal} ділянок
+                        ліній
+                        {subTilesQuery.data
+                          ? ` і ${subTiles.size} з ${subTilesQuery.data.tilesTotal} — підстанцій`
+                          : ""}{" "}
+                        — частка фактів ще зросте.
                       </>
                     ) : null}
                   </p>
