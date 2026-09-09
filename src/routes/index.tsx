@@ -13,6 +13,7 @@ import {
   Map as MapIcon,
   RefreshCw,
   Search,
+  Share2,
   Waypoints,
   Zap,
 } from "lucide-react";
@@ -32,6 +33,12 @@ import {
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
+import {
+  palanterStatus,
+  pushSplit,
+  pushToPalanter,
+  pushableDependencies,
+} from "@/lib/palanter.functions";
 import { SEED_FACILITIES } from "@/lib/infra-seed";
 import { analyzeNetwork, assignRegions } from "@/lib/infra-analytics";
 import {
@@ -156,6 +163,22 @@ function Console() {
     staleTime: 30 * 1000,
     refetchInterval: 30 * 1000,
   });
+  /*
+   * Звʼязок із платформою Palanter. Ключ лишається на сервері, тому і статус, і
+   * саме надсилання — серверні функції. Незаданий звʼязок — штатний стан:
+   * консоль самодостатня, і кнопки тоді просто немає.
+   */
+  const palanterStatusFn = useServerFn(palanterStatus);
+  const pushFn = useServerFn(pushToPalanter);
+  const palanterQuery = useQuery({
+    queryKey: ["palanter-status"],
+    queryFn: () => palanterStatusFn(),
+    staleTime: Infinity,
+  });
+  const [pushState, setPushState] = useState<
+    { status: "idle" | "sending" } | { status: "done"; text: string; ok: boolean }
+  >({ status: "idle" });
+
   const zonesFn = useServerFn(getAlertZones);
   const zonesQuery = useQuery({
     queryKey: ["zones"],
@@ -285,6 +308,33 @@ function Console() {
       else next.add(c);
       return next;
     });
+
+  const sendToPlatform = async () => {
+    setPushState({ status: "sending" });
+    const dependencies = pushableDependencies(allFacilities, edges);
+    const split = pushSplit(dependencies);
+    const result = await pushFn({ data: { facilities: allFacilities, events, dependencies } });
+
+    if (!result.configured) {
+      setPushState({ status: "done", ok: false, text: "Звʼязок із платформою не налаштований." });
+      return;
+    }
+    if (!result.ok) {
+      setPushState({
+        status: "done",
+        ok: false,
+        text: `Платформа відхилила: ${result.error ?? "невідома помилка"}`,
+      });
+      return;
+    }
+    setPushState({
+      status: "done",
+      ok: true,
+      // Розподіл показується разом із підсумком: пакет, що поїхав самими
+      // здогадками, має бути видно одразу, а не потім у журналі.
+      text: `Прийнято: ${result.facilitiesIngested} обʼєктів, ${result.dependenciesIngested} звʼязків (${split.observed} спостережених, ${split.inferred} виведених).`,
+    });
+  };
 
   const loading = facilitiesQuery.isLoading;
   const counts = useMemo(() => {
@@ -466,6 +516,37 @@ function Console() {
                 ))}
               </div>
             </div>
+
+            {palanterQuery.data?.configured ? (
+              <div className="rounded border border-border bg-card p-2.5">
+                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                  Платформа Palanter
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-1.5 h-7 px-2 font-mono text-[10px] uppercase"
+                  disabled={pushState.status === "sending" || allFacilities.length === 0}
+                  onClick={() => void sendToPlatform()}
+                >
+                  <Share2 className="size-3" />
+                  {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
+                </Button>
+                {pushState.status === "done" ? (
+                  <p
+                    className={`mt-1.5 text-[10px] leading-relaxed ${pushState.ok ? "text-muted-foreground" : "text-destructive"}`}
+                  >
+                    {pushState.text}
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                    Обʼєкти, події та звʼязки живлення разом із їх походженням — під онтологією,
+                    рівнями доступу і журналом аудиту платформи. Похідні оцінки не надсилаються:
+                    вони перераховуються з графа.
+                  </p>
+                )}
+              </div>
+            ) : null}
 
             {outageId ? (
               <div className="rounded border border-destructive/50 bg-destructive/10 p-2.5">
