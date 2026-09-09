@@ -561,8 +561,8 @@ function Console() {
         </span>
       </div>
 
-      <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
-        <div className="flex items-center gap-2.5">
+      <header className="z-20 grid h-14 shrink-0 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2.5">
           <span className="relative flex size-2.5">
             <span className="animate-pulse-dot absolute inline-flex size-full rounded-full bg-primary" />
           </span>
