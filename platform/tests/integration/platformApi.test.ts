@@ -1045,3 +1045,94 @@ describe('platform API: the triage queue', () => {
     expect(run.body.evaluatedRules).toBeGreaterThan(0);
   });
 });
+
+describe('platform API: two time axes', () => {
+  it('reconstructs the graph at a past revision, exactly', async () => {
+    const before = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    const head = before.body.revisionHead;
+    expect(typeof head).toBe('number');
+
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: {
+        payload: {
+          facilities: [
+            { id: 'time-sub', name: 'Підстанція Часова', category: 'substation', lat: 49.9, lon: 36.2, source: 'https://openstreetmap.org/way/99' },
+          ],
+          events: [],
+          dependencies: [],
+        },
+        source: 'time-batch',
+        sector: 'infrastructure',
+      },
+    });
+
+    const now = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    expect(JSON.stringify(now.body)).toContain('Часова');
+
+    // The same question asked of the earlier revision must not see it.
+    const then = await call(`GET`, `/api/platform/graph?asOfSeq=${head}`, { key: KEYS.secret });
+    expect(JSON.stringify(then.body.nodes)).not.toContain('Часова');
+    expect(then.body.basis.asOfSeq).toBe(head);
+  });
+
+  it('says when a question falls before the history it keeps', async () => {
+    // An instant before the journal begins is not an empty world — it is a
+    // question this deployment cannot answer, and the difference matters to
+    // anyone about to conclude nothing existed yet.
+    const res = await call('GET', '/api/platform/graph?asOf=2000-01-01T00:00:00.000Z', { key: KEYS.secret });
+    expect(res.status).toBe(200);
+    expect(res.body.beforeHistory).toBe(true);
+    expect(res.body.nodes).toHaveLength(0);
+  });
+
+  it('rejects a cursor that is not a timestamp or a sequence', async () => {
+    expect((await call('GET', '/api/platform/graph?asOf=yesterday', { key: KEYS.secret })).status).toBe(400);
+    expect((await call('GET', '/api/platform/graph?asOfSeq=1.5', { key: KEYS.secret })).status).toBe(400);
+    expect((await call('GET', '/api/platform/graph/diff', { key: KEYS.secret })).status).toBe(400);
+  });
+
+  it('reports what changed between two revisions', async () => {
+    const start = (await call('GET', '/api/platform/graph', { key: KEYS.secret })).body.revisionHead;
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: {
+        payload: {
+          facilities: [
+            { id: 'diff-sub', name: 'Підстанція Різницева', category: 'substation', lat: 49.1, lon: 36.9, source: 'https://openstreetmap.org/way/98' },
+          ],
+          events: [],
+          dependencies: [],
+        },
+        source: 'diff-batch',
+        sector: 'infrastructure',
+      },
+    });
+    const end = (await call('GET', '/api/platform/graph', { key: KEYS.secret })).body.revisionHead;
+
+    const diff = await call('GET', `/api/platform/graph/diff?from=${start}&to=${end}`, { key: KEYS.secret });
+    expect(diff.status).toBe(200);
+    expect(diff.body.totals.added).toBeGreaterThan(0);
+    expect(JSON.stringify(diff.body.added.nodes)).toContain('Різницева');
+  });
+
+  it('pins a case finding to the revision it rests on', async () => {
+    const created = await call('POST', '/api/platform/cases', { key: KEYS.secret, body: { title: 'Відтворюваність' } });
+    const attached = await call('POST', `/api/platform/cases/${created.body.id}/findings`, {
+      key: KEYS.secret,
+      body: { query: 'Підстанція Часова' },
+    });
+    expect(attached.status).toBe(201);
+
+    const finding = attached.body.case.findings[0];
+    // A finding that cannot be re-derived is an assertion.
+    expect(typeof finding.graphRevision).toBe('number');
+    expect(typeof finding.graphAsOf).toBe('string');
+
+    const reconstructed = await call('GET', `/api/platform/graph?asOfSeq=${finding.graphRevision}`, { key: KEYS.secret });
+    expect(reconstructed.status).toBe(200);
+    for (const id of finding.entityIds) {
+      expect(reconstructed.body.nodes.map((n: { id: string }) => n.id)).toContain(id);
+    }
+  });
+});

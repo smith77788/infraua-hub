@@ -21,6 +21,16 @@ export interface GraphNode {
    */
   compartments?: string[];
   source_doc_ids: string[];
+  /**
+   * Valid time: when this is true **in the world**, as opposed to when the
+   * platform learned it (which the revision log records). A substation
+   * destroyed on the 3rd and reported on the 9th was destroyed on the 3rd and
+   * known destroyed from the 9th; an outage review needs the first to
+   * reconstruct the grid and the second to judge whether anyone could have
+   * acted. Absent means "as far as we know, always".
+   */
+  valid_from?: string;
+  valid_to?: string;
 }
 
 export interface GraphEdge {
@@ -31,4 +41,6 @@ export interface GraphEdge {
   clearance: ClearanceLevel;
   compartments?: string[];
   source_doc_ids: string[];
+  valid_from?: string;
+  valid_to?: string;
 }

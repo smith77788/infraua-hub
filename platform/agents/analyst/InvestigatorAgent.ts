@@ -28,6 +28,8 @@ export interface InvestigationResult {
   subgraph: { nodes: GraphNode[]; edges: GraphEdge[] };
   computation: { description: string; result: unknown } | null;
   auditSeq: number;
+  /** When this ran — the transaction-time instant its subgraph was read at. */
+  concludedAt: string;
 }
 
 /**
@@ -92,6 +94,7 @@ export class InvestigatorAgent {
         subgraph: { nodes: [], edges: [] },
         computation: null,
         auditSeq: entry.seq,
+        concludedAt: entry.timestamp,
       };
     }
 
@@ -162,6 +165,7 @@ export class InvestigatorAgent {
       subgraph: { nodes: Array.from(subgraphNodes.values()), edges: subgraphEdges },
       computation,
       auditSeq: entry.seq,
+      concludedAt: entry.timestamp,
     };
   }
 

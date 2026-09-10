@@ -239,6 +239,9 @@ export class ProzorroConnector {
                   competitive,
                   ...(award.date ? { awarded_at: award.date } : {}),
                 },
+                // The contract exists from the day it was awarded, not from
+                // the day this connector happened to read the register.
+                ...(award.date ? { validFrom: award.date } : {}),
                 clearance,
                 compartments,
                 sourceDocId: documentId,

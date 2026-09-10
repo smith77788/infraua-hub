@@ -5,6 +5,7 @@ import * as path from 'path';
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import { GraphStore } from '../core/graph/GraphStore';
+import { RevisionLog } from '../core/graph/RevisionLog';
 import { OntologyManifest } from '../core/graph/OntologyManifest';
 import { VectorIndex } from '../core/vector/VectorIndex';
 import { AuditLog } from '../core/audit/AuditLog';
@@ -77,7 +78,8 @@ const guardrails = Guardrails.fromFile(path.join(CONFIG_ROOT, 'security_policies
 const purposePolicy = PurposePolicy.fromFile(path.join(CONFIG_ROOT, 'security_policies.json'));
 const riskScorer = RiskScorer.fromFile(path.join(CONFIG_ROOT, 'risk_signals.json'));
 const apiKeyAuth = EnvApiKeyAuth.fromEnv();
-const graph = new GraphStore(path.join(DATA_ROOT, 'graph.json'), ontology);
+const revisions = new RevisionLog(path.join(DATA_ROOT, 'revisions.log'));
+const graph = new GraphStore(path.join(DATA_ROOT, 'graph.json'), ontology, revisions);
 const vectors = new VectorIndex();
 const audit = new AuditLog(path.join(DATA_ROOT, 'audit.log'));
 const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
@@ -720,8 +722,82 @@ app.post('/api/platform/investigate', async (req, res) => {
   }
 });
 
+/**
+ * The graph, optionally as it stood at a past instant.
+ *
+ * `?asOf=` is transaction time - what the platform knew then. `?validAt=` is
+ * world time - what was true then. Both together answer "what did we believe
+ * on the 9th about how the grid stood on the 3rd", which is the question a
+ * review of a past decision actually asks and which neither axis answers alone.
+ */
 app.get('/api/platform/graph', (req, res) => {
-  res.json(graph.toJSON(req.viewer!));
+  const asOf = typeof req.query.asOf === 'string' ? req.query.asOf : undefined;
+  const validAt = typeof req.query.validAt === 'string' ? req.query.validAt : undefined;
+  const asOfSeqRaw = typeof req.query.asOfSeq === 'string' ? Number(req.query.asOfSeq) : undefined;
+  if (asOfSeqRaw !== undefined && !Number.isInteger(asOfSeqRaw)) {
+    return res.status(400).json({ error: 'asOfSeq must be an integer revision sequence' });
+  }
+  if (!asOf && !validAt && asOfSeqRaw === undefined) {
+    // The head cursor comes back on the ordinary read too: a client that
+    // cannot name the revision it just saw cannot pin a finding to it, and
+    // "the graph as it was when I looked" stops being expressible.
+    return res.json({ ...graph.toJSON(req.viewer!), revisionHead: revisions.head() });
+  }
+
+  for (const [name, value] of [['asOf', asOf], ['validAt', validAt]] as const) {
+    if (value !== undefined && Number.isNaN(Date.parse(value))) {
+      return res.status(400).json({ error: `${name} must be an ISO 8601 timestamp` });
+    }
+  }
+  try {
+    const result = graph.asOf({ asOf, asOfSeq: asOfSeqRaw, validAt }, req.viewer!);
+    // An instant before the journal begins is not an empty world, it is a
+    // question this deployment cannot answer - and the difference matters to
+    // anyone about to conclude that nothing existed yet.
+    const earliest = revisions.earliest();
+    res.json({
+      ...result,
+      historyStartsAt: earliest,
+      revisionHead: revisions.head(),
+      beforeHistory: Boolean(asOf && earliest && asOf < earliest),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** What appeared, what went and what moved between two instants. */
+app.get('/api/platform/graph/diff', (req, res) => {
+  // Accepts either cursor. A sequence is exact; a timestamp cannot separate
+  // two changes made in the same millisecond, and ingestion makes many.
+  const cursor = (value: unknown, fallback: string | number): string | number | null => {
+    if (typeof value !== 'string' || value === '') return fallback;
+    if (/^\d+$/.test(value)) return Number(value);
+    return Number.isNaN(Date.parse(value)) ? null : value;
+  };
+  const from = cursor(req.query.from, '');
+  const to = cursor(req.query.to, new Date().toISOString());
+  if (from === null || to === null || from === '') {
+    return res.status(400).json({ error: 'from is required; from and to must each be an ISO 8601 timestamp or a revision sequence' });
+  }
+  if (typeof from === typeof to && from > to) {
+    return res.status(400).json({ error: 'from must not be later than to' });
+  }
+  try {
+    const result = graph.diff(from, to, req.viewer!);
+    res.json({
+      from,
+      to,
+      ...result,
+      totals: {
+        added: result.added.nodes.length + result.added.edges.length,
+        removed: result.removed.nodes.length + result.removed.edges.length,
+        changed: result.changed.length,
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /**
@@ -884,6 +960,12 @@ app.post('/api/platform/cases/:id/findings', async (req, res) => {
 
     const attached = cases.attachFinding(req.params.id, view, {
       auditSeq: investigation.auditSeq,
+      // The instant the graph stood at when this was concluded. Without it a
+      // finding could not be reproduced: re-running the same query against a
+      // graph that had moved on gave a different answer wearing the same
+      // provenance.
+      graphAsOf: investigation.concludedAt,
+      graphRevision: revisions.head(),
       query: investigation.query,
       summary: investigation.summary,
       narrativeSource: investigation.narrativeSource,

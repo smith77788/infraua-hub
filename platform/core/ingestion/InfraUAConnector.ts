@@ -296,6 +296,12 @@ export class InfraUAConnector {
           type: 'Event',
           label: event.title,
           properties,
+          // An event is true in the world from when it happened, not from when
+          // this feed reached us. Without that the grid cannot be
+          // reconstructed for the moment of a strike - only for the moment the
+          // report arrived, which is the wrong instant for every question
+          // anyone asks afterwards.
+          ...(typeof event.time === 'string' && event.time ? { validFrom: event.time } : {}),
           clearance,
           compartments,
           sourceDocId: documentId,

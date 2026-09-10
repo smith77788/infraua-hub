@@ -35,6 +35,17 @@ import { asViewer, canRead, unionCompartments, ViewerInput } from '../security/M
 export interface CaseFinding {
   /** Sequence in the audit log where the underlying investigation is recorded. */
   auditSeq: number;
+  /**
+   * Transaction-time instant the graph stood at when this was concluded, so
+   * `GET /api/platform/graph?asOf=` reconstructs exactly the picture the
+   * finding rests on. A finding that cannot be re-derived is an assertion.
+   */
+  graphAsOf?: string;
+  /**
+   * Revision sequence the graph stood at. Exact where `graphAsOf` is only
+   * accurate to the millisecond, which ingestion fills many times over.
+   */
+  graphRevision?: number;
   query: string;
   summary: string;
   /** Which narrative engine produced the summary, carried through verbatim. */
