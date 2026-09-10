@@ -1314,3 +1314,51 @@ describe('platform API: conflicts of interest', () => {
     expect(res.body.note).toContain('link_same_as');
   });
 });
+
+describe('platform API: the tool catalogue', () => {
+  it('lists tools the caller cannot use, with the level named', async () => {
+    const res = await call('GET', '/api/platform/tools', { key: KEYS.public });
+    expect(res.status).toBe(200);
+    const conflicts = res.body.tools.find((t: any) => t.name === 'conflicts_of_interest');
+    expect(conflicts.permitted).toBe(false);
+    expect(conflicts.reason).toContain('CONFIDENTIAL');
+  });
+
+  it('checks rights on the call, not once per session', async () => {
+    // One permitted call must not open the door for the rest.
+    const allowed = await call('POST', '/api/platform/tools/find_entities', {
+      key: KEYS.public,
+      body: { text: 'Підстанція' },
+    });
+    expect(allowed.status).toBe(200);
+
+    const refused = await call('POST', '/api/platform/tools/conflicts_of_interest', {
+      key: KEYS.public,
+      body: {},
+    });
+    expect(refused.status).toBe(403);
+  });
+
+  it('computes with executed code rather than with prose', async () => {
+    const res = await call('POST', '/api/platform/tools/compute_total', {
+      key: KEYS.internal,
+      body: { values: '10, 20, 30', operation: 'mean' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.result).toBe(20);
+  });
+
+  it('refuses an unknown tool as not found', async () => {
+    const res = await call('POST', '/api/platform/tools/rm_rf', { key: KEYS.secret, body: {} });
+    expect(res.status).toBe(404);
+  });
+
+  it('offers no tool that writes', async () => {
+    // Structural: changing the graph goes through /actions, so a planner has
+    // no path to a write at all.
+    const res = await call('GET', '/api/platform/tools', { key: KEYS.secret });
+    for (const tool of res.body.tools) {
+      expect(tool.name).not.toMatch(/create|update|delete|write|declassify/);
+    }
+  });
+});

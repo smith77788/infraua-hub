@@ -34,6 +34,9 @@ import { AlertEngine } from '../core/alerts/AlertEngine';
 import { AlertSeverity, parseRule } from '../core/alerts/AlertRule';
 import { ActionRegistry } from '../core/actions/ActionRegistry';
 import { ActionError } from '../core/actions/Action';
+import { ToolRegistry } from '../agents/analyst/tools/ToolRegistry';
+import { ToolError } from '../agents/analyst/tools/Tool';
+import { builtInTools } from '../agents/analyst/tools/tools';
 import { DeterministicNarrativeAdapter } from '../agents/analyst/narrative/DeterministicNarrativeAdapter';
 import { ClaudeNarrativeAdapter } from '../agents/analyst/narrative/ClaudeNarrativeAdapter';
 
@@ -90,6 +93,13 @@ const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
 const cases = new CaseStore(path.join(DATA_ROOT, 'cases.json'));
 const alerts = new AlertStore(path.join(DATA_ROOT, 'alerts.json'));
 const actions = new ActionRegistry(graph, audit, path.join(DATA_ROOT, 'pending-actions.json'));
+const tools = new ToolRegistry(
+  graph,
+  vectors,
+  audit,
+  path.join(DATA_ROOT, 'sandbox'),
+  builtInTools(riskScorer)
+);
 const alertEngine = new AlertEngine(
   graph,
   alerts,
@@ -682,6 +692,44 @@ app.post('/api/platform/ingest/prozorro/pull', async (req, res) => {
 });
 
 /**
+ * The read tools an analyst - or an agent acting for one - may call.
+ *
+ * The catalogue lists tools the caller cannot use as well, with the level
+ * named. Hiding them would leave a planner unable to say "this needs a
+ * clearance you do not have", which is a usable answer.
+ */
+app.get('/api/platform/tools', (req, res) => {
+  res.json({ tools: tools.catalogue(req.principal!) });
+});
+
+/**
+ * Calls one tool.
+ *
+ * The caller's rights are checked here, on this call, rather than once at the
+ * start of a session. With a session-level check the first permitted call
+ * opens the door for the rest; with a per-call check a plan does exactly the
+ * steps its caller is entitled to and stops at the one it is not.
+ *
+ * Nothing reachable from here writes. Changing the graph goes through
+ * /api/platform/actions, which has preconditions and a two-person rule where
+ * it matters - so a planner has no path to a write at all.
+ */
+app.post('/api/platform/tools/:name', async (req, res) => {
+  try {
+    const { result, record } = await tools.call(
+      String(req.params.name),
+      req.body ?? {},
+      req.principal!,
+      req.viewer!
+    );
+    res.json({ tool: record.tool, summary: result.summary, data: result.data, shape: result.shape });
+  } catch (err) {
+    if (err instanceof ToolError) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
  * Typed operations that change the graph.
  *
  * Everything that wrote before this came in through ingestion: the platform
@@ -1265,4 +1313,5 @@ export {
   alerts,
   alertEngine,
   actions,
+  tools,
 };
