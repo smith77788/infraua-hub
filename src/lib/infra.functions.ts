@@ -9,6 +9,7 @@ import {
   mercToLatLon,
   moreSevereType,
   type AlertZone,
+  type FirePoint,
   type FrontlineArea,
   type Threat,
   type ThreatType,
@@ -848,6 +849,146 @@ export const getFrontline = createServerFn({ method: "GET" }).handler(
       return payload;
     } catch {
       return { areas: [], datetime: "", degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
+// Активні пожежі — NASA FIRMS Global 24h CSV (keyless). Порт модуля osiris/geo.
+// Тягнемо глобальний CSV, фільтруємо по Україні, кешуємо. Термоточки — не лише
+// удари: с/г випали, лісові пожежі теж; тому підписуємо як «теплові аномалії».
+const FIRMS_SOURCES = [
+  "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv",
+  "https://firms.modaps.eosdis.nasa.gov/data/active_fire/modis-c6.1/csv/MODIS_C6_1_Global_24h.csv",
+];
+
+interface FiresPayload {
+  fires: FirePoint[];
+  source: string;
+  fetchedAt: string;
+  degraded: boolean;
+}
+
+export const getFires = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FiresPayload> => {
+    const cached = readCache<FiresPayload>("fires", 20 * 60 * 1000);
+    if (cached) return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      for (const url of FIRMS_SOURCES) {
+        try {
+          const res = await fetch(url, {
+            signal: controller.signal,
+            headers: { "User-Agent": USER_AGENT },
+          });
+          if (!res.ok) continue;
+          const text = await res.text();
+          const nl = text.indexOf("\n");
+          if (nl < 0) continue;
+          const header = text.slice(0, nl).trim().split(",");
+          const li = header.indexOf("latitude");
+          const oi = header.indexOf("longitude");
+          const ci = header.indexOf("confidence");
+          const fi = header.indexOf("frp");
+          const di = header.indexOf("acq_date");
+          const ti = header.indexOf("acq_time");
+          const ni = header.indexOf("daynight");
+          if (li < 0 || oi < 0) continue;
+          const fires: FirePoint[] = [];
+          let pos = nl + 1;
+          while (pos < text.length && fires.length < 4000) {
+            let end = text.indexOf("\n", pos);
+            if (end < 0) end = text.length;
+            const line = text.slice(pos, end);
+            pos = end + 1;
+            if (!line) continue;
+            const c = line.split(",");
+            const lat = Number(c[li]);
+            const lon = Number(c[oi]);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+            if (
+              lat < UA_BBOX.south ||
+              lat > UA_BBOX.north ||
+              lon < UA_BBOX.west ||
+              lon > UA_BBOX.east
+            )
+              continue;
+            fires.push({
+              lat,
+              lon,
+              frp: fi >= 0 ? Number(c[fi]) || 0 : 0,
+              confidence: ci >= 0 ? (c[ci] ?? "") : "",
+              acqDate: di >= 0 ? (c[di] ?? "") : "",
+              acqTime: ti >= 0 ? (c[ti] ?? "") : "",
+              daynight: ni >= 0 ? (c[ni] ?? "") : "",
+            });
+          }
+          const payload: FiresPayload = {
+            fires,
+            source: url.includes("SUOMI") ? "NASA FIRMS (VIIRS)" : "NASA FIRMS (MODIS)",
+            fetchedAt: new Date().toISOString(),
+            degraded: false,
+          };
+          if (fires.length) writeCache("fires", payload);
+          return payload;
+        } catch {
+          continue;
+        }
+      }
+      return { fires: [], source: "", fetchedAt: new Date().toISOString(), degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
+// Космічна погода — планетарний Kp-індекс (NOAA SWPC, keyless). Геомагнітні бурі
+// погіршують ГНСС/КХ-звʼязок — релевантно для навігації й РЕБ-фону. Порт модуля
+// osiris/geo; це індикатор стану, не шар карти.
+const KP_ENDPOINT = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json";
+
+export interface SpaceWeather {
+  kp: number;
+  /** quiet | unsettled | storm */
+  level: "quiet" | "unsettled" | "storm";
+  /** G-шкала бурі (0 = немає), 1..5. */
+  gScale: number;
+  observedAt: string;
+  degraded: boolean;
+}
+
+export const getSpaceWeather = createServerFn({ method: "GET" }).handler(
+  async (): Promise<SpaceWeather> => {
+    const cached = readCache<SpaceWeather>("spaceweather", 20 * 60 * 1000);
+    if (cached) return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    try {
+      const res = await fetch(KP_ENDPOINT, {
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`kp ${res.status}`);
+      const rows = (await res.json()) as Array<{ time_tag?: string; Kp?: number }>;
+      let last: { time_tag?: string; Kp?: number } | undefined;
+      for (const r of rows) if (typeof r?.Kp === "number") last = r;
+      if (!last || typeof last.Kp !== "number") throw new Error("no kp");
+      const kp = Math.round(last.Kp * 10) / 10;
+      const gScale = kp >= 5 ? Math.min(5, Math.floor(kp) - 4) : 0;
+      const level: SpaceWeather["level"] = kp >= 5 ? "storm" : kp >= 4 ? "unsettled" : "quiet";
+      const payload: SpaceWeather = {
+        kp,
+        level,
+        gScale,
+        observedAt: last.time_tag ?? "",
+        degraded: false,
+      };
+      writeCache("spaceweather", payload);
+      return payload;
+    } catch {
+      return { kp: 0, level: "quiet", gScale: 0, observedAt: "", degraded: true };
     } finally {
       clearTimeout(timer);
     }

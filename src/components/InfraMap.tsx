@@ -15,7 +15,13 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import { type AlertZone, type FrontlineArea, type Threat, type ThreatType } from "@/lib/air";
+import {
+  type AlertZone,
+  type FirePoint,
+  type FrontlineArea,
+  type Threat,
+  type ThreatType,
+} from "@/lib/air";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { type AlertRegion } from "@/lib/alerts";
 import {
@@ -36,6 +42,8 @@ interface Props {
   threats: Threat[];
   frontline: FrontlineArea[];
   showFrontline: boolean;
+  fires: FirePoint[];
+  showFires: boolean;
   alarmIds: Set<string>;
   showLinks: boolean;
   riskIds: Set<string>;
@@ -486,6 +494,8 @@ export default function InfraMap({
   threats,
   frontline,
   showFrontline,
+  fires,
+  showFires,
   showLinks,
   riskIds,
   impactedIds,
@@ -550,6 +560,43 @@ export default function InfraMap({
               </Polygon>
             )),
           )
+        : null}
+
+      {/* Активні пожежі (NASA FIRMS): теплові аномалії за 24 год */}
+      {showFires
+        ? fires.map((f, i) => {
+            const hot = f.frp >= 30;
+            const color = hot ? "#ff3b30" : f.frp >= 8 ? "#ff7a1a" : "#ffb020";
+            return (
+              <CircleMarker
+                key={`fire-${i}`}
+                center={[f.lat, f.lon]}
+                radius={hot ? 5 : 3.5}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.55,
+                  weight: 1,
+                  opacity: 0.85,
+                }}
+              >
+                <Popup>
+                  <div className="space-y-0.5 font-sans text-xs">
+                    <p className="font-semibold" style={{ color }}>
+                      Теплова аномалія (пожежа)
+                    </p>
+                    <p className="opacity-80">
+                      FRP {Math.round(f.frp)} МВт · впевненість {f.confidence || "—"}
+                    </p>
+                    <p className="opacity-70">
+                      {f.acqDate} {f.acqTime} UTC · {f.daynight === "N" ? "ніч" : "день"}
+                    </p>
+                    <p className="opacity-60">Джерело: NASA FIRMS (24 год)</p>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })
         : null}
 
       {/* Зони тривог: реальні полігони регіонів, або кола-фолбек */}

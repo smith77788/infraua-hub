@@ -182,3 +182,16 @@ export interface FrontlineArea {
   color: string;
   status: string;
 }
+
+/** Термоточка активної пожежі (NASA FIRMS, VIIRS/MODIS, 24 год). */
+export interface FirePoint {
+  lat: number;
+  lon: number;
+  /** Fire Radiative Power, МВт (інтенсивність). */
+  frp: number;
+  /** Впевненість детекції: low | nominal | high (VIIRS) або 0–100 (MODIS). */
+  confidence: string;
+  acqDate: string;
+  acqTime: string;
+  daynight: string;
+}

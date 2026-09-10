@@ -41,6 +41,7 @@ import EntityTable from "@/components/EntityTable";
 import OperatorPanel from "@/components/OperatorPanel";
 import SourceHealth from "@/components/SourceHealth";
 import HudClock from "@/components/HudClock";
+import MapLegend from "@/components/MapLegend";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,9 @@ import {
   getFacilities,
   getPowerLines,
   getFacilityTiles,
+  getFires,
   getFrontline,
+  getSpaceWeather,
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
@@ -263,6 +266,22 @@ function Console() {
     staleTime: 30 * 60 * 1000,
     refetchInterval: 30 * 60 * 1000,
   });
+  // Активні пожежі (NASA FIRMS) — оновлюються кілька разів на добу.
+  const firesFn = useServerFn(getFires);
+  const firesQuery = useQuery({
+    queryKey: ["fires"],
+    queryFn: () => firesFn(),
+    staleTime: 20 * 60 * 1000,
+    refetchInterval: 20 * 60 * 1000,
+  });
+  // Космічна погода (NOAA Kp) — індикатор геомагнітних бур (ГНСС/КХ).
+  const spaceWeatherFn = useServerFn(getSpaceWeather);
+  const spaceWeatherQuery = useQuery({
+    queryKey: ["space-weather"],
+    queryFn: () => spaceWeatherFn(),
+    staleTime: 20 * 60 * 1000,
+    refetchInterval: 20 * 60 * 1000,
+  });
   /*
    * Звʼязок з аналітичною платформою. Ключ лишається на сервері, тому і статус, і
    * саме надсилання — серверні функції. Незаданий звʼязок — штатний стан:
@@ -292,6 +311,7 @@ function Console() {
   const [showLinks, setShowLinks] = useState(true);
   const [showGraph, setShowGraph] = useState(false);
   const [showFrontline, setShowFrontline] = useState(true);
+  const [showFires, setShowFires] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
@@ -319,6 +339,7 @@ function Console() {
   const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
   const frontline = useMemo(() => frontlineQuery.data?.areas ?? [], [frontlineQuery.data]);
+  const fires = useMemo(() => firesQuery.data?.fires ?? [], [firesQuery.data]);
   // Одна привʼязка на консоль: її потребують і тривоги, і фокус по області.
   const regionOf = useMemo(() => assignRegions(allFacilities, regions), [allFacilities, regions]);
   const alarmIds = useMemo(() => {
@@ -645,6 +666,24 @@ function Console() {
             </span>
           </>
         ) : null}
+        {spaceWeatherQuery.data && !spaceWeatherQuery.data.degraded ? (
+          <>
+            <span className="opacity-40">·</span>
+            <span
+              className={`hidden items-center gap-1.5 sm:flex ${
+                spaceWeatherQuery.data.level === "storm"
+                  ? "text-red-300"
+                  : spaceWeatherQuery.data.level === "unsettled"
+                    ? "text-amber-300"
+                    : "text-muted-foreground"
+              }`}
+              title="Планетарний Kp-індекс (NOAA). Бурі погіршують ГНСС/навігацію."
+            >
+              Kp {spaceWeatherQuery.data.kp}
+              {spaceWeatherQuery.data.gScale > 0 ? ` · буря G${spaceWeatherQuery.data.gScale}` : ""}
+            </span>
+          </>
+        ) : null}
       </div>
 
       <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
@@ -865,6 +904,21 @@ function Console() {
             </button>
 
             <button
+              onClick={() => setShowFires((v) => !v)}
+              disabled={fires.length === 0}
+              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
+                showFires
+                  ? "border-orange-500/60 text-orange-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              <Activity className="size-3.5" /> Пожежі (NASA FIRMS, 24 год)
+              {fires.length > 0 ? (
+                <span className="ml-auto font-mono text-[10px] opacity-70">{fires.length}</span>
+              ) : null}
+            </button>
+
+            <button
               onClick={() => setShowGraph((v) => !v)}
               disabled={threatGraph.nodes.length === 0}
               className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
@@ -1020,6 +1074,8 @@ function Console() {
                     threats={threats}
                     frontline={frontline}
                     showFrontline={showFrontline}
+                    fires={fires}
+                    showFires={showFires}
                     alarmIds={alarmIds}
                     showLinks={showLinks}
                     riskIds={riskIds}
@@ -1052,6 +1108,7 @@ function Console() {
               ) : null}
 
               <TimelinePlayer onCursor={setPlayCursor} />
+              <MapLegend />
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
