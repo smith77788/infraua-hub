@@ -14,6 +14,12 @@ export interface GraphNode {
   label: string;
   properties: Record<string, unknown>;
   clearance: ClearanceLevel;
+  /**
+   * Need-to-know compartments required on top of the level (core/security/
+   * Marking.ts). Absent on every record written before compartments existed,
+   * which reads correctly as "the level alone decides".
+   */
+  compartments?: string[];
   source_doc_ids: string[];
 }
 
@@ -23,5 +29,6 @@ export interface GraphEdge {
   relation: string;
   properties: Record<string, unknown>;
   clearance: ClearanceLevel;
+  compartments?: string[];
   source_doc_ids: string[];
 }

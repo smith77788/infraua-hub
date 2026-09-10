@@ -118,7 +118,8 @@ export class StructuredRecordConnector {
     mapping: StructuredMapping,
     source: string,
     sector: string,
-    clearance: ClearanceLevel
+    clearance: ClearanceLevel,
+    compartments: readonly string[] = []
   ): StructuredIngestResult {
     if (!Array.isArray(records)) {
       throw new Error('records must be an array of flat objects');
@@ -156,6 +157,7 @@ export class StructuredRecordConnector {
             label: rawLabel,
             properties: pickProperties(row, entitySpec.properties),
             clearance,
+            compartments,
             sourceDocId: documentId,
           });
           nodesCreated.push(nodeId);
@@ -178,6 +180,7 @@ export class StructuredRecordConnector {
               relation: edgeSpec.relation,
               properties: pickProperties(row, edgeSpec.properties),
               clearance,
+              compartments,
               sourceDocId: documentId,
             });
             edgesCreated.push(edgeLabel);
@@ -186,7 +189,7 @@ export class StructuredRecordConnector {
           }
         }
 
-        const doc: IndexedDocument = { id: documentId, text: summarizeRow(row), source, sector, clearance };
+        const doc: IndexedDocument = { id: documentId, text: summarizeRow(row), source, sector, clearance, ...(compartments.length ? { compartments: [...compartments] } : {}) };
         this.vectors.addDocument(doc);
         documents.push(doc);
       });
@@ -196,6 +199,7 @@ export class StructuredRecordConnector {
       source,
       sector,
       clearance,
+      compartments,
       rowsProcessed: records.length,
       documentIds: documents.map((d) => d.id),
       nodesCreated,

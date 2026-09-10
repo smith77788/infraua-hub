@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { ClearanceLevel } from '../security/Clearance';
+import { asViewer, canRead, unionCompartments, ViewerInput } from '../security/Marking';
 
 /**
  * Cases: the unit of work an analyst actually keeps.
@@ -24,6 +25,11 @@ import { ClearanceLevel } from '../security/Clearance';
  * classified finding to a shared case narrows who can read that case. That is
  * correct - the alternative is disclosure - but it is surprising if you do not
  * expect it, so `attachFinding` reports when it happened.
+ *
+ * The same rule governs need-to-know: a case's compartments are the **union**
+ * of the compartments on everything attached to it. A case holding one fact
+ * out of a restricted circle is itself in that circle, and every further
+ * attachment can only widen the set of circles required to open it.
  */
 
 export interface CaseFinding {
@@ -37,6 +43,8 @@ export interface CaseFinding {
   entityIds: string[];
   /** Highest classification among the entities this finding rests on. */
   clearance: ClearanceLevel;
+  /** Every compartment carried by the entities this finding rests on. */
+  compartments?: string[];
   attachedAt: string;
 }
 
@@ -52,6 +60,8 @@ export interface AnalystCase {
   title: string;
   /** High-water mark: the highest clearance of anything attached. */
   clearance: ClearanceLevel;
+  /** High-water mark for need-to-know: the union of every attached compartment. */
+  compartments?: string[];
   createdAt: string;
   updatedAt: string;
   createdByKeyId: string;
@@ -66,6 +76,8 @@ export interface AttachResult {
   /** True when attaching this finding raised the case's classification. */
   clearanceRaised: boolean;
   previousClearance: ClearanceLevel;
+  /** Compartments the attachment added to the case, if any. */
+  compartmentsAdded: string[];
 }
 
 export class CaseStore {
@@ -86,6 +98,7 @@ export class CaseStore {
   create(input: {
     title: string;
     clearance: ClearanceLevel;
+    compartments?: readonly string[];
     createdByKeyId: string;
   }): AnalystCase {
     const title = input.title.trim();
@@ -96,6 +109,7 @@ export class CaseStore {
       id: `case-${crypto.randomUUID()}`,
       title,
       clearance: input.clearance,
+      ...(input.compartments?.length ? { compartments: unionCompartments([input.compartments]) } : {}),
       createdAt: now,
       updatedAt: now,
       createdByKeyId: input.createdByKeyId,
@@ -113,16 +127,17 @@ export class CaseStore {
    * they are filtered out rather than returned redacted - a redacted entry
    * still tells the reader that a case exists.
    */
-  list(clearance: ClearanceLevel): AnalystCase[] {
+  list(who: ViewerInput): AnalystCase[] {
+    const v = asViewer(who);
     return Array.from(this.cases.values())
-      .filter((c) => c.clearance <= clearance)
+      .filter((c) => canRead(v, c))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   /** Null both when the case does not exist and when it is above the caller. */
-  get(id: string, clearance: ClearanceLevel): AnalystCase | null {
+  get(id: string, who: ViewerInput): AnalystCase | null {
     const found = this.cases.get(id);
-    if (!found || found.clearance > clearance) return null;
+    if (!found || !canRead(who, found)) return null;
     return found;
   }
 
@@ -133,14 +148,15 @@ export class CaseStore {
    * *and* for the finding - which is implied, since a finding can only contain
    * entities the investigation was allowed to return.
    */
-  attachFinding(id: string, clearance: ClearanceLevel, finding: Omit<CaseFinding, 'attachedAt'>): AttachResult | null {
-    const target = this.get(id, clearance);
+  attachFinding(id: string, who: ViewerInput, finding: Omit<CaseFinding, 'attachedAt'>): AttachResult | null {
+    const target = this.get(id, who);
     if (!target) return null;
 
     const previousClearance = target.clearance;
     target.findings.push({ ...finding, attachedAt: new Date().toISOString() });
     // High-water mark: never lower, only raise.
     target.clearance = Math.max(target.clearance, finding.clearance);
+    const compartmentsAdded = this.raiseCompartments(target, finding.compartments);
     target.updatedAt = new Date().toISOString();
     this.persist();
 
@@ -148,11 +164,28 @@ export class CaseStore {
       case: target,
       clearanceRaised: target.clearance > previousClearance,
       previousClearance,
+      compartmentsAdded,
     };
   }
 
-  addNote(id: string, clearance: ClearanceLevel, text: string, authorKeyId: string): AnalystCase | null {
-    const target = this.get(id, clearance);
+  /**
+   * Widens the case's need-to-know to cover what was just attached, and
+   * reports what that added. Returning the difference rather than the new
+   * total is what lets the API tell an analyst "this attachment just put the
+   * case behind a circle you are in and your colleague is not" - the moment
+   * that surprise is cheap to fix, instead of three weeks later.
+   */
+  private raiseCompartments(target: AnalystCase, incoming: readonly string[] | undefined): string[] {
+    if (!incoming?.length) return [];
+    const before = new Set(target.compartments ?? []);
+    const added = incoming.filter((c) => !before.has(c));
+    if (added.length === 0) return [];
+    target.compartments = unionCompartments([target.compartments, incoming]);
+    return added.sort();
+  }
+
+  addNote(id: string, who: ViewerInput, text: string, authorKeyId: string): AnalystCase | null {
+    const target = this.get(id, who);
     if (!target) return null;
     const trimmed = text.trim();
     if (!trimmed) throw new Error('A note needs text.');
@@ -171,16 +204,18 @@ export class CaseStore {
    */
   pinEntities(
     id: string,
-    clearance: ClearanceLevel,
+    who: ViewerInput,
     entityIds: string[],
     entityClearance: ClearanceLevel,
+    entityCompartments: readonly string[] = [],
   ): AttachResult | null {
-    const target = this.get(id, clearance);
+    const target = this.get(id, who);
     if (!target) return null;
 
     const previousClearance = target.clearance;
     target.pinnedEntityIds = Array.from(new Set([...target.pinnedEntityIds, ...entityIds]));
     target.clearance = Math.max(target.clearance, entityClearance);
+    const compartmentsAdded = this.raiseCompartments(target, entityCompartments);
     target.updatedAt = new Date().toISOString();
     this.persist();
 
@@ -188,6 +223,7 @@ export class CaseStore {
       case: target,
       clearanceRaised: target.clearance > previousClearance,
       previousClearance,
+      compartmentsAdded,
     };
   }
 

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ClearanceLevel, clearanceAtLeast } from '../security/Clearance';
+import { ClearanceLevel } from '../security/Clearance';
+import { asViewer, canRead, mergeCompartments, ViewerInput } from '../security/Marking';
 import { GraphEdge, GraphNode, NodeType } from './types';
 import { OntologyManifest } from './OntologyManifest';
 
@@ -16,10 +17,13 @@ export interface PathResult {
  * in swap later (same reasoning as FileTaskRepository vs Postgres in
  * the software-factory core: no infra needed to run or test this yet).
  *
- * Every read method takes the caller's clearance and filters nodes/
- * edges above it out *before* traversal, not after - so a restricted
- * fact can never leak by being reachable through an intermediate node
- * the caller isn't allowed to see either.
+ * Every read method takes the caller's view - a clearance level, or a
+ * level plus the compartments they are read into (core/security/
+ * Marking.ts) - and filters nodes/edges they cannot see out *before*
+ * traversal, not after. So a restricted fact can never leak by being
+ * reachable through an intermediate node the caller isn't allowed to
+ * see either, and that holds for need-to-know exactly as it does for
+ * the hierarchical level.
  */
 export class GraphStore {
   private nodes = new Map<string, GraphNode>();
@@ -69,15 +73,18 @@ export class GraphStore {
     label: string;
     properties?: Record<string, unknown>;
     clearance?: ClearanceLevel;
+    compartments?: readonly string[];
     sourceDocId?: string;
   }): GraphNode {
     const existing = this.nodes.get(input.id);
+    const compartments = mergeCompartments(existing?.compartments, input.compartments);
     const node: GraphNode = {
       id: input.id,
       type: input.type,
       label: input.label,
       properties: { ...(existing?.properties ?? {}), ...(input.properties ?? {}) },
       clearance: input.clearance ?? existing?.clearance ?? ClearanceLevel.PUBLIC,
+      ...(compartments.length > 0 ? { compartments } : {}),
       source_doc_ids: Array.from(
         new Set([...(existing?.source_doc_ids ?? []), ...(input.sourceDocId ? [input.sourceDocId] : [])])
       ),
@@ -93,6 +100,7 @@ export class GraphStore {
     relation: string;
     properties?: Record<string, unknown>;
     clearance?: ClearanceLevel;
+    compartments?: readonly string[];
     sourceDocId?: string;
   }): GraphEdge {
     const sourceNode = this.nodes.get(input.source);
@@ -110,12 +118,14 @@ export class GraphStore {
       (e) => e.source === input.source && e.target === input.target && e.relation === input.relation
     );
     const existing = existingIdx >= 0 ? this.edges[existingIdx] : undefined;
+    const edgeCompartments = mergeCompartments(existing?.compartments, input.compartments);
     const edge: GraphEdge = {
       source: input.source,
       target: input.target,
       relation: input.relation,
       properties: { ...(existing?.properties ?? {}), ...(input.properties ?? {}) },
       clearance: input.clearance ?? existing?.clearance ?? ClearanceLevel.PUBLIC,
+      ...(edgeCompartments.length > 0 ? { compartments: edgeCompartments } : {}),
       source_doc_ids: Array.from(
         new Set([...(existing?.source_doc_ids ?? []), ...(input.sourceDocId ? [input.sourceDocId] : [])])
       ),
@@ -175,39 +185,41 @@ export class GraphStore {
     return { nodesRemoved: removed, edgesRemoved: before - this.edges.length };
   }
 
-  getNode(id: string, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): GraphNode | null {
+  getNode(id: string, who: ViewerInput = ClearanceLevel.TOP_SECRET): GraphNode | null {
     const node = this.nodes.get(id);
-    if (!node || !clearanceAtLeast(clearance, node.clearance)) return null;
+    if (!node || !canRead(who, node)) return null;
     return node;
   }
 
-  findByType(type: NodeType, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): GraphNode[] {
-    return Array.from(this.nodes.values()).filter((n) => n.type === type && clearanceAtLeast(clearance, n.clearance));
+  findByType(type: NodeType, who: ViewerInput = ClearanceLevel.TOP_SECRET): GraphNode[] {
+    const v = asViewer(who);
+    return Array.from(this.nodes.values()).filter((n) => n.type === type && canRead(v, n));
   }
 
-  findByLabelContains(text: string, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): GraphNode[] {
+  findByLabelContains(text: string, who: ViewerInput = ClearanceLevel.TOP_SECRET): GraphNode[] {
     const needle = text.toLowerCase();
-    return Array.from(this.nodes.values()).filter(
-      (n) => clearanceAtLeast(clearance, n.clearance) && n.label.toLowerCase().includes(needle)
-    );
+    const v = asViewer(who);
+    return Array.from(this.nodes.values()).filter((n) => canRead(v, n) && n.label.toLowerCase().includes(needle));
   }
 
-  neighbors(nodeId: string, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): { node: GraphNode; edge: GraphEdge }[] {
+  neighbors(nodeId: string, who: ViewerInput = ClearanceLevel.TOP_SECRET): { node: GraphNode; edge: GraphEdge }[] {
+    const v = asViewer(who);
     const results: { node: GraphNode; edge: GraphEdge }[] = [];
     for (const edge of this.edges) {
-      if (!clearanceAtLeast(clearance, edge.clearance)) continue;
+      if (!canRead(v, edge)) continue;
       let otherId: string | null = null;
       if (edge.source === nodeId) otherId = edge.target;
       else if (edge.target === nodeId) otherId = edge.source;
       if (!otherId) continue;
-      const other = this.getNode(otherId, clearance);
+      const other = this.getNode(otherId, v);
       if (other) results.push({ node: other, edge });
     }
     return results;
   }
 
   /** Breadth-first shortest path, visible-subgraph only (clearance-filtered). */
-  shortestPath(fromId: string, toId: string, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): PathResult | null {
+  shortestPath(fromId: string, toId: string, who: ViewerInput = ClearanceLevel.TOP_SECRET): PathResult | null {
+    const clearance = asViewer(who);
     if (!this.getNode(fromId, clearance) || !this.getNode(toId, clearance)) return null;
     if (fromId === toId) return { nodes: [this.getNode(fromId, clearance)!], edges: [] };
 
@@ -234,7 +246,7 @@ export class GraphStore {
     fromId: string,
     toId: string,
     cameFrom: Map<string, { prev: string; edge: GraphEdge }>,
-    clearance: ClearanceLevel
+    clearance: ViewerInput
   ): PathResult {
     const nodes: GraphNode[] = [this.getNode(toId, clearance)!];
     const edges: GraphEdge[] = [];
@@ -249,7 +261,8 @@ export class GraphStore {
   }
 
   /** Neighbors up to `depth` hops, deduplicated - used to build an investigation's local subgraph. */
-  expand(nodeId: string, depth: number, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): PathResult {
+  expand(nodeId: string, depth: number, who: ViewerInput = ClearanceLevel.TOP_SECRET): PathResult {
+    const clearance = asViewer(who);
     const visitedNodes = new Map<string, GraphNode>();
     const visitedEdgeKeys = new Set<string>();
     const edges: GraphEdge[] = [];
@@ -277,10 +290,16 @@ export class GraphStore {
     return { nodes: Array.from(visitedNodes.values()), edges };
   }
 
-  toJSON(clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): PathResult {
+  toJSON(who: ViewerInput = ClearanceLevel.TOP_SECRET): PathResult {
+    const v = asViewer(who);
+    // Edges are filtered on their own marking *and* on both endpoints: an edge
+    // the caller may read between two nodes they may not is a relation with no
+    // visible ends, and reporting it would disclose that the ends exist.
+    const nodes = Array.from(this.nodes.values()).filter((n) => canRead(v, n));
+    const visible = new Set(nodes.map((n) => n.id));
     return {
-      nodes: Array.from(this.nodes.values()).filter((n) => clearanceAtLeast(clearance, n.clearance)),
-      edges: this.edges.filter((e) => clearanceAtLeast(clearance, e.clearance)),
+      nodes,
+      edges: this.edges.filter((e) => canRead(v, e) && visible.has(e.source) && visible.has(e.target)),
     };
   }
 }

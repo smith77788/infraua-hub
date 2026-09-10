@@ -5,6 +5,7 @@ import { VectorIndex, SearchHit } from '../../core/vector/VectorIndex';
 import { AuditLog } from '../../core/audit/AuditLog';
 import { Executor } from '../../core/execution/Executor';
 import { ClearanceLevel } from '../../core/security/Clearance';
+import { asViewer, ViewerInput } from '../../core/security/Marking';
 import { Guardrails } from '../../core/security/Guardrails';
 import { GraphEdge, GraphNode } from '../../core/graph/types';
 import { NarrativeAdapter, NarrativeInput } from './narrative/NarrativeAdapter';
@@ -69,10 +70,18 @@ export class InvestigatorAgent {
     fs.mkdirSync(sandboxDir, { recursive: true });
   }
 
-  async investigate(query: string, clearance: ClearanceLevel): Promise<InvestigationResult> {
+  async investigate(query: string, who: ViewerInput): Promise<InvestigationResult> {
+    // Resolved once so every step below - search, anchors, expansion - sees
+    // exactly the same view. Re-deriving it per step is how the steps drift.
+    const clearance = asViewer(who);
     const guardCheck = this.guardrails?.validateQuery(query);
     if (guardCheck && !guardCheck.allowed) {
-      const entry = this.audit.append('investigator-agent', 'query_blocked', { query, clearance, reason: guardCheck.reason });
+      const entry = this.audit.append('investigator-agent', 'query_blocked', {
+        query,
+        clearance: clearance.clearance,
+        compartments: Array.from(clearance.compartments),
+        reason: guardCheck.reason,
+      });
       return {
         query,
         summary: `Query blocked by input guardrails: ${guardCheck.reason}`,
@@ -132,7 +141,8 @@ export class InvestigatorAgent {
 
     const entry = this.audit.append('investigator-agent', 'investigate', {
       query,
-      clearance,
+      clearance: clearance.clearance,
+      compartments: Array.from(clearance.compartments),
       plan,
       hitCount: hits.length,
       anchorIds: anchors.map((a) => a.id),
@@ -217,7 +227,7 @@ export class InvestigatorAgent {
    * near-certain reference. That falls out of the data and needs no
    * maintenance as the corpus changes.
    */
-  private findAnchorNodes(query: string, clearance: ClearanceLevel): GraphNode[] {
+  private findAnchorNodes(query: string, clearance: ViewerInput): GraphNode[] {
     const all = [
       ...this.graph.findByType('Person', clearance),
       ...this.graph.findByType('Organization', clearance),

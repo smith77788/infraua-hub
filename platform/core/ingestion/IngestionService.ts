@@ -54,10 +54,23 @@ export class IngestionService {
     private readonly extractor: EntityExtractor = new EntityExtractor()
   ) {}
 
-  ingest(text: string, sourceName: string, sector: string, clearance: ClearanceLevel): IngestResult {
+  ingest(
+    text: string,
+    sourceName: string,
+    sector: string,
+    clearance: ClearanceLevel,
+    compartments: readonly string[] = []
+  ): IngestResult {
     const documentId = `doc-${crypto.createHash('sha256').update(sourceName + text).digest('hex').slice(0, 12)}`;
 
-    this.vectors.addDocument({ id: documentId, text, source: sourceName, sector, clearance });
+    this.vectors.addDocument({
+      id: documentId,
+      text,
+      source: sourceName,
+      sector,
+      clearance,
+      ...(compartments.length ? { compartments: [...compartments] } : {}),
+    });
 
     const extraction = this.extractor.extract(text);
     const nodesCreated: string[] = [];
@@ -66,7 +79,7 @@ export class IngestionService {
 
     for (const n of extraction.nodes) {
       const id = slugify(n.label);
-      this.graph.upsertNode({ id, type: n.type, label: n.label, properties: n.properties, clearance, sourceDocId: documentId });
+      this.graph.upsertNode({ id, type: n.type, label: n.label, properties: n.properties, clearance, compartments, sourceDocId: documentId });
       nodesCreated.push(id);
     }
     for (const e of extraction.edges) {
@@ -81,6 +94,7 @@ export class IngestionService {
           relation: e.relation,
           properties: e.properties,
           clearance,
+          compartments,
           sourceDocId: documentId,
         });
         edgesCreated.push(edgeLabel);
@@ -99,6 +113,7 @@ export class IngestionService {
       sourceName,
       sector,
       clearance,
+      compartments,
       nodesCreated,
       edgesCreated,
       edgesRejected,

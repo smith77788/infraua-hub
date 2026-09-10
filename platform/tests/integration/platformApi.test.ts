@@ -17,6 +17,10 @@ const KEYS = {
   public: 'test-public',
   internal: 'test-internal',
   secret: 'test-secret',
+  /** Read into a circle. Same level as `secret`, different view. */
+  gridInsider: 'test-grid-insider',
+  /** Cleared to the top, read into nothing - the case a level alone gets wrong. */
+  gridOutsider: 'test-grid-outsider',
 };
 
 let server: http.Server;
@@ -52,6 +56,8 @@ beforeAll(async () => {
     [KEYS.public]: 'PUBLIC',
     [KEYS.internal]: 'INTERNAL',
     [KEYS.secret]: 'SECRET',
+    [KEYS.gridInsider]: { principal: 'insider', clearance: 'SECRET', compartments: ['grid'] },
+    [KEYS.gridOutsider]: { principal: 'outsider', clearance: 'TOP_SECRET' },
   });
   // High enough that the functional tests below never trip it; the rate-limit
   // test uses its own tiny budget via a separate limiter unit test.
@@ -726,5 +732,70 @@ describe('platform API: retraction reaches search too', () => {
     expect(res.status).toBe(200);
     expect(res.body.documentsRemoved).toBe(0);
     expect(res.body.nodesRemoved).toEqual([]);
+  });
+});
+
+describe('platform API: need-to-know', () => {
+  const payload = {
+    facilities: [
+      {
+        id: 'ntk-1',
+        name: 'Компартментована Підстанція Ковчег',
+        category: 'substation',
+        lat: 49.1,
+        lon: 33.4,
+        source: 'https://openstreetmap.org/way/12345',
+      },
+    ],
+    events: [],
+    dependencies: [],
+  };
+
+  it('marks an ingested batch into the compartments the caller holds', async () => {
+    const res = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.gridInsider,
+      body: { payload, source: 'ntk-batch', sector: 'infrastructure' },
+    });
+    expect(res.status).toBe(201);
+    // No compartments named in the request: it inherits the caller's own,
+    // which is the fail-closed default.
+    expect(res.body.compartments).toEqual(['grid']);
+  });
+
+  it('hides that data from a reader cleared higher but read into nothing', async () => {
+    const outside = await call('GET', '/api/platform/graph', { key: KEYS.gridOutsider });
+    expect(JSON.stringify(outside.body)).not.toContain('Ковчег');
+
+    const inside = await call('GET', '/api/platform/graph', { key: KEYS.gridInsider });
+    expect(JSON.stringify(inside.body)).toContain('Ковчег');
+  });
+
+  it('keeps it out of the analytics view as well, not only the raw graph', async () => {
+    const outside = await call('GET', '/api/platform/analytics', { key: KEYS.gridOutsider });
+    expect(JSON.stringify(outside.body)).not.toContain('Ковчег');
+  });
+
+  it('refuses to mark a write into a compartment the caller does not hold', async () => {
+    const res = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.gridInsider,
+      body: { payload, source: 'ntk-forbidden', sector: 'infrastructure', compartments: ['treasury'] },
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('treasury');
+  });
+
+  it('rejects a malformed compartment instead of dropping it', async () => {
+    const res = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.gridInsider,
+      body: { payload, source: 'ntk-bad', sector: 'infrastructure', compartments: ['not a compartment'] },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('tells the operator which view they are actually working in', async () => {
+    const res = await call('GET', '/api/platform/session', { key: KEYS.gridInsider });
+    expect(res.body.principal).toBe('insider');
+    expect(res.body.compartments).toEqual(['grid']);
+    expect(res.body.clearanceName).toBe('SECRET');
   });
 });

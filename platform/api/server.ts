@@ -15,8 +15,9 @@ import { InfraUAConnector, InfraUAPayload } from '../core/ingestion/InfraUAConne
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
+import { normalizeCompartments, unionCompartments, Viewer } from '../core/security/Marking';
 import { Guardrails } from '../core/security/Guardrails';
-import { EnvApiKeyAuth } from '../core/security/ApiKeyAuth';
+import { EnvApiKeyAuth, Principal } from '../core/security/ApiKeyAuth';
 import { RateLimiter } from '../core/security/RateLimiter';
 import { RiskScorer } from '../core/analytics/RiskScorer';
 import { betweenness, components, degrees, allShortestPaths } from '../core/analytics/GraphMetrics';
@@ -31,6 +32,10 @@ declare global {
     interface Request {
       callerClearance?: ClearanceLevel;
       callerKeyId?: string;
+      /** Who the key belongs to, and what they are read into. */
+      principal?: Principal;
+      /** The view every read on this request is filtered through. */
+      viewer?: Viewer;
     }
   }
 }
@@ -153,12 +158,24 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
     res.status(401).json({ error: 'Missing Authorization: Bearer <api-key> header.' });
     return;
   }
-  const clearance = apiKeyAuth.resolveClearance(key);
-  if (clearance === null) {
+  let principal: Principal | null;
+  try {
+    principal = apiKeyAuth.resolvePrincipal(key);
+  } catch (err) {
+    // A key whose configuration does not parse must be refused, not silently
+    // downgraded to "no compartments" - that would widen the key rather than
+    // reject it, which is the wrong direction for a configuration error.
+    console.error('Rejecting a key with malformed configuration:', err instanceof Error ? err.message : err);
+    res.status(401).json({ error: 'Key configuration is invalid.' });
+    return;
+  }
+  if (principal === null) {
     res.status(401).json({ error: 'Unknown API key.' });
     return;
   }
-  req.callerClearance = clearance;
+  req.principal = principal;
+  req.viewer = EnvApiKeyAuth.viewerOf(principal);
+  req.callerClearance = principal.clearance;
   // Identify the caller for rate limiting and audit by a hash of the key, so
   // the raw credential is never held on the request object or logged.
   req.callerKeyId = crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
@@ -178,13 +195,53 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
 app.use('/api/platform', requireApiKey);
 
 /**
+ * Resolves the compartments a write may be marked with.
+ *
+ * A caller may mark data into a circle they are themselves read into, and no
+ * other. Two failures are being prevented, and only the first is obvious: a
+ * caller inventing a compartment could mark data so that nobody at all can
+ * read it - a write-only hole in the middle of the graph, indistinguishable
+ * from data loss. The second is subtler: marking into a circle you are not in
+ * means writing a fact you can never see again to check, which is how a feed
+ * quietly poisons a compartment it has no relationship with.
+ *
+ * Defaults to the caller's own compartments when the request says nothing.
+ * That is the fail-closed direction: a principal working inside a circle
+ * ingests into that circle unless they deliberately say otherwise.
+ */
+function resolveWriteCompartments(req: Request): { compartments: string[] } | { error: string } {
+  const principal = req.principal!;
+  const raw = (req.body ?? {}).compartments;
+  if (raw === undefined) return { compartments: principal.compartments };
+
+  let requested: string[];
+  try {
+    requested = normalizeCompartments(raw);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+  const held = new Set(principal.compartments);
+  const notHeld = requested.filter((c) => !held.has(c));
+  if (notHeld.length > 0) {
+    return { error: `You are not read into: ${notHeld.join(', ')}. A write cannot be marked into a compartment you do not hold.` };
+  }
+  return { compartments: requested };
+}
+
+/**
  * Lets the console show the operator which clearance they are actually
  * working at. It is deliberately the *only* way it learns that: the value is
  * derived from the key server-side and never accepted from the client.
  */
 app.get('/api/platform/session', (req, res) => {
-  const clearance = req.callerClearance!;
-  res.json({ clearance, clearanceName: ClearanceLevel[clearance] });
+  const principal = req.principal!;
+  res.json({
+    principal: principal.id,
+    clearance: principal.clearance,
+    clearanceName: ClearanceLevel[principal.clearance],
+    compartments: principal.compartments,
+    purposes: principal.purposes,
+  });
 });
 
 app.post('/api/platform/documents', (req, res) => {
@@ -199,9 +256,18 @@ app.post('/api/platform/documents', (req, res) => {
   // they aren't trusted to declassify).
   const requested = parseClearance(clearance, callerClearance);
   const level = Math.min(requested, callerClearance);
-  const result = ingestion.ingest(text, source, sector, level);
-  documents.append({ id: result.documentId, text, source, sector, clearance: level });
-  res.status(201).json(result);
+  const marks = resolveWriteCompartments(req);
+  if ('error' in marks) return res.status(403).json({ error: marks.error });
+  const result = ingestion.ingest(text, source, sector, level, marks.compartments);
+  documents.append({
+    id: result.documentId,
+    text,
+    source,
+    sector,
+    clearance: level,
+    ...(marks.compartments.length ? { compartments: marks.compartments } : {}),
+  });
+  res.status(201).json({ ...result, compartments: marks.compartments });
 });
 
 app.post('/api/platform/documents/structured', (req, res) => {
@@ -218,10 +284,12 @@ app.post('/api/platform/documents/structured', (req, res) => {
   const callerClearance = req.callerClearance!;
   const level = Math.min(parseClearance(clearance, callerClearance), callerClearance);
   try {
+    const marks = resolveWriteCompartments(req);
+    if ('error' in marks) return res.status(403).json({ error: marks.error });
     const rows: Record<string, string>[] = records ?? parseCsv(csv);
-    const result = structuredConnector.ingest(rows, mapping as StructuredMapping, source, sector, level);
+    const result = structuredConnector.ingest(rows, mapping as StructuredMapping, source, sector, level, marks.compartments);
     documents.appendMany(result.documents);
-    res.status(201).json(result);
+    res.status(201).json({ ...result, compartments: marks.compartments });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -246,14 +314,17 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
   const callerClearance = req.callerClearance!;
   const level = Math.min(parseClearance(clearance, ClearanceLevel.PUBLIC), callerClearance);
   try {
+    const marks = resolveWriteCompartments(req);
+    if ('error' in marks) return res.status(403).json({ error: marks.error });
     const result = infraUA.ingest(
       payload as InfraUAPayload,
       typeof source === 'string' && source ? source : 'infraua',
       typeof sector === 'string' && sector ? sector : 'infrastructure',
-      level
+      level,
+      marks.compartments
     );
     documents.appendMany(result.documents);
-    res.status(201).json(result);
+    res.status(201).json({ ...result, compartments: marks.compartments });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -287,6 +358,7 @@ app.post('/api/platform/retract', (req, res) => {
       nodesRemoved: result.nodesRemoved.length,
       edgesRemoved: result.edgesRemoved,
       documentsRemoved,
+      actor: req.principal!.id,
     });
     res.json({ ...result, documentsRemoved });
   } catch (err) {
@@ -298,7 +370,7 @@ app.post('/api/platform/investigate', async (req, res) => {
   const { query } = req.body ?? {};
   if (!query) return res.status(400).json({ error: 'query is required' });
   try {
-    const result = await investigator.investigate(query, req.callerClearance!);
+    const result = await investigator.investigate(query, req.viewer!);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -306,7 +378,7 @@ app.post('/api/platform/investigate', async (req, res) => {
 });
 
 app.get('/api/platform/graph', (req, res) => {
-  res.json(graph.toJSON(req.callerClearance!));
+  res.json(graph.toJSON(req.viewer!));
 });
 
 /**
@@ -319,8 +391,7 @@ app.get('/api/platform/graph', (req, res) => {
  * and that is the correct behaviour rather than a bug.
  */
 app.get('/api/platform/analytics', (req, res) => {
-  const clearance = req.callerClearance!;
-  const snapshot = graph.toJSON(clearance);
+  const snapshot = graph.toJSON(req.viewer!);
   const { nodes, edges } = snapshot;
 
   const risk = riskScorer.score(nodes, edges);
@@ -358,8 +429,7 @@ app.get('/api/platform/paths', (req, res) => {
     return res.status(400).json({ error: 'from and to query parameters are required' });
   }
 
-  const clearance = req.callerClearance!;
-  const { nodes, edges } = graph.toJSON(clearance);
+  const { nodes, edges } = graph.toJSON(req.viewer!);
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   // An id the caller cannot see must not be distinguishable from one that does
@@ -389,7 +459,7 @@ app.get('/api/platform/paths', (req, res) => {
  * something narrowed who can read the case.
  */
 app.get('/api/platform/cases', (req, res) => {
-  res.json({ cases: cases.list(req.callerClearance!) });
+  res.json({ cases: cases.list(req.viewer!) });
 });
 
 app.post('/api/platform/cases', (req, res) => {
@@ -402,14 +472,19 @@ app.post('/api/platform/cases', (req, res) => {
       title,
       // A new case starts at the creator's own level, not PUBLIC: it is about
       // to hold their work, and starting low would mean the first attachment
-      // always raises it.
+      // always raises it. The same argument carries to need-to-know, and in
+      // the same fail-closed direction: an analyst working inside a circle
+      // opens cases inside it.
       clearance: req.callerClearance!,
+      compartments: req.principal!.compartments,
       createdByKeyId: req.callerKeyId!,
     });
     audit.append('case-store', 'case_created', {
       caseId: created.id,
       title: created.title,
       clearance: created.clearance,
+      compartments: created.compartments ?? [],
+      actor: req.principal!.id,
       actorKeyId: req.callerKeyId,
     });
     res.status(201).json(created);
@@ -419,7 +494,7 @@ app.post('/api/platform/cases', (req, res) => {
 });
 
 app.get('/api/platform/cases/:id', (req, res) => {
-  const found = cases.get(req.params.id, req.callerClearance!);
+  const found = cases.get(req.params.id, req.viewer!);
   // Same 404 whether it does not exist or sits above the caller: a distinct
   // status would confirm that a classified case is there.
   if (!found) return res.status(404).json({ error: 'No such case in your view.' });
@@ -432,15 +507,15 @@ app.get('/api/platform/cases/:id', (req, res) => {
  * is no window in which a client could edit the summary in between.
  */
 app.post('/api/platform/cases/:id/findings', async (req, res) => {
-  const clearance = req.callerClearance!;
+  const view = req.viewer!;
   const { query } = req.body ?? {};
   if (!query) return res.status(400).json({ error: 'query is required' });
-  if (!cases.get(req.params.id, clearance)) {
+  if (!cases.get(req.params.id, view)) {
     return res.status(404).json({ error: 'No such case in your view.' });
   }
 
   try {
-    const investigation = await investigator.investigate(query, clearance);
+    const investigation = await investigator.investigate(query, view);
     if (investigation.blocked) {
       return res.status(400).json({ error: investigation.summary, blocked: true });
     }
@@ -451,14 +526,18 @@ app.post('/api/platform/cases/:id/findings', async (req, res) => {
       (highest, node) => Math.max(highest, node.clearance),
       ClearanceLevel.PUBLIC as number
     );
+    // Need-to-know travels with the evidence the same way the level does: a
+    // finding resting on one compartmented entity is itself in that circle.
+    const findingCompartments = unionCompartments(investigation.subgraph.nodes.map((n) => n.compartments));
 
-    const attached = cases.attachFinding(req.params.id, clearance, {
+    const attached = cases.attachFinding(req.params.id, view, {
       auditSeq: investigation.auditSeq,
       query: investigation.query,
       summary: investigation.summary,
       narrativeSource: investigation.narrativeSource,
       entityIds: investigation.subgraph.nodes.map((n) => n.id),
       clearance: findingClearance,
+      ...(findingCompartments.length ? { compartments: findingCompartments } : {}),
     });
     if (!attached) return res.status(404).json({ error: 'No such case in your view.' });
 
@@ -468,6 +547,8 @@ app.post('/api/platform/cases/:id/findings', async (req, res) => {
       clearanceRaised: attached.clearanceRaised,
       previousClearance: attached.previousClearance,
       newClearance: attached.case.clearance,
+      compartmentsAdded: attached.compartmentsAdded,
+      actor: req.principal!.id,
       actorKeyId: req.callerKeyId,
     });
 
@@ -476,6 +557,7 @@ app.post('/api/platform/cases/:id/findings', async (req, res) => {
       investigation,
       clearanceRaised: attached.clearanceRaised,
       previousClearance: attached.previousClearance,
+      compartmentsAdded: attached.compartmentsAdded,
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -488,7 +570,7 @@ app.post('/api/platform/cases/:id/notes', (req, res) => {
     return res.status(400).json({ error: 'text is required' });
   }
   try {
-    const updated = cases.addNote(req.params.id, req.callerClearance!, text, req.callerKeyId!);
+    const updated = cases.addNote(req.params.id, req.viewer!, text, req.callerKeyId!);
     if (!updated) return res.status(404).json({ error: 'No such case in your view.' });
     audit.append('case-store', 'case_note_added', {
       caseId: updated.id,
@@ -501,7 +583,7 @@ app.post('/api/platform/cases/:id/notes', (req, res) => {
 });
 
 app.post('/api/platform/cases/:id/pin', (req, res) => {
-  const clearance = req.callerClearance!;
+  const view = req.viewer!;
   const { entityIds } = req.body ?? {};
   if (!Array.isArray(entityIds) || entityIds.length === 0) {
     return res.status(400).json({ error: 'entityIds must be a non-empty array' });
@@ -510,7 +592,7 @@ app.post('/api/platform/cases/:id/pin', (req, res) => {
   // Resolve against the caller's own view, so an id they cannot see can never
   // be pinned - and so the classification used for the high-water mark is the
   // real one rather than anything the client asserted.
-  const visible = new Map(graph.toJSON(clearance).nodes.map((n) => [n.id, n]));
+  const visible = new Map(graph.toJSON(view).nodes.map((n) => [n.id, n]));
   const resolved = entityIds.filter((id: unknown): id is string => typeof id === 'string' && visible.has(id));
   if (resolved.length === 0) {
     return res.status(404).json({ error: 'None of those entities are in your view of the graph.' });
@@ -520,14 +602,17 @@ app.post('/api/platform/cases/:id/pin', (req, res) => {
     (highest, id) => Math.max(highest, visible.get(id)!.clearance),
     ClearanceLevel.PUBLIC as number
   );
+  const entityCompartments = unionCompartments(resolved.map((id) => visible.get(id)!.compartments));
 
-  const pinned = cases.pinEntities(req.params.id, clearance, resolved, entityClearance);
+  const pinned = cases.pinEntities(req.params.id, view, resolved, entityClearance, entityCompartments);
   if (!pinned) return res.status(404).json({ error: 'No such case in your view.' });
 
   audit.append('case-store', 'case_entities_pinned', {
     caseId: pinned.case.id,
     entityIds: resolved,
     clearanceRaised: pinned.clearanceRaised,
+    compartmentsAdded: pinned.compartmentsAdded,
+    actor: req.principal!.id,
     actorKeyId: req.callerKeyId,
   });
 
@@ -537,6 +622,7 @@ app.post('/api/platform/cases/:id/pin', (req, res) => {
     ignored: entityIds.length - resolved.length,
     clearanceRaised: pinned.clearanceRaised,
     previousClearance: pinned.previousClearance,
+    compartmentsAdded: pinned.compartmentsAdded,
   });
 });
 

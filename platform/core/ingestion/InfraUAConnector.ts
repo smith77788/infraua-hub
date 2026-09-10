@@ -182,7 +182,14 @@ export class InfraUAConnector {
     payload: InfraUAPayload,
     source: string,
     sector: string,
-    clearance: ClearanceLevel = ClearanceLevel.PUBLIC
+    clearance: ClearanceLevel = ClearanceLevel.PUBLIC,
+    /**
+     * Need-to-know compartments applied to everything this batch writes
+     * (core/security/Marking.ts). An open feed carries none; a feed whose
+     * assembled picture belongs to one circle names that circle here, and the
+     * marking travels with every node, edge and document it produces.
+     */
+    compartments: readonly string[] = []
   ): InfraUAIngestResult {
     if (!payload || typeof payload !== 'object') {
       throw new Error('payload must be an object');
@@ -232,6 +239,7 @@ export class InfraUAConnector {
           label: facility.name,
           properties,
           clearance,
+          compartments,
           sourceDocId: documentId,
         });
         knownFacilities.add(facility.id);
@@ -247,13 +255,14 @@ export class InfraUAConnector {
               label: operator,
               properties: { provenance_kind: 'observed', provenance_source: facility.source },
               clearance,
+              compartments,
               sourceDocId: documentId,
             });
             seenOrgs.add(organizationId);
             result.organizationsIngested++;
           }
           this.safeEdge(
-            { source: nodeId, target: organizationId, relation: 'OPERATED_BY', properties: {}, clearance, sourceDocId: documentId },
+            { source: nodeId, target: organizationId, relation: 'OPERATED_BY', properties: {}, clearance, compartments, sourceDocId: documentId },
             result
           );
         }
@@ -261,7 +270,7 @@ export class InfraUAConnector {
         const text = [facility.name, facility.category, facility.operator, facility.detail]
           .filter(Boolean)
           .join(' · ');
-        const doc: IndexedDocument = { id: documentId, text, source, sector, clearance };
+        const doc: IndexedDocument = { id: documentId, text, source, sector, clearance, ...(compartments.length ? { compartments: [...compartments] } : {}) };
         this.vectors.addDocument(doc);
         result.documents.push(doc);
       }
@@ -288,6 +297,7 @@ export class InfraUAConnector {
           label: event.title,
           properties,
           clearance,
+          compartments,
           sourceDocId: documentId,
         });
         result.eventsIngested++;
@@ -305,6 +315,7 @@ export class InfraUAConnector {
               // Proximity is measured, not assumed - but the radius is ours.
               properties: { provenance_kind: 'inferred', provenance_method: 'proximity radius' },
               clearance,
+              compartments,
               sourceDocId: documentId,
             },
             result
@@ -317,6 +328,7 @@ export class InfraUAConnector {
           source,
           sector,
           clearance,
+          ...(compartments.length ? { compartments: [...compartments] } : {}),
         };
         this.vectors.addDocument(doc);
         result.documents.push(doc);
@@ -345,6 +357,7 @@ export class InfraUAConnector {
               ...provenanceProperties(dependency.provenance),
             },
             clearance,
+            compartments,
             sourceDocId: documentId,
           },
           result
@@ -361,6 +374,7 @@ export class InfraUAConnector {
     this.audit.append(source, 'INFRAUA_INGEST', {
       sector,
       clearance,
+      compartments,
       retrievedAt: payload.retrievedAt ?? null,
       facilities: result.facilitiesIngested,
       organizations: result.organizationsIngested,
@@ -385,6 +399,7 @@ export class InfraUAConnector {
       relation: string;
       properties: Record<string, unknown>;
       clearance: ClearanceLevel;
+      compartments?: readonly string[];
       sourceDocId: string;
     },
     result: InfraUAIngestResult

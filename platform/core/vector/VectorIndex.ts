@@ -1,4 +1,5 @@
-import { ClearanceLevel, clearanceAtLeast } from '../security/Clearance';
+import { ClearanceLevel } from '../security/Clearance';
+import { asViewer, canRead, ViewerInput } from '../security/Marking';
 
 export interface IndexedDocument {
   id: string;
@@ -6,6 +7,8 @@ export interface IndexedDocument {
   source: string;
   sector: string;
   clearance: ClearanceLevel;
+  /** Need-to-know compartments, as on graph nodes (core/security/Marking.ts). */
+  compartments?: string[];
 }
 
 export interface SearchHit {
@@ -100,10 +103,11 @@ export class VectorIndex {
     return before - this.documents.length;
   }
 
-  search(query: string, clearance: ClearanceLevel, topN = 5): SearchHit[] {
+  search(query: string, who: ViewerInput, topN = 5): SearchHit[] {
+    const v = asViewer(who);
     const queryVec = this.vectorize(query);
     const scored = this.documents
-      .filter((doc) => clearanceAtLeast(clearance, doc.clearance))
+      .filter((doc) => canRead(v, doc))
       .map((doc) => ({ document: doc, score: this.cosine(queryVec, this.vectorize(doc.text)) }))
       .filter((hit) => hit.score > 0)
       .sort((a, b) => b.score - a.score);
