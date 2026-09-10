@@ -62,6 +62,10 @@ beforeAll(async () => {
     [KEYS.gridInsider]: { principal: 'insider', clearance: 'SECRET', compartments: ['grid'] },
     [KEYS.gridOutsider]: { principal: 'outsider', clearance: 'TOP_SECRET' },
     [KEYS.restoration]: { principal: 'dispatcher', clearance: 'INTERNAL', purposes: ['outage-response'] },
+    // Two distinct SECRET principals: the two-person rule is about identity,
+    // not about clearance, and one key used twice must not satisfy it.
+    'test-officer-a': { principal: 'officer-a', clearance: 'SECRET' },
+    'test-officer-b': { principal: 'officer-b', clearance: 'SECRET' },
   });
   // High enough that the functional tests below never trip it; the rate-limit
   // test uses its own tiny budget via a separate limiter unit test.
@@ -1134,5 +1138,98 @@ describe('platform API: two time axes', () => {
     for (const id of finding.entityIds) {
       expect(reconstructed.body.nodes.map((n: { id: string }) => n.id)).toContain(id);
     }
+  });
+});
+
+describe('platform API: actions', () => {
+  it('lists what this key may do, and what it may not, with the level named', async () => {
+    const res = await call('GET', '/api/platform/actions', { key: KEYS.public });
+    expect(res.status).toBe(200);
+    const declassify = res.body.actions.find((a: any) => a.id === 'declassify');
+    expect(declassify.permitted).toBe(false);
+    const confirm = res.body.actions.find((a: any) => a.id === 'confirm_dependency');
+    expect(confirm.parameters.length).toBeGreaterThan(0);
+  });
+
+  it('applies a single-person action straight away', async () => {
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: {
+        payload: {
+          facilities: [
+            { id: 'act-plant', name: 'Станція Дійова', category: 'power_plant', lat: 48.0, lon: 34.0, source: 'https://openstreetmap.org/way/11' },
+            { id: 'act-sub', name: 'Підстанція Дійова', category: 'substation', lat: 48.1, lon: 34.1, source: 'https://openstreetmap.org/way/12' },
+          ],
+          events: [],
+          dependencies: [
+            {
+              from: 'act-plant',
+              to: 'act-sub',
+              km: 12,
+              kind: 'supply',
+              provenance: { kind: 'inferred', method: 'найближча електростанція', params: { radiusKm: 250 }, confidence: 0.35, caveat: 'припущення' },
+            },
+          ],
+        },
+        source: 'actions-batch',
+        sector: 'infrastructure',
+      },
+    });
+
+    const graph = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    const edge = graph.body.edges.find((e: any) => e.relation === 'SUPPLIES_POWER');
+    expect(edge).toBeDefined();
+
+    const res = await call('POST', '/api/platform/actions/confirm_dependency', {
+      key: KEYS.secret,
+      body: { from: edge.source, to: edge.target, note: 'звірено' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('applied');
+  });
+
+  it('answers 202 for an action that has not happened yet', async () => {
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: 'test-officer-a',
+      body: {
+        payload: {
+          facilities: [{ id: 'dc-node', name: 'Вузол Розсекречення', category: 'substation', lat: 47.0, lon: 33.0, source: 'https://openstreetmap.org/way/13' }],
+          events: [],
+          dependencies: [],
+        },
+        source: 'declassify-batch',
+        sector: 'infrastructure',
+        clearance: 'SECRET',
+      },
+    });
+    const graph = await call('GET', '/api/platform/graph', { key: 'test-officer-a' });
+    const node = graph.body.nodes.find((n: any) => n.label.includes('Розсекречення'));
+    expect(node.clearance).toBe(3);
+
+    const proposed = await call('POST', '/api/platform/actions/declassify', {
+      key: 'test-officer-a',
+      body: { entityId: node.id, toClearance: 'INTERNAL', reason: 'оператор оприлюднив' },
+    });
+    // 200 here would be a lie the caller acts on.
+    expect(proposed.status).toBe(202);
+    expect(proposed.body.status).toBe('pending');
+
+    const same = await call(`POST`, `/api/platform/actions/pending/${proposed.body.pending.id}/approve`, {
+      key: 'test-officer-a',
+    });
+    expect(same.status).toBe(403);
+
+    const other = await call(`POST`, `/api/platform/actions/pending/${proposed.body.pending.id}/approve`, {
+      key: 'test-officer-b',
+    });
+    expect(other.status).toBe(200);
+
+    const after = await call('GET', '/api/platform/graph', { key: 'test-officer-a' });
+    expect(after.body.nodes.find((n: any) => n.id === node.id).clearance).toBe(1);
+  });
+
+  it('refuses an unknown action as not found, not as a server error', async () => {
+    const res = await call('POST', '/api/platform/actions/take_over_the_world', { key: KEYS.secret, body: {} });
+    expect(res.status).toBe(404);
   });
 });

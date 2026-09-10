@@ -18,6 +18,11 @@ export interface PathResult {
  * earlier one knew - the same rule as compartments, for the same reason: the
  * most routine operation in the system should not be able to quietly drop a
  * fact nobody re-stated.
+ *
+ * Passing an empty string *does* clear a bound, and that is the only way to.
+ * A repaired substation needs its `valid_to` gone rather than moved: leaving
+ * an open-ended damage interval behind would hide the node from every
+ * `validAt` query after the repair.
  */
 function validityOf(
   input: { validFrom?: string; validTo?: string },

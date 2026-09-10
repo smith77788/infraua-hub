@@ -30,6 +30,8 @@ import { CaseStore } from '../core/cases/CaseStore';
 import { AlertStore, AlertState } from '../core/alerts/AlertStore';
 import { AlertEngine } from '../core/alerts/AlertEngine';
 import { AlertSeverity, parseRule } from '../core/alerts/AlertRule';
+import { ActionRegistry } from '../core/actions/ActionRegistry';
+import { ActionError } from '../core/actions/Action';
 import { DeterministicNarrativeAdapter } from '../agents/analyst/narrative/DeterministicNarrativeAdapter';
 import { ClaudeNarrativeAdapter } from '../agents/analyst/narrative/ClaudeNarrativeAdapter';
 
@@ -85,6 +87,7 @@ const audit = new AuditLog(path.join(DATA_ROOT, 'audit.log'));
 const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
 const cases = new CaseStore(path.join(DATA_ROOT, 'cases.json'));
 const alerts = new AlertStore(path.join(DATA_ROOT, 'alerts.json'));
+const actions = new ActionRegistry(graph, audit, path.join(DATA_ROOT, 'pending-actions.json'));
 const alertEngine = new AlertEngine(
   graph,
   alerts,
@@ -676,6 +679,49 @@ app.post('/api/platform/ingest/prozorro/pull', async (req, res) => {
 });
 
 /**
+ * Typed operations that change the graph.
+ *
+ * Everything that wrote before this came in through ingestion: the platform
+ * could be told things by a feed and read by a person, with nothing in
+ * between. That left out the whole category of knowledge only a person has -
+ * an analyst who has stood in front of a substation knows whether the line
+ * into it is real, and had nowhere to say so.
+ */
+app.get('/api/platform/actions', (req, res) => {
+  res.json({ actions: actions.catalogue(req.callerClearance!), pending: actions.listPending() });
+});
+
+app.post('/api/platform/actions/:id', (req, res) => {
+  try {
+    const result = actions.invoke(String(req.params.id), req.body ?? {}, req.principal!, req.viewer!);
+    // A two-person action reports 202: it was accepted and has not happened.
+    // Returning 200 here would be a lie the caller acts on.
+    res.status(result.status === 'pending' ? 202 : 200).json(result);
+  } catch (err) {
+    if (err instanceof ActionError) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/platform/actions/pending/:pendingId/approve', (req, res) => {
+  try {
+    res.json(actions.approve(String(req.params.pendingId), req.principal!, req.viewer!));
+  } catch (err) {
+    if (err instanceof ActionError) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/platform/actions/pending/:pendingId/withdraw', (req, res) => {
+  try {
+    res.json({ withdrawn: actions.withdraw(String(req.params.pendingId), req.principal!) });
+  } catch (err) {
+    if (err instanceof ActionError) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
  * Retracts an ingestion batch by its source.
  *
  * Destructive, so it is gated at SECRET rather than at the caller's own level:
@@ -1121,4 +1167,5 @@ export {
   cases,
   alerts,
   alertEngine,
+  actions,
 };

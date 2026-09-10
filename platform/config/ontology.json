@@ -94,6 +94,22 @@
         "Organization"
       ],
       "to": "Organization"
+    },
+    "SAME_AS": {
+      "from": [
+        "Person",
+        "Organization",
+        "Asset",
+        "Location",
+        "Event"
+      ],
+      "to": [
+        "Person",
+        "Organization",
+        "Asset",
+        "Location",
+        "Event"
+      ]
     }
   }
 }
