@@ -4,14 +4,21 @@
       "properties": [
         "role",
         "risk_score",
-        "last_seen"
+        "last_seen",
+        "edrpou"
       ],
       "default_clearance": "PUBLIC"
     },
     "Organization": {
       "properties": [
         "country",
-        "structure_type"
+        "structure_type",
+        "edrpou",
+        "legal_name",
+        "region",
+        "locality",
+        "scale",
+        "first_seen"
       ],
       "default_clearance": "PUBLIC"
     },
@@ -47,7 +54,10 @@
       "to": "Organization"
     },
     "AWARDED_CONTRACT": {
-      "from": "Person",
+      "from": [
+        "Person",
+        "Organization"
+      ],
       "to": "Organization"
     },
     "SUPPLY_DISRUPTION": {
@@ -73,6 +83,17 @@
     "THREATENS": {
       "from": "Event",
       "to": "Asset"
+    },
+    "PARTICIPATED_IN": {
+      "from": "Organization",
+      "to": "Event"
+    },
+    "CONTROLS": {
+      "from": [
+        "Person",
+        "Organization"
+      ],
+      "to": "Organization"
     }
   }
 }

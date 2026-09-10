@@ -50,8 +50,11 @@ describe('the inverted index ranks exactly as recomputing everything did', () =>
 
   /** The straightforward O(corpus) scoring the index used to do per query. */
   const naive = (query: string) => {
+    // Mirrors the index's own tokenizer: any letter in any script, minus the
+    // stopwords these documents actually contain.
+    const stop = ['и', 'в', 'на', 'від', 'у', 'з', 'та', 'і', 'й', 'про', 'що', 'як', 'це', 'для', 'до', 'за', 'the', 'a', 'of', 'to', 'in', 'on', 'and', 'or', 'is', 'was', 'for', 'with', 'at', 'by'];
     const tokenize = (text: string) =>
-      (text.toLowerCase().match(/[a-zа-яё0-9]+/gi) ?? []).filter((t) => t.length > 1 && !['и', 'в', 'на', 'від', 'the', 'a', 'of', 'to', 'in', 'on', 'and', 'or', 'is', 'was', 'for', 'with', 'at', 'by'].includes(t));
+      (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1 && !stop.includes(t));
     const df = new Map<string, number>();
     for (const doc of corpus) for (const term of new Set(tokenize(doc.text))) df.set(term, (df.get(term) ?? 0) + 1);
     const idf = (term: string) => Math.log((1 + corpus.length) / (1 + (df.get(term) ?? 0))) + 1;
@@ -106,5 +109,25 @@ describe('the inverted index ranks exactly as recomputing everything did', () =>
     index.search('живлення', ClearanceLevel.TOP_SECRET, 5);
     index.removeBySource('s');
     expect(index.search('живлення', ClearanceLevel.TOP_SECRET, 5)).toHaveLength(0);
+  });
+});
+
+describe('Ukrainian text is indexed whole', () => {
+  it('does not cut a word at і, ї, є or ґ', () => {
+    // The class used to be [a-zа-яё0-9] — the Russian alphabet — so those four
+    // letters acted as separators: "Київобленерго" indexed as "ки" +
+    // "вобленерго" and "Дніпро" as "дн" + "про". Worse than returning nothing:
+    // the stumps matched each other often enough to look like working search,
+    // while "Дніпро" and "Дніпровська" shared no term at all.
+    const index = new VectorIndex();
+    index.addDocument({ id: 'k', text: 'ПрАТ Київобленерго повідомляє про аварійне відключення', source: 's', sector: 'energy', clearance: ClearanceLevel.PUBLIC });
+    index.addDocument({ id: 'd', text: 'Дніпровська ТЕС зупинила блок', source: 's', sector: 'energy', clearance: ClearanceLevel.PUBLIC });
+    index.addDocument({ id: 'g', text: 'Ґанок їдальні відремонтовано', source: 's', sector: 'other', clearance: ClearanceLevel.PUBLIC });
+
+    expect(index.search('Київобленерго', ClearanceLevel.PUBLIC, 5).map((h) => h.document.id)).toEqual(['k']);
+    expect(index.search('Ґанок', ClearanceLevel.PUBLIC, 5).map((h) => h.document.id)).toEqual(['g']);
+    // A whole-word index does not match a different word that shares a stump.
+    expect(index.search('Дніпро', ClearanceLevel.PUBLIC, 5)).toHaveLength(0);
+    expect(index.search('Дніпровська', ClearanceLevel.PUBLIC, 5).map((h) => h.document.id)).toEqual(['d']);
   });
 });

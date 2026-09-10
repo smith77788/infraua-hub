@@ -24,7 +24,15 @@ export type SignalType =
   | 'bridge_endpoint'
   | 'relation'
   | 'relation_combination'
-  | 'property_sum';
+  | 'property_sum'
+  /**
+   * A relation *and* something about it. Holding a contract is not a signal -
+   * the state buys things. Holding one awarded without competition, or one
+   * above a threshold on its own, is. Flattening that into the plain
+   * `relation` type would score every counterparty of every public buyer
+   * identically, which is the same as scoring nothing.
+   */
+  | 'relation_property';
 
 export interface RiskSignalConfig {
   id: string;
@@ -36,6 +44,24 @@ export interface RiskSignalConfig {
   relation?: string;
   relations?: string[];
   property?: string;
+  /** For `relation_property`: the exact value the property must hold. */
+  equals?: string | number | boolean;
+  /**
+   * For `betweenness`: the minimum *unnormalised* value as well.
+   *
+   * Normalisation is against the maximum in the snapshot, so on a sparse graph
+   * a node lying between exactly one pair scores 1.00 and clears any threshold
+   * - it is the maximum because nothing else brokers anything at all.
+   * Measured on 100 real procurement records: every hub of a three-node star
+   * came out as maximal brokerage. The raw floor is what makes the signal mean
+   * "brokers many paths" rather than "brokers the most paths here".
+   */
+  minRaw?: number;
+  /**
+   * For `bridge_endpoint`: the minimum number of nodes on the smaller side of
+   * the split. Below this the edge is a pendant, not a hinge.
+   */
+  minSide?: number;
 }
 
 export interface FiredSignal {
@@ -56,6 +82,18 @@ export interface RiskAssessment {
   score: number;
   band: 'low' | 'elevated' | 'high' | 'severe';
   signals: FiredSignal[];
+}
+
+interface SignalContext {
+  degree: number;
+  /** Normalised against the snapshot maximum — comparable within, not across. */
+  betweenness: number;
+  /** Shortest paths actually brokered. Not relative, so it means the same everywhere. */
+  betweennessRaw: number;
+  /** Nodes on the smaller side of the largest split this node's bridges cause; 0 if none. */
+  bridgeSide: number;
+  edges: GraphEdge[];
+  labels: Map<string, string>;
 }
 
 function bandFor(score: number): RiskAssessment['band'] {
@@ -89,13 +127,18 @@ export class RiskScorer {
    */
   score(nodes: GraphNode[], edges: GraphEdge[]): RiskAssessment[] {
     const { neighbors } = buildAdjacency(nodes, edges);
-    const centrality = new Map(betweenness(nodes, edges).map((c) => [c.id, c.score]));
+    const centralityEntries = betweenness(nodes, edges);
+    const centrality = new Map(centralityEntries.map((c) => [c.id, c.score]));
+    const centralityRaw = new Map(centralityEntries.map((c) => [c.id, c.raw]));
     const labels = new Map(nodes.map((n) => [n.id, n.label]));
 
-    const bridgeEndpoints = new Set<string>();
+    // Keyed by the smaller side of the split, so a signal can insist on a
+    // bridge that separates something rather than one that trims a leaf.
+    const bridgeSideByNode = new Map<string, number>();
     for (const bridge of bridges(nodes, edges)) {
-      bridgeEndpoints.add(bridge.source);
-      bridgeEndpoints.add(bridge.target);
+      for (const endpoint of [bridge.source, bridge.target]) {
+        bridgeSideByNode.set(endpoint, Math.max(bridgeSideByNode.get(endpoint) ?? 0, bridge.smallerSide));
+      }
     }
 
     const incident = new Map<string, GraphEdge[]>(nodes.map((n) => [n.id, []]));
@@ -108,7 +151,8 @@ export class RiskScorer {
       .map((node) => this.scoreNode(node, {
         degree: neighbors.get(node.id)?.size ?? 0,
         betweenness: centrality.get(node.id) ?? 0,
-        isBridgeEndpoint: bridgeEndpoints.has(node.id),
+        betweennessRaw: centralityRaw.get(node.id) ?? 0,
+        bridgeSide: bridgeSideByNode.get(node.id) ?? 0,
         edges: incident.get(node.id) ?? [],
         labels,
       }))
@@ -117,13 +161,7 @@ export class RiskScorer {
 
   private scoreNode(
     node: GraphNode,
-    context: {
-      degree: number;
-      betweenness: number;
-      isBridgeEndpoint: boolean;
-      edges: GraphEdge[];
-      labels: Map<string, string>;
-    },
+    context: SignalContext,
   ): RiskAssessment {
     const fired: FiredSignal[] = [];
 
@@ -142,19 +180,15 @@ export class RiskScorer {
   private evaluate(
     signal: RiskSignalConfig,
     node: GraphNode,
-    context: {
-      degree: number;
-      betweenness: number;
-      isBridgeEndpoint: boolean;
-      edges: GraphEdge[];
-      labels: Map<string, string>;
-    },
+    context: SignalContext,
   ): string | null {
     switch (signal.type) {
       case 'betweenness': {
         const threshold = signal.threshold ?? 0.5;
+        const minRaw = signal.minRaw ?? 0;
         if (context.betweenness < threshold) return null;
-        return `normalised betweenness ${context.betweenness.toFixed(2)} ≥ ${threshold}`;
+        if (context.betweennessRaw < minRaw) return null;
+        return `normalised betweenness ${context.betweenness.toFixed(2)} ≥ ${threshold} (on ${context.betweennessRaw.toFixed(1)} shortest paths)`;
       }
 
       case 'degree': {
@@ -163,8 +197,11 @@ export class RiskScorer {
         return `${context.degree} relations ≥ ${threshold}`;
       }
 
-      case 'bridge_endpoint':
-        return context.isBridgeEndpoint ? 'endpoint of an edge whose removal splits the graph' : null;
+      case 'bridge_endpoint': {
+        const minSide = signal.minSide ?? 1;
+        if (context.bridgeSide < minSide) return null;
+        return `removing one relation would cut off ${context.bridgeSide} entit${context.bridgeSide === 1 ? 'y' : 'ies'}`;
+      }
 
       case 'relation': {
         const match = context.edges.find((e) => e.relation === signal.relation);
@@ -179,6 +216,35 @@ export class RiskScorer {
         const present = new Set(context.edges.map((e) => e.relation));
         if (!required.every((r) => present.has(r))) return null;
         return `holds all of: ${required.join(', ')}`;
+      }
+
+      case 'relation_property': {
+        const property = signal.property;
+        if (!property || !signal.relation) return null;
+        const candidates = context.edges.filter((e) => e.relation === signal.relation);
+        if (candidates.length === 0) return null;
+
+        if (signal.equals !== undefined) {
+          const match = candidates.find((e) => e.properties[property] === signal.equals);
+          if (!match) return null;
+          const otherId = match.source === node.id ? match.target : match.source;
+          const count = candidates.filter((e) => e.properties[property] === signal.equals).length;
+          return `${count} × ${signal.relation} with ${property}=${String(signal.equals)} (e.g. ${context.labels.get(otherId) ?? otherId})`;
+        }
+
+        const threshold = signal.threshold ?? 0;
+        // The largest single edge, not the sum: `property_sum` already answers
+        // the aggregate question, and one large contract is a different
+        // pattern from a hundred small ones.
+        let largest: { value: number; edge: GraphEdge } | null = null;
+        for (const edge of candidates) {
+          const value = edge.properties[property];
+          if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+          if (value >= threshold && (largest === null || value > largest.value)) largest = { value, edge };
+        }
+        if (!largest) return null;
+        const otherId = largest.edge.source === node.id ? largest.edge.target : largest.edge.source;
+        return `single ${signal.relation} of ${largest.value.toLocaleString('en-US')} ≥ ${threshold.toLocaleString('en-US')} (${context.labels.get(otherId) ?? otherId})`;
       }
 
       case 'property_sum': {

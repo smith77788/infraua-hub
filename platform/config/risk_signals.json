@@ -7,7 +7,8 @@
       "type": "betweenness",
       "weight": 25,
       "threshold": 0.5,
-      "reason": "Sits on a large share of the shortest paths between other entities — a broker position, which is where intermediaries and shell structures show up."
+      "reason": "Лежить на великій частці найкоротших шляхів між іншими сутностями — позиція посередника, де й зʼявляються прокладки та тіньові структури. Поріг заданий і в абсолютних шляхах: нормування йде на максимум у знімку, тож на розрідженому графі вузол між однією парою отримував би 1.00 просто тому, що більше ніхто не посередничає взагалі.",
+      "minRaw": 5
     },
     {
       "id": "high_degree",
@@ -22,7 +23,8 @@
       "label": "Sole connector",
       "type": "bridge_endpoint",
       "weight": 15,
-      "reason": "Holds the only relation joining two otherwise separate groups — if that single link is wrong, the inferred connection between the groups collapses."
+      "reason": "Тримає єдиний звʼязок між двома інакше розділеними групами: якщо ця одна ланка хибна, уся виведена звʼязність між групами розсипається. Поріг на розмір меншої сторони обовʼязковий: у лісі мостом є кожне ребро, і на графі закупівель без порога сигнал спрацьовував на всіх одразу.",
+      "minSide": 3
     },
     {
       "id": "hidden_beneficiary",
@@ -61,9 +63,32 @@
       "id": "self_dealing_pattern",
       "label": "Award plus undisclosed interest",
       "type": "relation_combination",
-      "relations": ["AWARDED_CONTRACT", "HIDDEN_BENEFICIARY_OF"],
+      "relations": [
+        "AWARDED_CONTRACT",
+        "HIDDEN_BENEFICIARY_OF"
+      ],
       "weight": 35,
       "reason": "Both awards contracts to an organization and holds an undisclosed interest in one — the combination is the self-dealing pattern itself, and is worth more than either relation alone."
+    },
+    {
+      "id": "non_competitive_award",
+      "label": "Присудження без конкуренції",
+      "type": "relation_property",
+      "relation": "AWARDED_CONTRACT",
+      "property": "competitive",
+      "equals": false,
+      "weight": 20,
+      "reason": "Сторона договору, присудженого без конкурентної процедури. Купівля сама по собі не є ознакою; купівля в обхід конкуренції — є, і саме її не видно, якщо спосіб закупівлі губиться при завантаженні."
+    },
+    {
+      "id": "large_single_award",
+      "label": "Великий разовий договір",
+      "type": "relation_property",
+      "relation": "AWARDED_CONTRACT",
+      "property": "amount",
+      "threshold": 5000000,
+      "weight": 15,
+      "reason": "Окремий договір понад поріг. Відрізняється від «сумарної концентрації» навмисно: сто дрібних договорів і один великий — різні візерунки, і зводити їх в одне число означає втратити обидва."
     }
   ]
 }

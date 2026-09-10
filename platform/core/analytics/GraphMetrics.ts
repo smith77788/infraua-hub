@@ -172,18 +172,41 @@ export function components(nodes: GraphNode[], edges: GraphEdge[]): Component[] 
   return found.sort((a, b) => b.size - a.size);
 }
 
+export interface Bridge {
+  source: string;
+  target: string;
+  /**
+   * Nodes on the smaller side of the split. This is what separates a bridge
+   * that matters from one that does not.
+   *
+   * Every edge of a tree is a bridge. On the procurement graph - buyers on one
+   * side, suppliers on the other, no cycles - that made *every* entity a
+   * "sole connector" and handed 15 points to all of them, which is the same as
+   * handing them to none. Measured on 100 real tenders: 138 of 164 entities
+   * scored above zero and several reached "severe". A bridge that lops off a
+   * single leaf is not a link holding two groups together; it is a leaf.
+   */
+  smallerSide: number;
+}
+
 /**
  * Edges whose removal would split a component ("bridges", via the standard
  * DFS low-link method). In an affiliation graph a bridge is the single
  * relationship holding two groups together - the link worth verifying first,
  * because if it is wrong the whole inferred connection collapses.
+ *
+ * Each one is reported with how much comes away with it, so a caller can tell
+ * a structural hinge from a pendant edge.
  */
-export function bridges(nodes: GraphNode[], edges: GraphEdge[]): { source: string; target: string }[] {
+export function bridges(nodes: GraphNode[], edges: GraphEdge[]): Bridge[] {
   const { neighbors } = buildAdjacency(nodes, edges);
   const discovery = new Map<string, number>();
   const low = new Map<string, number>();
   const parent = new Map<string, string | null>();
-  const found: { source: string; target: string }[] = [];
+  const subtreeSize = new Map<string, number>();
+  const componentOf = new Map<string, string>();
+  const componentSize = new Map<string, number>();
+  const found: Bridge[] = [];
   let timer = 0;
 
   // Iterative DFS: a recursive one would blow the stack on a large graph, and
@@ -196,6 +219,9 @@ export function bridges(nodes: GraphNode[], edges: GraphEdge[]): { source: strin
     ];
     discovery.set(start, timer);
     low.set(start, timer);
+    subtreeSize.set(start, 1);
+    componentOf.set(start, start);
+    componentSize.set(start, 1);
     timer++;
 
     while (stack.length > 0) {
@@ -207,8 +233,12 @@ export function bridges(nodes: GraphNode[], edges: GraphEdge[]): { source: strin
         const p = parent.get(frame.node);
         if (p != null) {
           low.set(p, Math.min(low.get(p)!, low.get(frame.node)!));
+          subtreeSize.set(p, subtreeSize.get(p)! + subtreeSize.get(frame.node)!);
           if (low.get(frame.node)! > discovery.get(p)!) {
-            found.push({ source: p, target: frame.node });
+            // Recorded with the subtree size; the component total is only
+            // known once the whole traversal finishes, so the smaller side is
+            // resolved below.
+            found.push({ source: p, target: frame.node, smallerSide: subtreeSize.get(frame.node)! });
           }
         }
         continue;
@@ -224,12 +254,19 @@ export function bridges(nodes: GraphNode[], edges: GraphEdge[]): { source: strin
       parent.set(child, frame.node);
       discovery.set(child, timer);
       low.set(child, timer);
+      subtreeSize.set(child, 1);
+      componentOf.set(child, start);
+      componentSize.set(start, componentSize.get(start)! + 1);
       timer++;
       stack.push({ node: child, iterator: (neighbors.get(child) ?? new Set()).values() });
     }
   }
 
-  return found;
+  return found.map((bridge) => {
+    const total = componentSize.get(componentOf.get(bridge.target) ?? bridge.target) ?? 1;
+    const below = bridge.smallerSide;
+    return { ...bridge, smallerSide: Math.min(below, total - below) };
+  });
 }
 
 /**

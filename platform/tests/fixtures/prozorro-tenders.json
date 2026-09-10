@@ -1,0 +1,476 @@
+{
+ "_comment": "Справжні записи з публічного API Prozorro, отримані 2026-09-10, обрізані до полів, які читає конектор. Фікстура саме зі справжніх даних, бо форма, яку я б вигадав, перевіряла б лише мою уяву.",
+ "tenders": [
+  {
+   "id": "c751fd4768494960912de42ff7a3388b",
+   "tenderID": "UA-2026-09-10-013733-a",
+   "title": "Циліндр ZC80  40/40 PB цинк лазерний ключ ",
+   "status": "complete",
+   "procurementMethod": "limited",
+   "procurementMethodType": "reporting",
+   "dateModified": "2026-09-10T16:57:11.429735+03:00",
+   "value": {
+    "amount": 265.0,
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false
+   },
+   "procuringEntity": {
+    "name": "БЕРШАДСЬКИЙ ЦЕНТР КУЛЬТУРИ ТА ДОЗВІЛЛЯ БЕРШАДСЬКОЇ МІСЬКОЇ РАДИ",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "05463213",
+     "legalName": "БЕРШАДСЬКИЙ ЦЕНТР КУЛЬТУРИ ТА ДОЗВІЛЛЯ БЕРШАДСЬКОЇ МІСЬКОЇ РАДИ"
+    },
+    "address": {
+     "streetAddress": "вул.Коваленка Юрія будинок 5",
+     "locality": "Гайсинський р-н місто Бершадь ",
+     "region": "Вінницька область",
+     "postalCode": "24400",
+     "countryName": "Україна"
+    },
+    "kind": "general",
+    "contactPoint": {
+     "name": "Вікторія Яловенко",
+     "email": "bershad.bckd2025@meta.ua",
+     "telephone": "+380989790551"
+    }
+   },
+   "awards": [
+    {
+     "id": "eadd75836e9f49708ac670071e736cf8",
+     "status": "active",
+     "date": "2026-09-10T16:57:09.615698+03:00",
+     "value": {
+      "amount": 265.0,
+      "currency": "UAH",
+      "valueAddedTaxIncluded": false
+     },
+     "suppliers": [
+      {
+       "name": "СТЕБЛОВСЬКА ЛАРИСА ВАСИЛІВНА",
+       "identifier": {
+        "scheme": "UA-EDR",
+        "id": "2603508784",
+        "legalName": "СТЕБЛОВСЬКА ЛАРИСА ВАСИЛІВНА"
+       },
+       "address": {
+        "streetAddress": "місто Бершадь пров.Колосіївський будинок 8",
+        "locality": "Гайсинський р-н ",
+        "region": "Вінницька область",
+        "postalCode": "24400",
+        "countryName": "Україна"
+       },
+       "scale": "sme"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "778f42be4ca340d0906619460deb25f2",
+   "tenderID": "UA-2026-09-10-013693-a",
+   "title": "Саморізи",
+   "status": "active",
+   "procurementMethod": "limited",
+   "procurementMethodType": "reporting",
+   "dateModified": "2026-09-10T16:57:09.419816+03:00",
+   "value": {
+    "amount": 42.0,
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false
+   },
+   "procuringEntity": {
+    "name": "Відділ освіти Комишанської сільської ради",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "41834774",
+     "legalName": "Відділ освіти Комишанської сільської ради"
+    },
+    "address": {
+     "streetAddress": "вул.Київська, буд.16/з",
+     "locality": "село Комиші",
+     "region": "Сумська область",
+     "postalCode": "42721",
+     "countryName": "Україна"
+    },
+    "kind": "general",
+    "contactPoint": {
+     "name": "Лєбєдєва Тетяна Юріївна",
+     "name_en": "  ",
+     "name_ru": "  ",
+     "email": "komushi-viddil-osvitu@ukr.net",
+     "telephone": "+380951855465"
+    }
+   },
+   "awards": [
+    {
+     "id": "4722daa99e0a434ba0b92164f845ceae",
+     "status": "active",
+     "date": "2026-09-10T16:53:59.810741+03:00",
+     "value": {
+      "amount": 42.0,
+      "currency": "UAH",
+      "valueAddedTaxIncluded": false
+     },
+     "suppliers": [
+      {
+       "name": "ФОП Данілов Ігор Сергійович",
+       "identifier": {
+        "scheme": "UA-EDR",
+        "id": "3256915931"
+       },
+       "address": {
+        "region": "Сумська область",
+        "countryName": "Україна"
+       },
+       "scale": "sme",
+       "contactPoint": {
+        "name": "Данілов Ігор Сергійович",
+        "telephone": "+380955698623"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "e4ba248c7ba7411b853c3b6a53d756dd",
+   "tenderID": "UA-2026-09-10-013781-a",
+   "title": "Картопля, горох ваговий",
+   "status": "active",
+   "procurementMethod": "limited",
+   "procurementMethodType": "reporting",
+   "dateModified": "2026-09-10T16:57:08.096387+03:00",
+   "value": {
+    "amount": 27577.5,
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false
+   },
+   "procuringEntity": {
+    "name": "КОМУНАЛЬНА УСТАНОВА СУМСЬКА СПЕЦІАЛІЗОВАНА ШКОЛА І-ІІІ СТУПЕНІВ №25, М. СУМИ СУМСЬКОЇ ОБЛАСТІ",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "21117479",
+     "legalName": "КОМУНАЛЬНА УСТАНОВА СУМСЬКА СПЕЦІАЛІЗОВАНА ШКОЛА І-ІІІ СТУПЕНІВ №25, М. СУМИ СУМСЬКОЇ ОБЛАСТІ"
+    },
+    "address": {
+     "streetAddress": "вул.Декабристів, будинок 80",
+     "locality": "Суми",
+     "region": "Сумська область",
+     "postalCode": "40002",
+     "countryName": "Україна"
+    },
+    "kind": "general",
+    "contactPoint": {
+     "name": "Берестовська Ольга",
+     "email": "olgaberest.zosh25@gmail.com",
+     "telephone": "380508764334"
+    }
+   },
+   "awards": [
+    {
+     "id": "6e93c2b3ebfb4a9e8e4326e323e2ae77",
+     "status": "active",
+     "date": "2026-09-10T16:57:08.096387+03:00",
+     "value": {
+      "amount": 27577.5,
+      "currency": "UAH",
+      "valueAddedTaxIncluded": false
+     },
+     "suppliers": [
+      {
+       "name": "ФОП БЕЗКОРОВАЙНА ВАЛЕНТИНА ОЛЕКСАНДРІВНА",
+       "identifier": {
+        "scheme": "UA-EDR",
+        "id": "2305305923",
+        "legalName": "ФОП БЕЗКОРОВАЙНА ВАЛЕНТИНА ОЛЕКСАНДРІВНА"
+       },
+       "address": {
+        "streetAddress": "вул.Передова, будинок 21, квартира 1",
+        "locality": "Суми",
+        "region": "Сумська область",
+        "postalCode": "40010",
+        "countryName": "Україна"
+       },
+       "scale": "micro",
+       "contactPoint": {
+        "name": "БЕЗКОРОВАЙНА ВАЛЕНТИНА ОЛЕКСАНДРІВНА",
+        "telephone": "380506367224"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "a80866d73a4243f4849dcd3fd24257f8",
+   "tenderID": "UA-2026-09-10-013780-a",
+   "title": "LED лампи",
+   "status": "active",
+   "procurementMethod": "limited",
+   "procurementMethodType": "reporting",
+   "dateModified": "2026-09-10T16:57:07.805087+03:00",
+   "value": {
+    "amount": 5832.0,
+    "currency": "UAH",
+    "valueAddedTaxIncluded": true
+   },
+   "procuringEntity": {
+    "name": "ВІЙСЬКОВА ЧАСТИНА 2428",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "14321469",
+     "legalName": "ВІЙСЬКОВА ЧАСТИНА 2428"
+    },
+    "address": {
+     "locality": "Київ",
+     "region": "Київська область",
+     "countryName": "Україна"
+    },
+    "kind": "defense",
+    "contactPoint": {
+     "name": "Половинка Ольга Миколаївна",
+     "email": "opolovynka@dpsu.gov.ua",
+     "telephone": "0445276511"
+    }
+   },
+   "awards": [
+    {
+     "id": "5b6dd2aabb7b4789900ff4285413117d",
+     "status": "active",
+     "date": "2026-09-10T16:57:04.953390+03:00",
+     "value": {
+      "amount": 5832.0,
+      "currency": "UAH",
+      "valueAddedTaxIncluded": true
+     },
+     "suppliers": [
+      {
+       "name": "ТОВ \"СФЕРАЛАЙН ЛТД\"",
+       "identifier": {
+        "scheme": "UA-EDR",
+        "id": "39734946",
+        "legalName": "ТОВ \"СФЕРАЛАЙН ЛТД\""
+       },
+       "address": {
+        "streetAddress": "пр-т. Берестейський, буд. 67,  корпус Р офіс-склад.",
+        "locality": "місто Київ",
+        "region": "Київська область",
+        "postalCode": "03062",
+        "countryName": "Україна"
+       },
+       "scale": "mid"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "e18e363da4e34abdb109f71258eff6ce",
+   "tenderID": "UA-2026-09-10-013768-a",
+   "title": "код ДК 021:2015:15860000-4 Кава, чай та супутня продукція (чай 0,085; кава 0,001)\n",
+   "status": "complete",
+   "procurementMethod": "limited",
+   "procurementMethodType": "reporting",
+   "dateModified": "2026-09-10T16:57:07.096676+03:00",
+   "value": {
+    "amount": 3320.0,
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false
+   },
+   "procuringEntity": {
+    "name": "КОМУНАЛЬНЕ  ПІДПРИЄМСТВО \"ЛЮБЕШІВСЬКА БАГАТОПРОФІЛЬНА ЛІКАРНЯ\" ЛЮБЕШІВСЬКОЇ СЕЛИЩНОЇ РАДИ",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "01982927",
+     "legalName": "КОМУНАЛЬНЕ  ПІДПРИЄМСТВО \"ЛЮБЕШІВСЬКА БАГАТОПРОФІЛЬНА ЛІКАРНЯ\" ЛЮБЕШІВСЬКОЇ СЕЛИЩНОЇ РАДИ"
+    },
+    "address": {
+     "streetAddress": "вул. Незалежності, буд. 3",
+     "locality": "смт. Любешів",
+     "region": "Волинська область",
+     "postalCode": "44201",
+     "countryName": "Україна"
+    },
+    "kind": "general",
+    "contactPoint": {
+     "name": "Ніна Корець",
+     "email": "nina-korets@ukr.net",
+     "telephone": "+380996365649"
+    }
+   },
+   "awards": [
+    {
+     "id": "569d61661fec4208965ab2dfc9f9c431",
+     "status": "active",
+     "date": "2026-09-10T16:57:02.818204+03:00",
+     "value": {
+      "amount": 3320.0,
+      "currency": "UAH",
+      "valueAddedTaxIncluded": false
+     },
+     "suppliers": [
+      {
+       "name": "ТОРГУНАКОВ СЕРГІЙ ВІКТОРОВИЧ",
+       "identifier": {
+        "scheme": "UA-EDR",
+        "id": "2292512593",
+        "legalName": "ТОРГУНАКОВ СЕРГІЙ ВІКТОРОВИЧ"
+       },
+       "address": {
+        "streetAddress": "Луцький р-н місто Ківерці вул.Ціолковського будинок 38",
+        "locality": "місто Ківерці",
+        "region": "Волинська область",
+        "postalCode": "45200",
+        "countryName": "Україна"
+       },
+       "scale": "mid",
+       "contactPoint": {
+        "name": "",
+        "telephone": "0666090340"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "f45ec2bcea7b40a481b59522a4b8d24d",
+   "tenderID": "UA-2026-09-10-013730-a",
+   "title": "Канцтовари ",
+   "status": "complete",
+   "procurementMethod": "limited",
+   "procurementMethodType": "reporting",
+   "dateModified": "2026-09-10T16:57:06.659329+03:00",
+   "value": {
+    "amount": 714.0,
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false
+   },
+   "procuringEntity": {
+    "name": "Відділ освіти, культури, молоді та спорту Великоомелянської сільської ради",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "44039194",
+     "legalName": "Відділ освіти, культури, молоді та спорту Великоомелянської сільської ради"
+    },
+    "address": {
+     "streetAddress": "вул. Шевченка, 79",
+     "locality": "с. Велика Омеляна",
+     "region": "Рівненська область",
+     "postalCode": "35360",
+     "countryName": "Україна"
+    },
+    "kind": "authority",
+    "contactPoint": {
+     "name": "Оксана Кафідова",
+     "email": "velykaomelyanaosvita@gmail.com",
+     "telephone": "+380672908073"
+    }
+   },
+   "awards": [
+    {
+     "id": "d5a59b4ef8c2410aaeb295319ccd69f5",
+     "status": "active",
+     "date": "2026-09-10T16:57:03.722792+03:00",
+     "value": {
+      "amount": 714.0,
+      "currency": "UAH",
+      "valueAddedTaxIncluded": false
+     },
+     "suppliers": [
+      {
+       "name": "ДЕМ'ЯНЧУК РУСЛАНА ОЛЕГІВНА",
+       "identifier": {
+        "scheme": "UA-EDR",
+        "id": "2809404221",
+        "legalName": "ДЕМ'ЯНЧУК РУСЛАНА ОЛЕГІВНА"
+       },
+       "address": {
+        "streetAddress": "Рівненський р-н село Грушвиця Перша ВУЛИЦЯ НОВА будинок 7",
+        "locality": "",
+        "region": "Рівненська область",
+        "postalCode": "35364",
+        "countryName": "Україна"
+       },
+       "scale": "sme"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ec3c69150f8f45b7ac4ba455ad2ddd6b",
+   "tenderID": "UA-2026-09-10-013426-a",
+   "title": "Послуги пов'язані з лісозаготівлею Дуплянське ПНДВ",
+   "status": "active.tendering",
+   "procurementMethod": "open",
+   "procurementMethodType": "aboveThreshold",
+   "dateModified": "2026-09-10T16:57:08.378047+03:00",
+   "value": {
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false,
+    "amount": 384817.68
+   },
+   "procuringEntity": {
+    "name": "Національний природний парк \"Синьогора\"",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "31075296",
+     "legalName": "Національний природний парк \"Синьогора\""
+    },
+    "address": {
+     "streetAddress": "вулиця Зарічна, 4, Івано-Франківський район",
+     "locality": "село Стара Гута",
+     "region": "Івано-Франківська область",
+     "postalCode": "77745",
+     "countryName": "Україна"
+    },
+    "contactPoint": {
+     "name": "Соловка Ірина Іванівна",
+     "name_en": "  ",
+     "name_ru": "  ",
+     "email": "Synyogoraaccounting@ukr.net",
+     "telephone": "+380342558149",
+     "faxNumber": "+380342558168"
+    },
+    "kind": "general"
+   }
+  },
+  {
+   "id": "eb2cbd6172d040ee9c30cd202c2154a8",
+   "tenderID": "UA-2026-09-09-007374-a",
+   "title": "Послуги з організації управління небезпечними відходами: комплекс операцій збирання та з подальшим обробленням небезпечних відходів (Код ДК 021:2015 90520000-8 Послуги у сфері поводження з радіоактивними, токсичними, медичними та небезпечними відходами) (ДК 90524200-8 - Послуги з утилізації/видалення медичних відходів)",
+   "status": "active.tendering",
+   "procurementMethod": "open",
+   "procurementMethodType": "aboveThreshold",
+   "dateModified": "2026-09-10T16:57:07.718165+03:00",
+   "value": {
+    "currency": "UAH",
+    "valueAddedTaxIncluded": false,
+    "amount": 853357.77
+   },
+   "procuringEntity": {
+    "name": "КОМУНАЛЬНЕ НЕКОМЕРЦІЙНЕ ПІДПРИЄМСТВО ОБУХІВСЬКОЇ МІСЬКОЇ РАДИ \"ОБУХІВСЬКА БАГАТОПРОФІЛЬНА ЛІКАРНЯ ІНТЕНСИВНОГО ЛІКУВАННЯ\"",
+    "identifier": {
+     "scheme": "UA-EDR",
+     "id": "01994155",
+     "legalName": "КОМУНАЛЬНЕ НЕКОМЕРЦІЙНЕ ПІДПРИЄМСТВО ОБУХІВСЬКОЇ МІСЬКОЇ РАДИ \"ОБУХІВСЬКА БАГАТОПРОФІЛЬНА ЛІКАРНЯ ІНТЕНСИВНОГО ЛІКУВАННЯ\""
+    },
+    "address": {
+     "streetAddress": "вул.Каштанова, будинок 52",
+     "locality": "Обухів",
+     "region": "Київська область",
+     "postalCode": "08704",
+     "countryName": "Україна"
+    },
+    "contactPoint": {
+     "name": "Антосієв Сергій ",
+     "email": "s_antos@ukr.net",
+     "telephone": "380969128911"
+    },
+    "kind": "general"
+   }
+  }
+ ]
+}

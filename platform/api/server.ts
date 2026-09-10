@@ -12,6 +12,8 @@ import { DocumentStore } from '../core/ingestion/DocumentStore';
 import { IngestionService } from '../core/ingestion/IngestionService';
 import { StructuredRecordConnector, StructuredMapping } from '../core/ingestion/StructuredRecordConnector';
 import { InfraUAConnector, InfraUAPayload } from '../core/ingestion/InfraUAConnector';
+import { ProzorroConnector, ProzorroTender } from '../core/ingestion/ProzorroConnector';
+import { ProzorroClient } from '../core/ingestion/ProzorroClient';
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
@@ -93,6 +95,8 @@ for (const doc of documents.loadAll()) vectors.addDocument(doc);
 const ingestion = new IngestionService(graph, vectors, audit);
 const structuredConnector = new StructuredRecordConnector(graph, vectors, audit);
 const infraUA = new InfraUAConnector(graph, vectors, audit);
+const prozorro = new ProzorroConnector(graph, vectors, audit);
+const prozorroClient = new ProzorroClient(process.env.PROZORRO_API_URL);
 const narrativeAdapter = process.env.ANTHROPIC_API_KEY
   ? new ClaudeNarrativeAdapter(process.env.ANTHROPIC_API_KEY)
   : new DeterministicNarrativeAdapter();
@@ -577,6 +581,99 @@ app.post('/api/platform/alerts/:id/acknowledge', moveAlert('acknowledged'));
 app.post('/api/platform/alerts/:id/resolve', moveAlert('resolved'));
 
 /**
+ * Ingests procurement records already in hand.
+ *
+ * Separate from the pull below so the mapping can be exercised, replayed and
+ * tested without depending on somebody else's service being up - and so an
+ * operator holding an export can load it without the platform reaching out at
+ * all.
+ */
+app.post('/api/platform/ingest/prozorro', (req, res) => {
+  const { tenders, source, clearance } = req.body ?? {};
+  if (!Array.isArray(tenders)) {
+    return res.status(400).json({ error: 'tenders must be an array of Prozorro tender records' });
+  }
+  const callerClearance = req.callerClearance!;
+  // Procurement records are published openly, so PUBLIC is the honest default;
+  // a deployment that treats the assembled picture as more sensitive than its
+  // parts says so in the request, and is still clamped to its own level.
+  const level = Math.min(parseClearance(clearance, ClearanceLevel.PUBLIC), callerClearance);
+  const marks = resolveWriteCompartments(req);
+  if ('error' in marks) return res.status(403).json({ error: marks.error });
+
+  try {
+    const result = prozorro.ingest(
+      tenders as ProzorroTender[],
+      typeof source === 'string' && source ? source : 'prozorro',
+      level,
+      marks.compartments
+    );
+    documents.appendMany(result.documents);
+    res.status(201).json({ ...result, documents: result.documents.length, alerts: sweepAfterIngest(req) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Pulls a bounded window from the Prozorro change feed and ingests it.
+ *
+ * Gated at CONFIDENTIAL, which is not about the data - it is public - but
+ * about the action: this is the one route that makes the platform originate
+ * outbound traffic to a third party under its own name, and that is a
+ * different right from reading or loading.
+ *
+ * The cursor comes back so a later call resumes where this one stopped. There
+ * is no timer behind it on purpose: a scheduler needs a lock, and there is no
+ * lock across restarts here - two instances walking the same window would
+ * double every amount in `value_concentration` with nothing looking wrong.
+ */
+app.post('/api/platform/ingest/prozorro/pull', async (req, res) => {
+  if (!clearanceAtLeast(req.callerClearance!, ClearanceLevel.CONFIDENTIAL)) {
+    return res.status(403).json({ error: 'pulling from an external feed requires CONFIDENTIAL clearance' });
+  }
+  const { maxPages, pageSize, since, maxTenders, offset, source } = req.body ?? {};
+  const marks = resolveWriteCompartments(req);
+  if ('error' in marks) return res.status(403).json({ error: marks.error });
+
+  try {
+    const pull = await prozorroClient.pull(
+      {
+        maxPages: typeof maxPages === 'number' ? maxPages : undefined,
+        pageSize: typeof pageSize === 'number' ? pageSize : undefined,
+        maxTenders: typeof maxTenders === 'number' ? maxTenders : undefined,
+        since: typeof since === 'string' ? since : undefined,
+      },
+      typeof offset === 'string' ? offset : undefined
+    );
+    const result = prozorro.ingest(
+      pull.tenders,
+      typeof source === 'string' && source ? source : 'prozorro',
+      ClearanceLevel.PUBLIC,
+      marks.compartments
+    );
+    documents.appendMany(result.documents);
+    audit.append(req.principal!.id, 'prozorro_pull', {
+      pagesRead: pull.pagesRead,
+      tendersRead: pull.tenders.length,
+      failedDetails: pull.failed.length,
+      awardsIngested: result.awardsIngested,
+    });
+    res.status(201).json({
+      ...result,
+      documents: result.documents.length,
+      pagesRead: pull.pagesRead,
+      failed: pull.failed,
+      nextOffset: pull.nextOffset,
+      alerts: sweepAfterIngest(req),
+    });
+  } catch (err) {
+    // A third-party feed being down is not this platform failing.
+    res.status(502).json({ error: `Prozorro feed unavailable: ${err instanceof Error ? err.message : String(err)}` });
+  }
+});
+
+/**
  * Retracts an ingestion batch by its source.
  *
  * Destructive, so it is gated at SECRET rather than at the caller's own level:
@@ -929,4 +1026,17 @@ if (require.main === module) {
   });
 }
 
-export { app, graph, vectors, audit, ingestion, structuredConnector, infraUA, investigator, cases, alerts, alertEngine };
+export {
+  app,
+  graph,
+  vectors,
+  audit,
+  ingestion,
+  structuredConnector,
+  infraUA,
+  prozorro,
+  investigator,
+  cases,
+  alerts,
+  alertEngine,
+};

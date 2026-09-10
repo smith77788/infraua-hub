@@ -17,12 +17,36 @@ export interface SearchHit {
 }
 
 const STOPWORDS = new Set([
+  // Russian
   'и', 'в', 'во', 'на', 'с', 'со', 'к', 'о', 'по', 'от', 'до', 'из', 'у', 'а', 'но', 'что', 'это', 'как', 'для',
+  // Ukrainian
+  'і', 'й', 'та', 'у', 'з', 'із', 'зі', 'на', 'до', 'від', 'за', 'під', 'при', 'про', 'що', 'як', 'це', 'для',
+  'або', 'бо', 'ще', 'вже', 'був', 'була', 'було', 'є',
+  // English
   'the', 'a', 'an', 'of', 'to', 'in', 'on', 'and', 'or', 'is', 'was', 'for', 'with', 'at', 'by',
 ]);
 
+/**
+ * Splits text into searchable terms.
+ *
+ * The character class here used to be `[a-zа-яё0-9]`, and `а-я` is the Russian
+ * alphabet: і, ї, є and ґ fall outside it. They were therefore treated as
+ * separators, so "Київобленерго" indexed as "ки" + "вобленерго" and "Дніпро"
+ * as "дн" + "про" - every Ukrainian word containing one of those four letters
+ * was silently cut into fragments, on both the document and the query side.
+ *
+ * That produced something worse than no results: the fragments still matched
+ * each other often enough for search to look like it worked, while "Дніпро"
+ * and "Дніпровська" shared no term at all and unrelated words collided on
+ * shared stumps. This is the same omission, one module over, as the one
+ * documented in `slugify` - and like that one it could not be seen by reading
+ * the regex, only by feeding it real Ukrainian names.
+ *
+ * `\p{L}` with the `u` flag takes any letter in any script, so the question
+ * "which alphabets did we remember" stops existing.
+ */
 function tokenize(text: string): string[] {
-  return (text.toLowerCase().match(/[a-zа-яё0-9]+/gi) ?? []).filter((t) => t.length > 1 && !STOPWORDS.has(t));
+  return (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1 && !STOPWORDS.has(t));
 }
 
 /**
