@@ -580,3 +580,100 @@ describe('platform API: InfraUA ingestion', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('platform API: retraction', () => {
+  const payload = {
+    facilities: [
+      {
+        id: 'r-1',
+        name: 'Обʼєкт для відкликання',
+        category: 'substation',
+        lat: 49.1,
+        lon: 32.1,
+        operator: 'Тестоператор',
+        source: 'https://openstreetmap.org/way/900',
+      },
+      {
+        id: 'r-2',
+        name: 'Другий обʼєкт',
+        category: 'hospital',
+        lat: 49.2,
+        lon: 32.2,
+        source: 'https://openstreetmap.org/way/901',
+      },
+    ],
+    dependencies: [
+      {
+        from: 'r-1',
+        to: 'r-2',
+        km: 8,
+        kind: 'feed',
+        provenance: { kind: 'observed', source: 'OpenStreetMap', ref: 'way/902' },
+      },
+    ],
+  };
+
+  it('requires SECRET clearance — ingesting and un-ingesting are not the same right', async () => {
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.internal,
+      body: { payload, source: 'retract-me', sector: 'infrastructure' },
+    });
+    const refused = await call('POST', '/api/platform/retract', {
+      key: KEYS.internal,
+      body: { source: 'retract-me' },
+    });
+    expect(refused.status).toBe(403);
+
+    const still = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    expect(still.body.nodes.some((n: any) => n.label === 'Другий обʼєкт')).toBe(true);
+  });
+
+  it('removes the batch and the edges that hung on it', async () => {
+    const res = await call('POST', '/api/platform/retract', {
+      key: KEYS.secret,
+      body: { source: 'retract-me' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.nodesRemoved.length).toBeGreaterThan(0);
+
+    const after = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    expect(after.body.nodes.some((n: any) => n.label === 'Другий обʼєкт')).toBe(false);
+    // Ребро без кінця — це не звʼязок, а висяче посилання.
+    expect(
+      after.body.edges.some((e: any) => e.source.includes('r-1') || e.target.includes('r-2')),
+    ).toBe(false);
+  });
+
+  it('keeps a node that another source also vouches for', async () => {
+    // Обʼєкт, який бачили два джерела, не належить жодному з них одноосібно.
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: { payload, source: 'source-a', sector: 'infrastructure' },
+    });
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: { payload, source: 'source-b', sector: 'infrastructure' },
+    });
+    await call('POST', '/api/platform/retract', {
+      key: KEYS.secret,
+      body: { source: 'source-a' },
+    });
+
+    const after = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    expect(after.body.nodes.some((n: any) => n.label === 'Другий обʼєкт')).toBe(true);
+  });
+
+  it('rejects an empty source instead of wiping the graph', async () => {
+    const res = await call('POST', '/api/platform/retract', {
+      key: KEYS.secret,
+      body: { source: '   ' },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('records the retraction in the audit chain', async () => {
+    const audit = await call('GET', '/api/platform/audit', { key: KEYS.secret });
+    const entries = audit.body.entries ?? audit.body;
+    expect(JSON.stringify(entries)).toContain('RETRACT_SOURCE');
+  });
+});

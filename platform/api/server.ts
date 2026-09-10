@@ -14,7 +14,7 @@ import { StructuredRecordConnector, StructuredMapping } from '../core/ingestion/
 import { InfraUAConnector, InfraUAPayload } from '../core/ingestion/InfraUAConnector';
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
-import { ClearanceLevel, parseClearance } from '../core/security/Clearance';
+import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
 import { Guardrails } from '../core/security/Guardrails';
 import { EnvApiKeyAuth } from '../core/security/ApiKeyAuth';
 import { RateLimiter } from '../core/security/RateLimiter';
@@ -254,6 +254,35 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
     );
     documents.appendMany(result.documents);
     res.status(201).json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Retracts an ingestion batch by its source.
+ *
+ * Destructive, so it is gated at SECRET rather than at the caller's own level:
+ * ingesting is routine, taking data back out is not, and the two should not be
+ * reachable with the same key. Recorded in the audit chain with what it
+ * removed, because "the graph got smaller" is exactly the kind of change
+ * nobody can reconstruct afterwards.
+ */
+app.post('/api/platform/retract', (req, res) => {
+  const { source } = req.body ?? {};
+  if (typeof source !== 'string' || !source.trim()) {
+    return res.status(400).json({ error: 'source is required' });
+  }
+  if (!clearanceAtLeast(req.callerClearance!, ClearanceLevel.SECRET)) {
+    return res.status(403).json({ error: 'retraction requires SECRET clearance' });
+  }
+  try {
+    const result = graph.retractSource(source.trim());
+    audit.append(source.trim(), 'RETRACT_SOURCE', {
+      nodesRemoved: result.nodesRemoved.length,
+      edgesRemoved: result.edgesRemoved,
+    });
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

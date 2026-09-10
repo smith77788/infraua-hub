@@ -126,6 +126,55 @@ export class GraphStore {
     return edge;
   }
 
+  /**
+   * Retracts everything that came from one ingestion source.
+   *
+   * A store that can only ever grow is not a store you can operate. Data
+   * arrives wrong - a bad mapping, a test run against production, a feed that
+   * turns out to be someone else's - and without a way to take a batch back
+   * out, the only remedy is deleting the whole graph.
+   *
+   * Scoped by source document prefix rather than "delete all": retracting a
+   * batch is a normal operation, wiping the graph is not, and one should not
+   * be reachable by fat-fingering the other.
+   *
+   * A node touched by more than one source keeps its other provenance and
+   * stays: it is not this batch's to remove. Only its reference is dropped.
+   * Edges go whenever either endpoint goes, because an edge to a node that no
+   * longer exists is not a relation, it is a dangling pointer.
+   */
+  retractSource(sourcePrefix: string): { nodesRemoved: string[]; edgesRemoved: number } {
+    if (!sourcePrefix) throw new Error('sourcePrefix is required');
+
+    const matches = (docId: string) => docId === sourcePrefix || docId.startsWith(`${sourcePrefix}#`);
+    const removed: string[] = [];
+
+    for (const node of Array.from(this.nodes.values())) {
+      const remaining = node.source_doc_ids.filter((d) => !matches(d));
+      if (remaining.length === node.source_doc_ids.length) continue;
+      if (remaining.length === 0) {
+        this.nodes.delete(node.id);
+        removed.push(node.id);
+      } else {
+        node.source_doc_ids = remaining;
+      }
+    }
+
+    const gone = new Set(removed);
+    const before = this.edges.length;
+    this.edges = this.edges.filter((e) => {
+      if (gone.has(e.source) || gone.has(e.target)) return false;
+      const remaining = e.source_doc_ids.filter((d) => !matches(d));
+      if (remaining.length === e.source_doc_ids.length) return true;
+      if (remaining.length === 0) return false;
+      e.source_doc_ids = remaining;
+      return true;
+    });
+
+    this.persist();
+    return { nodesRemoved: removed, edgesRemoved: before - this.edges.length };
+  }
+
   getNode(id: string, clearance: ClearanceLevel = ClearanceLevel.TOP_SECRET): GraphNode | null {
     const node = this.nodes.get(id);
     if (!node || !clearanceAtLeast(clearance, node.clearance)) return null;
