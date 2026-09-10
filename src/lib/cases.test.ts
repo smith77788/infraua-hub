@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  isPinnable,
   isPinned,
   platformEntityId,
   summarizeCase,
@@ -114,5 +115,40 @@ describe("контракт із платформою", () => {
     for (const id of ["way/123", "node/9", "Київ/1", "node_9-b", "seed/hospital/3", "ГЕС №2"]) {
       expect(platformEntityId(id)).toBe(slugify(`infraua_facility_${id}`));
     }
+  });
+});
+
+/*
+ * Перевірка входу серверної функції. Це не дублювання перевірки у вигляді:
+ * серверна функція — окремий вхід, і покладатися на те, що виклик прийшов
+ * саме з нашої форми, не можна. Тому правило перевіряється тут, поруч із
+ * рештою правил справ, без мережі.
+ */
+describe("isPinnable — що приймає «приколоти»", () => {
+  const good = {
+    id: "way/123",
+    name: "ПС Північна",
+    category: "substation",
+    lat: 50.5,
+    lon: 30.5,
+    source: "osm",
+  };
+
+  it("приймає повний обʼєкт консолі", () => {
+    expect(isPinnable(good)).toBe(true);
+  });
+
+  it("відхиляє порожній ідентифікатор", () => {
+    expect(isPinnable({ ...good, id: "" })).toBe(false);
+  });
+
+  it("відхиляє нечислові координати", () => {
+    expect(isPinnable({ ...good, lat: "50.5" })).toBe(false);
+    expect(isPinnable({ ...good, lon: Number.NaN })).toBe(false);
+  });
+
+  it("відхиляє не-обʼєкти", () => {
+    expect(isPinnable(null)).toBe(false);
+    expect(isPinnable("way/123")).toBe(false);
   });
 });

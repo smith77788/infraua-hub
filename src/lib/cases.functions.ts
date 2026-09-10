@@ -1,6 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
 
-import { validateNote, validateTitle, type AnalystCase } from "./cases";
+import {
+  isPinnable,
+  PIN_MAX,
+  platformEntityId,
+  validateNote,
+  validateTitle,
+  type AnalystCase,
+  type PinnableFacility,
+} from "./cases";
 
 /**
  * Справи через платформу.
@@ -134,24 +142,54 @@ export const addCaseNote = createServerFn({ method: "POST" })
     return { configured: true, ok: true, case: res.body as AnalystCase };
   });
 
+/**
+ * Приколоти обʼєкти консолі до справи.
+ *
+ * Платформа колить лише те, що вже є в її графі й видиме викликачеві — і це
+ * правильно: інакше рівень доступу справи піднімався б за твердженням клієнта
+ * про класифікацію того, чого він не бачить. Але обʼєкти консолі приходять з
+ * OSM і в графі платформи їх зазвичай немає, тож голий `pin` за
+ * ідентифікатором відповідав би 404 на кожен перший клік.
+ *
+ * Тому «приколоти» — це два кроки в одному: спершу обʼєкт потрапляє в
+ * платформу штатним прийомом даних (`upsertNode`, тож повтор нічого не
+ * дублює), потім колеться. Це не обхід перевірки: рівень доступу все одно
+ * обмежений рівнем ключа консолі, а вузол після прийому справді існує й
+ * справді видимий.
+ */
 export const pinToCase = createServerFn({ method: "POST" })
-  .validator((input: unknown): { id: string; entityIds: string[] } => {
-    const v = (input ?? {}) as { id?: unknown; entityIds?: unknown };
-    return {
-      id: typeof v.id === "string" ? v.id : "",
-      entityIds: Array.isArray(v.entityIds)
-        ? v.entityIds.filter((x): x is string => typeof x === "string")
-        : [],
-    };
+  .validator((input: unknown): { id: string; facilities: PinnableFacility[] } => {
+    const v = (input ?? {}) as { id?: unknown; facilities?: unknown };
+    const facilities = Array.isArray(v.facilities)
+      ? v.facilities.filter(isPinnable).slice(0, PIN_MAX)
+      : [];
+    return { id: typeof v.id === "string" ? v.id : "", facilities };
   })
   .handler(async ({ data }): Promise<CasesResult> => {
     if (!config()) return { configured: false, ok: false };
-    if (!data.id || data.entityIds.length === 0) {
+    if (!data.id || data.facilities.length === 0) {
       return { configured: true, ok: false, error: "Немає що приколоти." };
     }
+
+    const ingest = await platformFetch("/api/platform/ingest/infraua", {
+      method: "POST",
+      body: JSON.stringify({
+        payload: { facilities: data.facilities, retrievedAt: new Date().toISOString() },
+        source: "infraua-console",
+        sector: "infrastructure",
+      }),
+    });
+    if (!ingest.ok) {
+      return {
+        configured: true,
+        ok: false,
+        error: `Не вдалося передати обʼєкт у платформу — ${ingest.error ?? "невідома помилка"}`,
+      };
+    }
+
     const res = await platformFetch(`/api/platform/cases/${encodeURIComponent(data.id)}/pin`, {
       method: "POST",
-      body: JSON.stringify({ entityIds: data.entityIds }),
+      body: JSON.stringify({ entityIds: data.facilities.map((f) => platformEntityId(f.id)) }),
     });
     if (!res.ok) return { configured: true, ok: false, ...(res.error ? { error: res.error } : {}) };
     return { configured: true, ok: true, case: res.body as AnalystCase };

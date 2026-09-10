@@ -55,6 +55,7 @@ import {
   getFacilityTiles,
   getThreats,
 } from "@/lib/infra.functions";
+import { platformEntityId } from "@/lib/cases";
 import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
@@ -87,6 +88,7 @@ const InfraMap = lazy(() => import("@/components/InfraMap"));
 const AnalyticsView = lazy(() => import("@/components/AnalyticsView"));
 const ThreatGraph = lazy(() => import("@/components/ThreatGraph"));
 const ThreatChains = lazy(() => import("@/components/ThreatChains"));
+const CasePanel = lazy(() => import("@/components/CasePanel"));
 
 const TIME_WINDOWS = [
   { id: "24h", label: "24 год", hours: 24 },
@@ -481,6 +483,18 @@ function Console() {
   const impactedIds = useMemo(() => outage?.lost ?? new Set<string>(), [outage]);
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
+
+  /*
+   * Зіставлення «ідентифікатор платформи → обʼєкт консолі» для приколотих у
+   * справах. Справа переживає сеанс, а завантажений набір обʼєктів — ні, тож
+   * зіставлення часткове за побудовою: що не завантажене, лишається
+   * ідентифікатором і не вдає з себе посилання.
+   */
+  const platformIds = useMemo(() => {
+    const m = new Map<string, Facility>();
+    for (const f of allFacilities) m.set(platformEntityId(f.id), f);
+    return m;
+  }, [allFacilities]);
   const selectedAnalytics = selectedId ? (analysis.perFacility.get(selectedId) ?? null) : null;
   /*
    * Досьє будується з усього набору, а не з відфільтрованого: воно описує
@@ -1556,6 +1570,21 @@ function Console() {
                 )}
               </section>
             )}
+
+            {/*
+              Справи стоять одразу під інспектором, бо саме там зʼявляється те,
+              що варто зберегти. Панель мовчить, коли звʼязок із платформою не
+              налаштований: консоль самодостатня, і це штатний стан.
+            */}
+            <Suspense fallback={null}>
+              <div className="mb-5">
+                <CasePanel
+                  facility={selected ?? undefined}
+                  knownEntities={platformIds}
+                  onOpenFacility={setSelectedId}
+                />
+              </div>
+            </Suspense>
 
             <section className="min-h-0">
               <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">

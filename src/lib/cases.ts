@@ -122,3 +122,38 @@ export function isPinned(item: AnalystCase, entityId: string): boolean {
 export function platformEntityId(facilityId: string): string {
   return slugify(`infraua_facility_${facilityId}`);
 }
+
+/**
+ * Обʼєкт у тому вигляді, в якому його приймає платформа. Форма збігається з
+ * `Facility` консолі, тож перетворення тут немає — лише перевірка, бо серверна
+ * функція це теж вхід.
+ */
+export interface PinnableFacility {
+  id: string;
+  name: string;
+  category: string;
+  lat: number;
+  lon: number;
+  operator?: string;
+  detail?: string;
+  source: string;
+}
+
+/** Стільки обʼєктів проходить за один клік — решта вимагає повторної дії. */
+export const PIN_MAX = 200;
+
+export function isPinnable(x: unknown): x is PinnableFacility {
+  if (!x || typeof x !== "object") return false;
+  const f = x as Record<string, unknown>;
+  return (
+    typeof f["id"] === "string" &&
+    f["id"].length > 0 &&
+    typeof f["name"] === "string" &&
+    typeof f["category"] === "string" &&
+    typeof f["lat"] === "number" &&
+    Number.isFinite(f["lat"]) &&
+    typeof f["lon"] === "number" &&
+    Number.isFinite(f["lon"]) &&
+    typeof f["source"] === "string"
+  );
+}
