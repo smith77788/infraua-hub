@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { ThreatGraph as Graph, ThreatSeverity } from "@/lib/threat-correlation";
 
@@ -12,6 +12,19 @@ import type { ThreatGraph as Graph, ThreatSeverity } from "@/lib/threat-correlat
  * не можуть «злипнутися», відстані задані конструктивно, а заголовки колонок
  * прямо кажуть, на що дивишся. Ребра йдуть лише між сусідніми колонками, тож
  * не перетинають усе полотно.
+ *
+ * Далі виправлено три речі, через які граф лишався нечитабельним:
+ *
+ * 1. **Підписи були лише в обʼєктів і каналів.** Середня колонка — цілі —
+ *    стояла безіменними кружечками, тож сказати, яка саме ціль звʼязує обʼєкт
+ *    із каналом, було неможливо. Тепер підписано кожен вузол.
+ * 2. **Полотно було 860 px завширшки з `max-w-none`.** На телефоні воно
+ *    виїжджало за екран, і людина бачила середину графа без колонки обʼєктів.
+ *    Тепер ширина тягнеться за контейнером, а горизонтальні відстані
+ *    лишаються сталими у власних координатах.
+ * 3. **Не було чим простежити один ланцюжок.** Наведення на будь-який вузол
+ *    підсвічує його ланцюжок і приглушує решту — саме цим граф і корисний,
+ *    коли ціль спільна для кількох обʼєктів.
  */
 
 const SEV_COLOR: Record<ThreatSeverity, string> = {
@@ -26,11 +39,11 @@ const MAX_THREATS = 22;
 const MAX_CHANNELS = 18;
 
 const COL_ASSET = 300;
-const COL_THREAT = 500;
-const COL_CHANNEL = 660;
-const W = 860;
+const COL_THREAT = 520;
+const COL_CHANNEL = 700;
+const W = 880;
 const TOP = 58;
-const ROW_H = 28;
+const ROW_H = 30;
 const R_BASE = { asset: 7, threat: 5, channel: 4 } as const;
 
 interface Placed {
@@ -50,6 +63,8 @@ interface Layout {
   height: number;
   hiddenThreats: number;
   hiddenChannels: number;
+  /** Сусіди кожного вузла — з цього будується підсвітка ланцюжка. */
+  adj: Map<string, Set<string>>;
 }
 
 function layout(graph: Graph): Layout {
@@ -60,6 +75,7 @@ function layout(graph: Graph): Layout {
     height: 220,
     hiddenThreats: 0,
     hiddenChannels: 0,
+    adj: new Map(),
   };
   if (!graph.nodes.length) return empty;
 
@@ -120,11 +136,19 @@ function layout(graph: Graph): Layout {
   place(channels, COL_CHANNEL);
 
   const edges: Layout["edges"] = [];
+  const adj = new Map<string, Set<string>>();
+  const link = (x: string, y: string) => {
+    let set = adj.get(x);
+    if (!set) adj.set(x, (set = new Set()));
+    set.add(y);
+  };
   for (const e of graph.edges) {
     const a = byKey.get(e.a);
     const b = byKey.get(e.b);
     if (!a || !b) continue; // один із кінців відсіявся лімітом
     edges.push({ a, b, channel: e.kind === "reported-by" });
+    link(a.key, b.key);
+    link(b.key, a.key);
   }
 
   return {
@@ -134,6 +158,7 @@ function layout(graph: Graph): Layout {
     height,
     hiddenThreats: threatsAll.length - threats.length,
     hiddenChannels: channelsAll.length - channels.length,
+    adj,
   };
 }
 
@@ -167,85 +192,101 @@ export default function ThreatGraph({
   onSelectAsset?: (facilityId: string) => void;
 }) {
   const l = useMemo(() => layout(graph), [graph]);
+  /*
+   * Наведений вузол задає «ланцюжок»: він сам плюс усі його сусіди. Решта
+   * приглушується, а не ховається — зникання вузлів під курсором змінює
+   * картинку під рукою й дезорієнтує.
+   */
+  const [hover, setHover] = useState<string | null>(null);
+  const chain = useMemo(() => {
+    if (!hover) return null;
+    const set = new Set<string>([hover]);
+    for (const k of l.adj.get(hover) ?? []) set.add(k);
+    return set;
+  }, [hover, l]);
 
   if (!l.nodes.length) {
     return (
-      <div className="flex size-full items-center justify-center px-6 text-center font-mono text-[11px] text-muted-foreground">
-        Немає активних звʼязків «загроза → обʼєкт». Коли повітряні цілі наближаються до критичних
-        обʼєктів, тут зʼявиться карта звʼязків.
+      <div className="flex size-full flex-col items-center justify-center gap-2 px-6 text-center">
+        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-emerald-400">
+          Активних звʼязків немає
+        </p>
+        <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
+          Граф малює ланцюжок «канал повідомив → ціль → наш обʼєкт». Він порожній, поки жодна
+          повітряна ціль не наблизилась до критичного обʼєкта.
+        </p>
       </div>
     );
   }
 
-  const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
+  const clip = (str: string, max: number) => (str.length > max ? `${str.slice(0, max)}…` : str);
+  const dim = (key: string) => (chain && !chain.has(key) ? 0.15 : 1);
 
   return (
-    <div className="size-full overflow-auto">
+    <div className="size-full overflow-y-auto overflow-x-hidden">
       <svg
         viewBox={`0 0 ${W} ${l.height}`}
-        width={W}
+        width="100%"
         height={l.height}
-        className="mx-auto block max-w-none"
+        preserveAspectRatio="xMidYMin meet"
+        className="block"
         role="img"
         aria-label="Граф звʼязків загроз і обʼєктів"
+        onMouseLeave={() => setHover(null)}
       >
         <ColumnHeader x={COL_CHANNEL} text="Канали" tone="#94a3b8" />
         <ColumnHeader x={COL_THREAT} text="Цілі" tone="#ffb020" />
         <ColumnHeader x={COL_ASSET} text="Обʼєкти" tone="#ff6b6b" />
 
-        {l.edges.map((e, i) => (
-          <path
-            key={i}
-            d={curve(e.a, e.b)}
-            fill="none"
-            stroke={e.channel ? "#3a4658" : "#ff4d4d"}
-            strokeWidth={e.channel ? 1 : 1.5}
-            strokeOpacity={e.channel ? 0.45 : 0.55}
-            strokeDasharray={e.channel ? "2 4" : undefined}
-          />
-        ))}
+        {l.edges.map((e, i) => {
+          const lit = !chain || (chain.has(e.a.key) && chain.has(e.b.key));
+          return (
+            <path
+              key={i}
+              d={curve(e.a, e.b)}
+              fill="none"
+              stroke={e.channel ? "#3a4658" : "#ff4d4d"}
+              strokeWidth={e.channel ? 1 : 1.5}
+              strokeOpacity={lit ? (e.channel ? 0.45 : 0.55) : 0.06}
+              strokeDasharray={e.channel ? "2 4" : undefined}
+            />
+          );
+        })}
 
         {l.nodes.map((p) => {
           const facilityId = p.kind === "asset" ? p.key.slice(2) : null;
           const clickable = Boolean(facilityId && onSelectAsset);
+          // Обʼєкти підписані ліворуч від колонки, цілі й канали — праворуч:
+          // так підпис ніколи не лягає на ребро сусідньої колонки.
+          const right = p.kind !== "asset";
           return (
             <g
               key={p.key}
+              opacity={dim(p.key)}
               style={{ cursor: clickable ? "pointer" : "default" }}
+              onMouseEnter={() => setHover(p.key)}
+              onFocus={() => setHover(p.key)}
               onClick={clickable ? () => onSelectAsset!(facilityId!) : undefined}
             >
+              <title>{p.label}</title>
               <circle
                 cx={p.x}
                 cy={p.y}
                 r={p.r}
                 fill={`${p.color}33`}
                 stroke={p.color}
-                strokeWidth={1.5}
+                strokeWidth={chain?.has(p.key) ? 2.5 : 1.5}
               />
-              {p.kind === "asset" ? (
-                <text
-                  x={p.x - p.r - 6}
-                  y={p.y + 3}
-                  fill="#e6edf5"
-                  fontSize={11}
-                  textAnchor="end"
-                  fontFamily="'JetBrains Mono', monospace"
-                >
-                  {clip(p.label, 32)}
-                </text>
-              ) : null}
-              {p.kind === "channel" ? (
-                <text
-                  x={p.x + p.r + 6}
-                  y={p.y + 3}
-                  fill="#9fb0c0"
-                  fontSize={10}
-                  textAnchor="start"
-                  fontFamily="'JetBrains Mono', monospace"
-                >
-                  {clip(p.label, 22)}
-                </text>
-              ) : null}
+              <text
+                x={right ? p.x + p.r + 6 : p.x - p.r - 6}
+                y={p.y + 3}
+                fill={p.kind === "asset" ? "#e6edf5" : "#9fb0c0"}
+                fontSize={p.kind === "asset" ? 11 : 10}
+                textAnchor={right ? "start" : "end"}
+                fontFamily="'JetBrains Mono', monospace"
+              >
+                {clip(p.label, p.kind === "asset" ? 32 : 20)}
+              </text>
             </g>
           );
         })}

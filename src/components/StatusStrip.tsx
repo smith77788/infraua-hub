@@ -1,23 +1,21 @@
 import type { ReactNode } from "react";
 
 import { SOURCE_STATE_LABEL, SOURCE_STATE_TONE, type SourceState } from "@/lib/sources";
-import type { SituationLevel } from "@/lib/infra-types";
 import type { WeatherNow } from "@/lib/air";
 import type { SpaceWeather, InternetOutages } from "@/lib/infra.functions";
 
 /*
- * Смуга стану під заголовком. Раніше вона жила великим інлайновим блоком у
- * маршруті — з ростом кількості фідів (повітря/Kp/інтернет/погода) це стало
- * важко читати й підтримувати. Тут вона зібрана в один компонент: кожен чип із
- * власним рівнем пріоритету видимості (важливіші лишаються на вузькому екрані,
- * фонові ховаються), а на мобільному все горизонтально прокручується.
+ * Смуга під заголовком: наскільки можна вірити тому, що показано.
+ *
+ * Раніше вона повторювала рівень обстановки — той самий напис, що й у
+ * `SituationBar` рядком нижче. Два однакові написи поспіль читаються як два
+ * різні твердження, і око щоразу витрачає час, щоб переконатися, що ні. Тому
+ * межа тут проста: `SituationBar` каже про світ, ця смуга — про дані (стан
+ * джерел, частка фактів) і про фон, який на світ впливає, але дії не вимагає.
+ *
+ * Кожен чип має власний поріг видимості: важливіші лишаються на вузькому
+ * екрані, фонові ховаються, а на мобільному все горизонтально прокручується.
  */
-
-const LEVEL_STRIP: Record<SituationLevel, string> = {
-  critical: "border-red-500/40 bg-red-500/10 text-red-300",
-  elevated: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  normal: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-};
 
 const COMPASS8 = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"];
 const compass = (deg: number) => COMPASS8[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
@@ -53,41 +51,27 @@ function Chip({
 }
 
 export default function StatusStrip({
-  level,
-  label,
   worstSource,
   observedShare,
-  airThreat,
   spaceWeather,
   outages,
   weather,
 }: {
-  level: SituationLevel;
-  label: string;
   worstSource: SourceState;
   observedShare: number;
-  airThreat: { total: number; critical: number };
   spaceWeather?: SpaceWeather | undefined;
   outages?: InternetOutages | undefined;
   weather?: WeatherNow | undefined;
 }) {
   return (
-    <div
-      className={`flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b px-4 font-mono text-[10px] uppercase tracking-[0.16em] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center ${LEVEL_STRIP[level]}`}
-    >
-      <span>{label}</span>
-      <Chip>
+    <div className="flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b border-border bg-card/20 px-4 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center">
+      <span className="flex items-center gap-1.5">
         <span className={`size-1.5 rounded-full ${SOURCE_STATE_TONE[worstSource]}`} />
         джерела: {SOURCE_STATE_LABEL[worstSource]}
+      </span>
+      <Chip from="sm" title="Частка звʼязків мережі, підтверджених спостереженням, а не виведених.">
+        факт {Math.round(observedShare * 100)}% звʼязків
       </Chip>
-      <Chip from="sm">факт {Math.round(observedShare * 100)}% звʼязків</Chip>
-      {airThreat.total > 0 ? (
-        <Chip tone="text-red-300">
-          <span className="size-1.5 animate-pulse rounded-full bg-red-400" />
-          повітря: {airThreat.total} обʼєкт(ів) під загрозою
-          {airThreat.critical > 0 ? `, ${airThreat.critical} критич.` : ""}
-        </Chip>
-      ) : null}
       {spaceWeather && !spaceWeather.degraded ? (
         <Chip
           from="sm"

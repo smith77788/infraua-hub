@@ -78,9 +78,19 @@ function Brief() {
   );
   const operators = useMemo(() => operatorRollup(facilities, analysis, 10), [facilities, analysis]);
   const riskMap = useMemo(() => facilitiesAtRisk(facilities, events), [facilities, events]);
+  /*
+   * Обʼєкти під тривогою рахуємо з тієї самої привʼязки, що й консоль
+   * (`analyzeNetwork` → `underAlarm`), щоб брифінг і карта не розходилися в
+   * рівні: одна тривога без наших обʼєктів не піднімає стан ані там, ані там.
+   */
+  const underAlarm = useMemo(() => {
+    let n = 0;
+    for (const a of analysis.perFacility.values()) if (a.underAlarm) n++;
+    return n;
+  }, [analysis]);
   const summary = useMemo(
-    () => summarize(facilities, riskMap, events, activeAlarms.length),
-    [facilities, riskMap, events, activeAlarms.length],
+    () => summarize(facilities, riskMap, events, activeAlarms.length, underAlarm),
+    [facilities, riskMap, events, activeAlarms.length, underAlarm],
   );
 
   const loading = facilitiesQuery.isLoading || eventsQuery.isLoading || alertsQuery.isLoading;

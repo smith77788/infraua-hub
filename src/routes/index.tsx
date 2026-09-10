@@ -86,6 +86,7 @@ import {
 const InfraMap = lazy(() => import("@/components/InfraMap"));
 const AnalyticsView = lazy(() => import("@/components/AnalyticsView"));
 const ThreatGraph = lazy(() => import("@/components/ThreatGraph"));
+const ThreatChains = lazy(() => import("@/components/ThreatChains"));
 
 const TIME_WINDOWS = [
   { id: "24h", label: "24 год", hours: 24 },
@@ -302,6 +303,13 @@ function Console() {
   const [query, setQuery] = useState("");
   const [showLinks, setShowLinks] = useState(true);
   const [showGraph, setShowGraph] = useState(false);
+  /*
+   * Панель звʼязків відкривається списком, а не графом. Питання під час
+   * нальоту — «що під ударом і скільки часу», і на нього відповідає рядок із
+   * назвою; граф вузлів корисний вужче — коли треба побачити спільну ціль — і
+   * тому стоїть другою вкладкою.
+   */
+  const [linkView, setLinkView] = useState<"list" | "graph">("list");
   const [showFrontline, setShowFrontline] = useState(true);
   const [showFires, setShowFires] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -418,8 +426,8 @@ function Console() {
   }, [allFacilities, active, query, focus, riskIds, alarmIds, regionOf]);
 
   const summary = useMemo(
-    () => summarize(allFacilities, riskMap, events, activeAlarms),
-    [allFacilities, riskMap, events, activeAlarms],
+    () => summarize(allFacilities, riskMap, events, activeAlarms, alarmIds.size),
+    [allFacilities, riskMap, events, activeAlarms, alarmIds],
   );
 
   /*
@@ -653,11 +661,8 @@ function Console() {
         діяти на побаченому.
       */}
       <StatusStrip
-        level={summary.level}
-        label={summary.label}
         worstSource={worstSource}
         observedShare={groundedness.observedShare}
-        airThreat={airThreatSummary}
         spaceWeather={feeds.spaceWeather}
         outages={feeds.outages}
         weather={feeds.weather}
@@ -769,6 +774,7 @@ function Console() {
         summary={summary}
         loading={loading}
         threats={threats.length}
+        airThreat={airThreatSummary}
         focus={focus}
         onFocus={setFocus}
         eventKind={eventKind}
@@ -920,10 +926,12 @@ function Console() {
               onClick={() => setShowGraph((v) => !v)}
               disabled={threatGraph.nodes.length === 0}
               className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
-                showGraph ? "border-red-500/60 text-red-300" : "border-border text-muted-foreground"
+                showGraph
+                  ? "border-primary/60 text-foreground"
+                  : "border-border text-muted-foreground"
               }`}
             >
-              <Share2 className="size-3.5" /> Граф загроз «ціль → обʼєкт»
+              <Share2 className="size-3.5" /> Що під загрозою з повітря
               {threatGraph.nodes.length > 0 ? (
                 <span className="ml-auto font-mono text-[10px] opacity-70">
                   {threatGraph.nodes.length}
@@ -1131,7 +1139,7 @@ function Console() {
                     },
                     {
                       key: "graph",
-                      label: "Граф загроз",
+                      label: "Під загрозою",
                       active: showGraph,
                       disabled: threatGraph.nodes.length === 0,
                       color: "#ff4d4d",
@@ -1149,22 +1157,46 @@ function Console() {
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
-                  <div className="flex items-center justify-between border-b border-border px-4 py-2">
-                    <div className="flex items-center gap-3 font-mono text-[11px] uppercase tracking-[0.1em]">
-                      <span className="flex items-center gap-1.5 text-red-300">
-                        <Share2 className="size-3.5" /> Граф звʼязків: обʼєкт ← ціль ← канал
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+                    <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] uppercase tracking-[0.1em]">
+                      <span className="flex items-center gap-1.5 text-foreground">
+                        <Share2 className="size-3.5" /> Що під загрозою з повітря
                       </span>
-                      <span className="hidden items-center gap-2 text-[9px] text-muted-foreground sm:flex">
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-red-500" /> обʼєкт
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-amber-400" /> ціль
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-slate-500" /> канал
-                        </span>
+                      <span className="flex overflow-hidden rounded-md border border-border">
+                        {(
+                          [
+                            ["list", "Список"],
+                            ["graph", "Граф"],
+                          ] as const
+                        ).map(([id, label]) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setLinkView(id)}
+                            className={`px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] transition-colors ${
+                              linkView === id
+                                ? "bg-primary/15 text-foreground"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
                       </span>
+                      {linkView === "graph" ? (
+                        <span className="hidden items-center gap-2 text-[9px] text-muted-foreground sm:flex">
+                          <span className="flex items-center gap-1">
+                            <span className="size-2 rounded-full bg-red-500" /> обʼєкт
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="size-2 rounded-full bg-amber-400" /> ціль
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="size-2 rounded-full bg-slate-500" /> канал
+                          </span>
+                          <span>наведіть — підсвітить ланцюжок</span>
+                        </span>
+                      ) : null}
                     </div>
                     <Button
                       size="sm"
@@ -1183,13 +1215,24 @@ function Console() {
                         </div>
                       }
                     >
-                      <ThreatGraph
-                        graph={threatGraph}
-                        onSelectAsset={(id) => {
-                          setSelectedId(id);
-                          setShowGraph(false);
-                        }}
-                      />
+                      {linkView === "list" ? (
+                        <ThreatChains
+                          correlations={airThreat}
+                          projections={projections}
+                          onSelect={(id) => {
+                            setSelectedId(id);
+                            setShowGraph(false);
+                          }}
+                        />
+                      ) : (
+                        <ThreatGraph
+                          graph={threatGraph}
+                          onSelectAsset={(id) => {
+                            setSelectedId(id);
+                            setShowGraph(false);
+                          }}
+                        />
+                      )}
                     </Suspense>
                   </div>
                 </div>

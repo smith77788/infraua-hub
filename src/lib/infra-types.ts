@@ -235,6 +235,12 @@ export interface SituationSummary {
   /** At-risk facilities in the life-critical tier (hospitals, water works). */
   lifeAtRisk: number;
   alarms: number;
+  /**
+   * Скільки обʼєктів стоїть у регіонах з активною тривогою. Саме це, а не
+   * кількість тривог, вирішує, чи піднімати рівень: тривога в області без
+   * наших обʼєктів нічого не змінює в стані мережі.
+   */
+  underAlarm: number;
   byKind: Record<InfraEvent["kind"], number>;
   eventCount: number;
 }
@@ -255,6 +261,7 @@ export function summarize(
   riskMap: Map<string, InfraEvent>,
   events: InfraEvent[],
   alarms = 0,
+  underAlarm = 0,
 ): SituationSummary {
   const byId = new Map(facilities.map((f) => [f.id, f]));
   let lifeAtRisk = 0;
@@ -274,8 +281,28 @@ export function summarize(
   for (const e of events) byKind[e.kind]++;
 
   const atRisk = riskMap.size;
+  /*
+   * Рівень має означати стан інфраструктури, а не сам факт тривоги.
+   *
+   * Раніше будь-яка активна тривога робила стан критичним. В Україні тривога —
+   * майже щоденна подія, тож найвищий рівень горів постійно, і поруч із ним
+   * спокійно стояло «під загрозою 0, подій немає». Найвищий рівень, який
+   * увімкнено завжди, не несе інформації: він перестає означати «дій зараз» і
+   * починає означати «система працює».
+   *
+   * Тому тривога лишається окремим показником — це факт, і він видимий, — але
+   * рівень визначають наслідки для обʼєктів:
+   *
+   * - **критичний** — постраждало життєзабезпечення або багато обʼєктів;
+   * - **підвищений** — є обʼєкти під загрозою, або тривога накрила обʼєкти;
+   * - **штатний** — решта, зокрема тривога там, де наших обʼєктів немає.
+   */
   const level: SituationLevel =
-    alarms > 0 || lifeAtRisk > 0 || atRisk >= 8 ? "critical" : atRisk > 0 ? "elevated" : "normal";
+    lifeAtRisk > 0 || atRisk >= 8
+      ? "critical"
+      : atRisk > 0 || (alarms > 0 && underAlarm > 0)
+        ? "elevated"
+        : "normal";
 
   return {
     level,
@@ -283,6 +310,7 @@ export function summarize(
     atRisk,
     lifeAtRisk,
     alarms,
+    underAlarm,
     byKind,
     eventCount: events.length,
   };
