@@ -39,6 +39,7 @@ import DependencyGraph from "@/components/DependencyGraph";
 import EntityTable from "@/components/EntityTable";
 import OperatorPanel from "@/components/OperatorPanel";
 import SourceHealth from "@/components/SourceHealth";
+import HudClock from "@/components/HudClock";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
@@ -645,6 +646,10 @@ function Console() {
           <span className="hidden font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground sm:inline">
             консоль
           </span>
+          <span className="mx-1 hidden h-4 w-px bg-border md:inline-block" />
+          <ClientOnly fallback={null}>
+            <HudClock />
+          </ClientOnly>
         </div>
 
         <div className="flex items-center gap-2">
