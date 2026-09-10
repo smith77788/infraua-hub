@@ -79,22 +79,22 @@ const QUERIES: Record<CategoryId, string> = {
  * лишається як швидка перша картинка.
  */
 const LIMITS: Record<CategoryId, number> = {
-  power_plant: 600,
-  substation: 3000,
-  oil_gas: 120,
-  dam: 120,
-  water: 200,
-  hospital: 350,
-  fire_station: 300,
-  airport: 60,
-  rail: 300,
-  seaport: 60,
-  border: 120,
-  telecom: 250,
-  data_center: 80,
-  government: 200,
-  grain: 200,
-  industry: 200,
+  power_plant: 2000,
+  substation: 6000,
+  oil_gas: 800,
+  dam: 800,
+  water: 2000,
+  hospital: 4000,
+  fire_station: 3000,
+  airport: 400,
+  rail: 3000,
+  seaport: 300,
+  border: 600,
+  telecom: 5000,
+  data_center: 400,
+  government: 5000,
+  grain: 3000,
+  industry: 4000,
 };
 
 interface CacheEntry<T> {
@@ -215,12 +215,12 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(
     if (cached) return cached;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 22_000);
+    const timer = setTimeout(() => controller.abort(), 28_000);
     try {
       const entries = Object.entries(QUERIES) as [CategoryId, string][];
       const results = await Promise.all(
         entries.map(async ([category, q]) => {
-          const query = `[out:json][timeout:18];(${q.replaceAll("{{bbox}}", BBOX)});out center ${LIMITS[category]};`;
+          const query = `[out:json][timeout:25];(${q.replaceAll("{{bbox}}", BBOX)});out center ${LIMITS[category]};`;
           const elements = await overpass(query, controller.signal);
           return {
             category,
