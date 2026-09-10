@@ -2,6 +2,14 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
+import {
+  parseCommand,
+  renderHelp,
+  renderStart,
+  renderStatus,
+  renderUnknown,
+  secretMatches,
+} from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 
 type ServerEntry = {
@@ -97,11 +105,131 @@ async function health(request: Request): Promise<Response> {
   });
 }
 
+/**
+ * Telegram-бот на вебхуку в цьому ж сервісі.
+ *
+ * Окремий сервіс під бота коштував би грошей і відрізав би його від даних, які
+ * він має показувати. Публічний HTTPS-домен у консолі вже є — саме те, чого
+ * вимагає Telegram.
+ */
+const TELEGRAM_API = "https://api.telegram.org";
+
+function consoleUrl(request: Request): string {
+  // Адреса береться з самого запиту: сервіс живе під кількома доменами
+  // (Railway, Cloudflare), і зашита константа вела б із бота не туди.
+  const url = new URL(request.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+async function telegramSend(token: string, chatId: number, text: string): Promise<void> {
+  const response = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    }),
+  });
+  if (!response.ok) {
+    console.error("telegram sendMessage failed", response.status, await response.text());
+  }
+}
+
+/** Живі дані для /status. Тільки дешеві джерела: вебхук не має чекати хвилину. */
+async function situationBrief(request: Request) {
+  const alarms: string[] = [];
+  let eventsLastDay = 0;
+  const sources: { name: string; ok: boolean }[] = [];
+
+  try {
+    const res = await fetch("https://ubilling.net.ua/aerialalerts/?json");
+    const data = (await res.json()) as { states?: Record<string, { alertnow?: boolean }> };
+    for (const [name, state] of Object.entries(data.states ?? {})) {
+      if (state?.alertnow) alarms.push(name.replace(/ область$/, ""));
+    }
+    sources.push({ name: "Тривоги", ok: true });
+  } catch {
+    sources.push({ name: "Тривоги", ok: false });
+  }
+
+  try {
+    const since = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    const res = await fetch(
+      `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=${since}&limit=200`,
+    );
+    const data = (await res.json()) as { features?: unknown[] };
+    eventsLastDay = data.features?.length ?? 0;
+    sources.push({ name: "USGS", ok: true });
+  } catch {
+    sources.push({ name: "USGS", ok: false });
+  }
+
+  return { alarmRegions: alarms, eventsLastDay, sources, consoleUrl: consoleUrl(request) };
+}
+
+async function telegramWebhook(request: Request): Promise<Response> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
+
+  // Адреса вебхука не таємниця, тож без перевірки секрету будь-хто може
+  // надсилати підроблені оновлення. Відповідаємо 401 і нічого не робимо.
+  if (!secretMatches(secret, request.headers.get("x-telegram-bot-api-secret-token"))) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  if (!token) return new Response("not configured", { status: 503 });
+
+  let update: unknown = null;
+  try {
+    update = await request.json();
+  } catch {
+    // Некоректне тіло — не привід просити Telegram повторювати доставку.
+    return new Response("ok", { status: 200 });
+  }
+
+  const parsed = parseCommand(update);
+  // Telegram вважає невдачею будь-що, крім 2xx, і повторює доставку. Тому
+  // навіть «нічого робити» — це 200.
+  if (!parsed) return new Response("ok", { status: 200 });
+
+  const url = consoleUrl(request);
+  let text: string;
+  switch (parsed.command) {
+    case "start":
+      text = renderStart(url);
+      break;
+    case "help":
+      text = renderHelp(url);
+      break;
+    case "status":
+      text = renderStatus(await situationBrief(request));
+      break;
+    default:
+      text = renderUnknown(parsed.command);
+  }
+
+  await telegramSend(token, parsed.chatId, text);
+  return new Response("ok", { status: 200 });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     // Перехоплюється до маршрутизатора: службова відповідь не має залежати
     // від того, чи зібрався застосунок.
-    if (new URL(request.url).pathname === "/api/health") {
+    const pathname = new URL(request.url).pathname;
+
+    if (pathname === "/api/telegram/webhook") {
+      try {
+        return await telegramWebhook(request);
+      } catch (error) {
+        console.error(error);
+        // 200 навмисно: Telegram повторював би доставку тієї самої помилки.
+        return new Response("ok", { status: 200 });
+      }
+    }
+
+    if (pathname === "/api/health") {
       try {
         return await health(request);
       } catch (error) {

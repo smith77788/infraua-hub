@@ -30,8 +30,11 @@ COPY --from=build /app/platform/dist ./platform/dist
 COPY platform/config ./platform/config
 
 # Стан платформи (граф, аудит, справи) має пережити перезапуск контейнера.
+#
+# Директиви VOLUME тут немає навмисно: Railway її не приймає («docker VOLUME
+# is not supported, use Railway Volumes») і відхиляє збірку цілком. Том
+# створюється на боці Railway й монтується в цей самий шлях.
 ENV PLATFORM_DATA_DIR=/data
-VOLUME ["/data"]
 
 EXPOSE 4500
 CMD ["node", "platform/dist/api/server.js"]
