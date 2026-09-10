@@ -43,9 +43,12 @@ function validityOf(
  * reconstructing the 14th is to see what the analyst saw, and if a batch had
  * already been withdrawn by then, it was not in front of them.
  */
-function replay(revisions: Revision[]): { nodes: Map<string, GraphNode>; edges: GraphEdge[]; replayed: number } {
-  const nodes = new Map<string, GraphNode>();
-  let edges: GraphEdge[] = [];
+function replay(
+  revisions: Revision[],
+  from?: { nodes: Map<string, GraphNode>; edges: GraphEdge[] },
+): { nodes: Map<string, GraphNode>; edges: GraphEdge[]; replayed: number } {
+  const nodes = from ? from.nodes : new Map<string, GraphNode>();
+  let edges: GraphEdge[] = from ? from.edges : [];
 
   for (const revision of revisions) {
     if (revision.op === 'upsert_node') {
@@ -150,6 +153,22 @@ export class GraphStore {
     return this.revisions;
   }
 
+  /**
+   * Journals one change and lets the log take a snapshot when it is due.
+   *
+   * The state is handed over as a thunk so the common case - a revision that
+   * is not a snapshot boundary - costs a comparison rather than a full copy of
+   * the graph.
+   */
+  private recordRevision(op: 'upsert_node' | 'upsert_edge' | 'retract_source', payload: GraphNode | GraphEdge | { source: string }): void {
+    if (!this.revisions) return;
+    this.revisions.append(op, payload);
+    this.revisions.maybeSnapshot(() => ({
+      nodes: Array.from(this.nodes.values()),
+      edges: this.edges,
+    }));
+  }
+
   private persist(): void {
     if (!this.filePath || this.deferPersist) return;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
@@ -205,7 +224,7 @@ export class GraphStore {
       ),
     };
     this.nodes.set(node.id, node);
-    this.revisions?.append('upsert_node', node);
+    this.recordRevision('upsert_node', node);
     this.persist();
     return node;
   }
@@ -251,7 +270,7 @@ export class GraphStore {
     };
     if (existingIdx >= 0) this.edges[existingIdx] = edge;
     else this.edges.push(edge);
-    this.revisions?.append('upsert_edge', edge);
+    this.recordRevision('upsert_edge', edge);
     this.persist();
     return edge;
   }
@@ -301,7 +320,7 @@ export class GraphStore {
       return true;
     });
 
-    this.revisions?.append('retract_source', { source: sourcePrefix });
+    this.recordRevision('retract_source', { source: sourcePrefix });
     this.persist();
     return { nodesRemoved: removed, edgesRemoved: before - this.edges.length };
   }
@@ -443,11 +462,24 @@ export class GraphStore {
       }
       // A sequence wins over a timestamp when both are given: it is the exact
       // cursor, and the timestamp is at best the millisecond containing it.
-      const slice =
-        options.asOfSeq !== undefined
-          ? this.revisions.upToSeq(options.asOfSeq)
-          : this.revisions.upTo(options.asOf!);
-      const state = replay(slice);
+      let state: { nodes: Map<string, GraphNode>; edges: GraphEdge[]; replayed: number };
+      if (options.asOfSeq !== undefined) {
+        // Start from the nearest kept snapshot rather than from nothing. When
+        // the target predates every retained snapshot this falls back to a
+        // full replay, which is slower and still correct.
+        const snapshot = this.revisions.snapshotAtOrBefore(options.asOfSeq);
+        if (snapshot) {
+          const base = new Map(snapshot.state.nodes.map((n) => [n.id, n]));
+          state = replay(this.revisions.afterSeq(snapshot.seq, options.asOfSeq), {
+            nodes: base,
+            edges: [...snapshot.state.edges],
+          });
+        } else {
+          state = replay(this.revisions.upToSeq(options.asOfSeq));
+        }
+      } else {
+        state = replay(this.revisions.upTo(options.asOf!));
+      }
       replayed = state.replayed;
       nodes = Array.from(state.nodes.values());
       edges = state.edges;
