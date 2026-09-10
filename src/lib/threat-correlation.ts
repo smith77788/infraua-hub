@@ -14,6 +14,12 @@
 
 import { CATEGORIES, distanceKm, type CategoryId, type Facility } from "./infra-types";
 import type { Threat } from "./air";
+import {
+  assessCredibility,
+  warrantsEscalation,
+  type CredibilityAssessment,
+  type SourceRole,
+} from "./source-credibility";
 
 /** Категорії, удар по яких має найвищі наслідки (узгоджено з радаром). */
 export const CRITICAL_CATEGORIES: ReadonlySet<CategoryId> = new Set<CategoryId>([
@@ -42,6 +48,13 @@ export interface ThreatCorrelation {
   severity: ThreatSeverity;
   /** Чи обʼєкт у регіоні з активною тривогою (підсилює рівень). */
   inAlarmRegion: boolean;
+  /**
+   * Наскільки можна вірити тому, що стоїть за цим рівнем, за кодом
+   * Адміралтейства. Досі всі канали важили однаково, тож одна позначка з
+   * загальноновинного каналу давала той самий рівень, що й три канали
+   * спостереження при активній тривозі.
+   */
+  credibility: CredibilityAssessment;
 }
 
 export interface CorrelateOptions {
@@ -49,9 +62,20 @@ export interface CorrelateOptions {
   radiusKm?: number;
   /** Множина id обʼєктів у регіонах з активною тривогою. */
   alarmIds?: ReadonlySet<string>;
+  /**
+   * Роль джерела в переліку консолі. Без неї всі канали трактуються як
+   * невідомі, і оцінка спирається лише на підтвердження — тобто працює, але
+   * знає менше.
+   */
+  roleOf?: (source: string) => SourceRole;
 }
 
-function severityOf(nearestKm: number, critical: boolean, inAlarm: boolean): ThreatSeverity {
+function severityOf(
+  nearestKm: number,
+  critical: boolean,
+  inAlarm: boolean,
+  credible: boolean,
+): ThreatSeverity {
   // Активна офіційна тривога підтягує обʼєкт на рівень вище.
   const boost = inAlarm ? 1 : 0;
   let base: 0 | 1 | 2; // 0=critical, 1=high, 2=medium
@@ -59,7 +83,11 @@ function severityOf(nearestKm: number, critical: boolean, inAlarm: boolean): Thr
   else if (critical && nearestKm <= 25) base = 1;
   else if (nearestKm <= 12) base = 1;
   else base = 2;
-  const lvl = Math.max(0, base - boost) as 0 | 1 | 2;
+  // Непідтверджене повідомлення від каналу, що зазвичай переказує, не піднімає
+  // рівень. Це не недовіра до джерела — це відмова витрачати увагу чергового
+  // на те, чого ніхто не підтвердив: коли все «критичне», критичного немає.
+  const penalty = credible ? 0 : 1;
+  const lvl = Math.min(2, Math.max(0, base - boost + penalty)) as 0 | 1 | 2;
   return (["critical", "high", "medium"] as const)[lvl];
 }
 
@@ -77,6 +105,7 @@ export function correlateAirThreats(
 ): ThreatCorrelation[] {
   const radiusKm = opts.radiusKm ?? 30;
   const alarmIds = opts.alarmIds ?? new Set<string>();
+  const roleOf = opts.roleOf ?? (() => "unknown" as SourceRole);
   if (!threats.length) return [];
 
   const out: ThreatCorrelation[] = [];
@@ -97,14 +126,21 @@ export function correlateAirThreats(
     if (threatCount === 0) continue;
     const critical = CRITICAL_CATEGORIES.has(f.category);
     const inAlarmRegion = alarmIds.has(f.id);
+    const credibility = assessCredibility({
+      sources: [...sources],
+      roleOf,
+      officialCorroboration: inAlarmRegion,
+      reports: reportCount,
+    });
     out.push({
       facility: f,
       nearestKm: Math.round(nearestKm * 10) / 10,
       threatCount,
       reportCount,
       sources: [...sources],
-      severity: severityOf(nearestKm, critical, inAlarmRegion),
+      severity: severityOf(nearestKm, critical, inAlarmRegion, warrantsEscalation(credibility)),
       inAlarmRegion,
+      credibility,
     });
   }
 

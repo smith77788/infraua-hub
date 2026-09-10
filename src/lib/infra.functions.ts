@@ -1,4 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
+
+import { TG_CHANNELS } from "./osint-sources";
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 import { formatVoltage, highestVoltage, plantOutputMw } from "./osm-tags";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
@@ -596,49 +598,6 @@ async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null>
  */
 // Канали моніторингу повітряної обстановки для фолбек-класифікації типу
 // (коли основне джерело neptun недоступне). Дедупльований набір хендлів.
-const TG_CHANNELS = [
-  // Радари / ППО
-  "kpszsu",
-  "radar_top_ua",
-  "kudy_letyt",
-  "eRadarrua",
-  "kyivradar",
-  "air_alert_ua",
-  "raketna_neb",
-  "radarkherson",
-  "RadarDnepr",
-  "radar_zp",
-  "tro545fd",
-  // Регіональні (Київ)
-  "real_kyiv",
-  "kyiv_operativ",
-  "kyiv_n",
-  "kievinfo",
-  "novyny_live",
-  // Дніпро / Запоріжжя
-  "dnepr_operativ",
-  "truexazaporozie",
-  // Харків
-  "kharkivlife",
-  "truexakharkiv",
-  "kharkivtypical",
-  "kharkiv_1654",
-  // Львів / Захід
-  "lvivtruexa",
-  "truexalviv",
-  "lviv24x7",
-  "lvivmedia",
-  "volynnews",
-  // Одеса / Південь
-  "odessa_inform",
-  "our_odessa",
-  "odessa_infonews",
-  "inform_odesa",
-  "temporis_odesa",
-  // Загальні
-  "vanek_nikolaev",
-  "truexanewsua",
-];
 
 function normPlace(s: string): string {
   return s

@@ -59,6 +59,7 @@ import {
   getSpaceWeather,
   getThreats,
 } from "@/lib/infra.functions";
+import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import {
   buildThreatGraph,
@@ -439,7 +440,11 @@ function Console() {
    * покадровий, безстановий розрахунок — працює прямо на Workers-деплої.
    */
   const airThreat = useMemo(
-    () => correlateAirThreats(allFacilities, threats, { alarmIds }),
+    // `roleOf` дає оцінці достовірності знати, що саме за джерелом стоїть:
+    // канал спостереження чи переказ. Без цього всі канали важать однаково, і
+    // одна позначка з новинної стрічки дає той самий рівень, що й три канали
+    // спостереження при активній тривозі.
+    () => correlateAirThreats(allFacilities, threats, { alarmIds, roleOf: roleOfSource }),
     [allFacilities, threats, alarmIds],
   );
   const airThreatSummary = useMemo(() => summarizeAirThreat(airThreat), [airThreat]);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { buildThreatGraph, correlateAirThreats, summarizeAirThreat } from "./threat-correlation";
 import type { CategoryId, Facility } from "./infra-types";
 import type { Threat } from "./air";
+import type { SourceRole } from "./source-credibility";
 
 function fac(id: string, category: CategoryId, lat: number, lon: number): Facility {
   return { id, name: id, category, lat, lon, source: "test" };
@@ -129,5 +130,65 @@ describe("buildThreatGraph", () => {
 
   it("порожня кореляція — порожній граф", () => {
     expect(buildThreatGraph([], []).nodes).toHaveLength(0);
+  });
+});
+
+describe("достовірність у кореляції", () => {
+  const roleOf = (source: string) =>
+    (({ radar_a: "watch", radar_b: "watch", wire: "general" }) as Record<string, SourceRole>)[
+      source
+    ] ?? "unknown";
+
+  const hospital: Facility = {
+    id: "h1",
+    name: "Лікарня",
+    category: "hospital",
+    lat: 50,
+    lon: 30,
+    source: "test",
+  };
+
+  const markFrom = (sources: string[]): Threat => ({
+    id: "t1",
+    name: "Київ",
+    lat: 50.01,
+    lon: 30.01,
+    type: "shahed",
+    source: sources[0]!,
+    sources,
+    reports: sources.length,
+    count: sources.length,
+    since: "2026-09-10T10:00:00Z",
+    expires: "2026-09-10T11:00:00Z",
+  });
+
+  it("не дає одному переказу того самого рівня, що й трьом спостереженням", () => {
+    const rumour = correlateAirThreats([hospital], [markFrom(["wire"])], { roleOf });
+    const watched = correlateAirThreats([hospital], [markFrom(["radar_a", "radar_b"])], { roleOf });
+
+    expect(rumour[0]!.severity).toBe("high");
+    expect(watched[0]!.severity).toBe("critical");
+    expect(rumour[0]!.credibility.code).toBe("D3");
+    expect(watched[0]!.credibility.code).toBe("C2");
+  });
+
+  it("піднімає переказ, щойно його підтверджує офіційна тривога", () => {
+    const confirmed = correlateAirThreats([hospital], [markFrom(["wire"])], {
+      roleOf,
+      alarmIds: new Set(["h1"]),
+    });
+    expect(confirmed[0]!.severity).toBe("critical");
+    expect(confirmed[0]!.credibility.independentSources).toBe(2);
+  });
+
+  it("не глушить джерело лише через те, що його ролі ми не знаємо", () => {
+    const unknown = correlateAirThreats([hospital], [markFrom(["невідомий"])], { roleOf });
+    expect(unknown[0]!.severity).toBe("critical");
+  });
+
+  it("працює й без переліку ролей, просто знаючи менше", () => {
+    const noRoles = correlateAirThreats([hospital], [markFrom(["wire"])]);
+    expect(noRoles[0]!.credibility.reliability).toBe("F");
+    expect(noRoles[0]!.severity).toBe("critical");
   });
 });
