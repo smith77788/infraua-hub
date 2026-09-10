@@ -43,6 +43,7 @@ import EntityTable from "@/components/EntityTable";
 import OperatorPanel from "@/components/OperatorPanel";
 import SourceHealth from "@/components/SourceHealth";
 import HudClock from "@/components/HudClock";
+import MapLayers, { type LayerToggle } from "@/components/MapLayers";
 import MapLegend from "@/components/MapLegend";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -1170,6 +1171,45 @@ function Console() {
               ) : null}
 
               <TimelinePlayer onCursor={setPlayCursor} />
+              <MapLayers
+                layers={
+                  [
+                    {
+                      key: "links",
+                      label: "Звʼязки живлення",
+                      active: showLinks,
+                      color: "#22d3ee",
+                    },
+                    {
+                      key: "frontline",
+                      label: "Лінія фронту",
+                      active: showFrontline,
+                      disabled: frontline.length === 0,
+                      color: "#a52714",
+                    },
+                    {
+                      key: "fires",
+                      label: "Пожежі (FIRMS)",
+                      active: showFires,
+                      disabled: fires.length === 0,
+                      color: "#ff7a1a",
+                    },
+                    {
+                      key: "graph",
+                      label: "Граф загроз",
+                      active: showGraph,
+                      disabled: threatGraph.nodes.length === 0,
+                      color: "#ff4d4d",
+                    },
+                  ] satisfies LayerToggle[]
+                }
+                onToggle={(key) => {
+                  if (key === "links") setShowLinks((v) => !v);
+                  else if (key === "frontline") setShowFrontline((v) => !v);
+                  else if (key === "fires") setShowFires((v) => !v);
+                  else if (key === "graph") setShowGraph((v) => !v);
+                }}
+              />
               <MapLegend />
 
               {showGraph ? (
