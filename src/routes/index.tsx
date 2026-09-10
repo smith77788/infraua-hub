@@ -23,6 +23,7 @@ import {
   Map as MapIcon,
   RefreshCw,
   Filter,
+  HelpCircle,
   Search,
   Share2,
   Table2,
@@ -39,6 +40,7 @@ import SourceHealth from "@/components/SourceHealth";
 import HudClock from "@/components/HudClock";
 import MapLayers, { type LayerToggle } from "@/components/MapLayers";
 import MapLegend from "@/components/MapLegend";
+import OrientationCard, { hasSeenOrientation } from "@/components/OrientationCard";
 import SituationBar from "@/components/SituationBar";
 import StatusStrip from "@/components/StatusStrip";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -292,11 +294,18 @@ function Console() {
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
   const [showTable, setShowTable] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [focus, setFocus] = useState<Focus>(null);
   const [operatorId, setOperatorId] = useState<string | null>(null);
   const [eventKind, setEventKind] = useState<keyof typeof EVENT_KINDS | null>(null);
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
+
+  // Перше відкриття: показуємо орієнтир, щоб консоль не була «незрозумілою».
+  // Тільки на клієнті — інакше SSR і гідратація розійшлися б.
+  useEffect(() => {
+    if (!hasSeenOrientation()) setShowHelp(true);
+  }, []);
 
   const allFacilities = useMemo(() => {
     const base = facilitiesQuery.data?.facilities ?? [];
@@ -710,6 +719,17 @@ function Console() {
             </Link>
           </Button>
           <Button
+            size="sm"
+            variant="ghost"
+            title="Як читати консоль"
+            aria-label="Як читати консоль"
+            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
+            onClick={() => setShowHelp(true)}
+          >
+            <HelpCircle className="size-3" />
+            <span className="hidden sm:inline">Як читати</span>
+          </Button>
+          <Button
             asChild
             size="sm"
             variant="ghost"
@@ -1110,7 +1130,7 @@ function Console() {
                   <div className="flex items-center justify-between border-b border-border px-4 py-2">
                     <div className="flex items-center gap-3 font-mono text-[11px] uppercase tracking-[0.1em]">
                       <span className="flex items-center gap-1.5 text-red-300">
-                        <Share2 className="size-3.5" /> Граф звʼязків: загроза → обʼєкт → канал
+                        <Share2 className="size-3.5" /> Граф звʼязків: обʼєкт ← ціль ← канал
                       </span>
                       <span className="hidden items-center gap-2 text-[9px] text-muted-foreground sm:flex">
                         <span className="flex items-center gap-1">
@@ -1466,6 +1486,8 @@ function Console() {
           </aside>
         </div>
       )}
+
+      {showHelp ? <OrientationCard onClose={() => setShowHelp(false)} /> : null}
     </div>
   );
 }
