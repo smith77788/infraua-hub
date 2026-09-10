@@ -14,7 +14,7 @@ export default function HudClock() {
   const utc = now.toISOString().slice(11, 19);
 
   return (
-    <span className="hidden items-center gap-1.5 font-mono text-[10px] tabular-nums text-muted-foreground md:flex">
+    <span className="hidden items-center gap-1.5 font-mono text-[10px] tabular-nums text-muted-foreground xl:flex">
       <span className="text-foreground">{local}</span>
       <span className="opacity-50">лок.</span>
       <span className="opacity-40">/</span>
