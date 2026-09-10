@@ -4,8 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 
-import { getAlerts, getEvents, getFacilities, getThreats } from "@/lib/infra.functions";
+import {
+  getAlerts,
+  getEvents,
+  getFacilities,
+  getPowerLines,
+  getThreats,
+} from "@/lib/infra.functions";
 import { analyzeNetwork, operatorRollup } from "@/lib/infra-analytics";
+import { buildObservedGraph, mergeGraphs } from "@/lib/power-grid";
+import { summarize as summarizeProvenance } from "@/lib/provenance";
 import {
   buildGraph,
   CATEGORIES,
@@ -38,7 +46,32 @@ function Brief() {
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active), [regions]);
 
-  const edges = useMemo(() => buildGraph(facilities), [facilities]);
+  /*
+   * Граф той самий, що й у консолі: спостережені ЛЕП плюс виведений кістяк
+   * там, де фактів немає.
+   *
+   * До цього брифінг брав лише `buildGraph` — тобто кістяк «найближчий сусід»
+   * без жодної реальної лінії — і друкував рейтинг критичності, порахований
+   * на здогадках, без жодного застереження. На папері не лишається підказок
+   * інтерфейсу, тож саме тут це найнебезпечніше.
+   */
+  const powerLinesFn = useServerFn(getPowerLines);
+  const powerLinesQuery = useQuery({
+    queryKey: ["brief-power-lines"],
+    queryFn: () => powerLinesFn({ data: { have: [] } }),
+    staleTime: 10 * 60 * 1000,
+  });
+  const observed = useMemo(() => {
+    const lines = (powerLinesQuery.data?.tiles ?? []).flatMap((tile) => tile.lines);
+    return lines.length
+      ? buildObservedGraph(facilities, lines, powerLinesQuery.data?.retrievedAt)
+      : null;
+  }, [facilities, powerLinesQuery.data]);
+  const edges = useMemo(() => {
+    const inferred = buildGraph(facilities);
+    return observed ? mergeGraphs(observed.edges, inferred) : inferred;
+  }, [facilities, observed]);
+  const groundedness = useMemo(() => summarizeProvenance(edges), [edges]);
   const analysis = useMemo(
     () => analyzeNetwork(facilities, edges, events, regions),
     [facilities, edges, events, regions],
@@ -117,6 +150,43 @@ function Brief() {
         </p>
       </section>
 
+      {/*
+        На що спирається документ. На папері не лишається підказок інтерфейсу,
+        тож застереження має стояти поруч із висновками, а не деінде.
+      */}
+      <section className="mt-5 rounded border border-border p-3">
+        <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+          На чому це ґрунтується
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed">
+          {groundedness.observed > 0 ? (
+            <>
+              Із <b>{groundedness.total}</b> звʼязків живлення <b>{groundedness.observed}</b> (
+              {Math.round(groundedness.observedShare * 100)}%) — це реальні лінії 110 кВ+ з
+              OpenStreetMap. Решта <b>{groundedness.inferred}</b> виведені за правилом «найближчий
+              сусід».
+            </>
+          ) : (
+            <>
+              Усі <b>{groundedness.total}</b> звʼязків живлення виведені за правилом «найближчий
+              сусід». Спостережених ліній у цьому зрізі немає.
+            </>
+          )}{" "}
+          Виведений звʼязок — це припущення, а не топологія: реальна лінія може йти повз найближчу
+          підстанцію, а живлення часто резервоване з двох боків. Оцінки критичності нижче порахованi
+          на цьому графі, тож у частині, що спирається на виведені звʼязки, вони успадковують саме
+          цю невизначеність.
+        </p>
+        <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+          Дані: OpenStreetMap (обʼєкти й лінії), NASA EONET і GDACS (події), USGS (сейсміка),
+          відкриті джерела тривог. Обʼєкти оновлено{" "}
+          {facilitiesQuery.data?.fetchedAt
+            ? new Date(facilitiesQuery.data.fetchedAt).toLocaleString("uk-UA")
+            : "—"}
+          .
+        </p>
+      </section>
+
       {/* Тривоги */}
       <section className="mt-5">
         <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -176,6 +246,7 @@ function Brief() {
               <th className="py-1 font-normal">Сектор</th>
               <th className="py-1 text-right font-normal">Залежних</th>
               <th className="py-1 text-right font-normal">Індекс</th>
+              <th className="py-1 font-normal">Чому</th>
             </tr>
           </thead>
           <tbody>
@@ -192,11 +263,24 @@ function Brief() {
                 </td>
                 <td className="py-1 text-right font-mono">{a.dependents}</td>
                 <td className="py-1 text-right font-mono font-semibold">{a.score}</td>
+                {/*
+                  Оцінка без розбору на папері не оскаржується взагалі: у
+                  читача немає способу спитати, з чого вона складається.
+                */}
+                <td className="py-1 text-[11px] text-muted-foreground">
+                  {a.signals.map((x) => x.label).join(", ") || "—"}
+                  {a.signals.some((x) => !x.grounded) ? " *" : ""}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </section>
+
+      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        * Серед сигналів обʼєкта є такі, що спираються на виведені звʼязки: якщо прибрати припущення
+        про живлення, вони зникають. Це твердження про нашу модель мережі, а не про саму мережу.
+      </p>
 
       {/* Події */}
       <section className="mt-5">
