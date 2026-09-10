@@ -284,3 +284,14 @@
     animation: none;
   }
 }
+
+/*
+ * Висота вікна Telegram Mini App.
+ *
+ * `100svh` у Telegram завелика: клієнт лишає зверху власну панель, і вміст
+ * їде під неї. Telegram повідомляє справжню доступну висоту, і хук кладе її
+ * у `--tg-viewport`; поза Telegram змінної немає й лишається `100svh`.
+ */
+.h-svh {
+  height: var(--tg-viewport, 100svh);
+}

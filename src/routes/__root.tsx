@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
+import { useTelegram } from "@/hooks/use-telegram";
+
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -106,6 +108,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
       },
     ],
+    scripts: [
+      // SDK Telegram. Поза Telegram він нічого не робить і нічого не ламає,
+      // але без нього `window.Telegram` не існує й Mini App не стартує.
+      { src: "https://telegram.org/js/telegram-web-app.js", async: true },
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -129,6 +136,9 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  // Підключення до Telegram: тема, висота вікна, готовність. Поза Telegram —
+  // порожня дія.
+  useTelegram();
 
   return (
     <QueryClientProvider client={queryClient}>
