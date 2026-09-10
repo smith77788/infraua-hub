@@ -1,6 +1,12 @@
 import { CircleHelp } from "lucide-react";
 
-import { BAND_LABEL, type CriticalityBand, type CriticalitySignal } from "@/lib/infra-criticality";
+import { explain, isFullyObserved } from "@/lib/claim";
+import {
+  BAND_LABEL,
+  criticalityClaim,
+  type CriticalityBand,
+  type CriticalitySignal,
+} from "@/lib/infra-criticality";
 
 /**
  * Розбір індексу критичності на сигнали.
@@ -49,6 +55,7 @@ export default function CriticalityBreakdown({
 
   const sum = signals.reduce((n, s) => n + s.contribution, 0);
   const ungrounded = signals.filter((s) => !s.grounded).length;
+  const claim = criticalityClaim({ id: "", score, band, signals });
 
   return (
     <div className="space-y-1.5">
@@ -71,6 +78,22 @@ export default function CriticalityBreakdown({
           )}
         </div>
       ))}
+      {/*
+        Ланцюг походження оцінки за тією самою шкалою, що й усе інше в системі.
+        Без нього число можна прочитати, але не можна ні перевірити, ні
+        порівняти з достовірністю OSINT-повідомлення чи впевненістю ребра.
+      */}
+      <p className="rounded border border-border/60 bg-background/40 px-1.5 py-1 text-[10px] leading-relaxed text-muted-foreground">
+        <span className={claim.confidence >= 0.9 ? "text-primary" : "text-amber-400"}>
+          Довіра {Math.round(claim.confidence * 100)}%
+        </span>
+        {" — "}
+        {explain(claim.lineage)}
+        {isFullyObserved(claim.lineage)
+          ? ". Усі сигнали спираються на спостереження."
+          : ". Найслабший сигнал спирається на виведені звʼязки й обмежує весь висновок."}
+      </p>
+
       <p className="pt-0.5 font-mono text-[10px] text-muted-foreground">
         Разом {sum}
         {sum > score ? ` → ${score} (обмеження сотнею)` : ""} · {BAND_LABEL[band].toLowerCase()}{" "}
