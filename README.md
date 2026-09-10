@@ -117,3 +117,55 @@ npm run platform:start       # node platform/dist/api/server.js
 
 Змінні середовища: `PLATFORM_API_KEYS` (JSON-мапа ключ → рівень доступу),
 `CORS_ORIGINS`, `PLATFORM_DATA_DIR`, необовʼязково `ANTHROPIC_API_KEY`.
+
+## Telegram-бот
+
+`@Radar_UAbot` живе вебхуком у сервісі консолі, а не окремою службою: йому
+потрібен публічний HTTPS-домен, який у консолі вже є, а дані, які він показує,
+лежать тут само. Окремий сервіс коштував би грошей і додав би мережевий стрибок
+між ботом і його ж фактами.
+
+Точка входу — `POST /api/telegram/webhook`, логіка розбору й текстів —
+`src/lib/telegram.ts` (чиста, з тестами).
+
+Змінні середовища сервісу консолі:
+
+```
+TELEGRAM_BOT_TOKEN=<токен від @BotFather>
+TELEGRAM_WEBHOOK_SECRET=<довгий випадковий рядок>
+```
+
+Секрет обовʼязковий. Telegram надсилає його заголовком
+`X-Telegram-Bot-Api-Secret-Token`; без перевірки будь-хто, хто знає адресу
+вебхука — а вона не таємниця, — може надсилати підроблені оновлення. Незаданий
+секрет відхиляє всіх: забута змінна не має тихо відкривати вебхук світові.
+
+Реєстрація вебхука після розгортання:
+
+```
+curl -X POST "https://api.telegram.org/bot<ТОКЕН>/setWebhook" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://<домен>/api/telegram/webhook","secret_token":"<СЕКРЕТ>","allowed_updates":["message"]}'
+```
+
+## Що на Railway
+
+Два сервіси в одному проєкті, обидва з цього репозиторію:
+
+| Сервіс | Що це | Збірка |
+|---|---|---|
+| `infraua-hub` | консоль + вебхук бота | Railpack, `NITRO_PRESET=node-server` |
+| `platform-api` | API платформи | `Dockerfile.platform` |
+
+`platform-api` створено через API, тож у нього **немає автоматичного розгортання
+на push** — тригер створюється лише з інтерфейсу Railway (`deploymentTriggerCreate`
+project-токену недоступний). Доки його не додано, платформа розгортається
+вручну: у Railway кнопкою Deploy, або мутацією
+`serviceInstanceDeploy(..., latestCommit: true)`.
+
+Прапорець `latestCommit` тут не дрібниця: без нього Railway перезбирає останній
+*відомий* йому коміт, а не свіжий, і три збірки поспіль падали на вже
+виправленій помилці.
+
+Стан платформи (граф, аудит, справи) лежить на томі Railway, змонтованому в
+`/data` — те саме значення в `PLATFORM_DATA_DIR`.
