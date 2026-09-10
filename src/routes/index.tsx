@@ -51,13 +51,9 @@ import {
   getFacilities,
   getPowerLines,
   getFacilityTiles,
-  getFires,
-  getFrontline,
-  getInternetOutages,
-  getSpaceWeather,
   getThreats,
-  getWeather,
 } from "@/lib/infra.functions";
+import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import {
@@ -259,46 +255,9 @@ function Console() {
     staleTime: 12 * 1000,
     refetchInterval: 15 * 1000,
   });
-  // Лінія фронту (DeepState) — оновлюється рідко, тримаємо довгий інтервал.
-  const frontlineFn = useServerFn(getFrontline);
-  const frontlineQuery = useQuery({
-    queryKey: ["frontline"],
-    queryFn: () => frontlineFn(),
-    staleTime: 30 * 60 * 1000,
-    refetchInterval: 30 * 60 * 1000,
-  });
-  // Активні пожежі (NASA FIRMS) — оновлюються кілька разів на добу.
-  const firesFn = useServerFn(getFires);
-  const firesQuery = useQuery({
-    queryKey: ["fires"],
-    queryFn: () => firesFn(),
-    staleTime: 20 * 60 * 1000,
-    refetchInterval: 20 * 60 * 1000,
-  });
-  // Космічна погода (NOAA Kp) — індикатор геомагнітних бур (ГНСС/КХ).
-  const spaceWeatherFn = useServerFn(getSpaceWeather);
-  const spaceWeatherQuery = useQuery({
-    queryKey: ["space-weather"],
-    queryFn: () => spaceWeatherFn(),
-    staleTime: 20 * 60 * 1000,
-    refetchInterval: 20 * 60 * 1000,
-  });
-  // Інтернет-збої по Україні (IODA) — сигнал падіння звʼязності.
-  const outagesFn = useServerFn(getInternetOutages);
-  const outagesQuery = useQuery({
-    queryKey: ["internet-outages"],
-    queryFn: () => outagesFn(),
-    staleTime: 10 * 60 * 1000,
-    refetchInterval: 10 * 60 * 1000,
-  });
-  // Погода над Києвом (open-meteo) — вітер для БпЛА/пожеж.
-  const weatherFn = useServerFn(getWeather);
-  const weatherQuery = useQuery({
-    queryKey: ["weather"],
-    queryFn: () => weatherFn(),
-    staleTime: 15 * 60 * 1000,
-    refetchInterval: 15 * 60 * 1000,
-  });
+  // Ситуаційні фонові фіди (фронт, пожежі, Kp, інтернет-збої, погода) — в одному
+  // місці, окремим хуком data-plane.
+  const feeds = useSituationalFeeds();
   /*
    * Звʼязок з аналітичною платформою. Ключ лишається на сервері, тому і статус, і
    * саме надсилання — серверні функції. Незаданий звʼязок — штатний стан:
@@ -355,8 +314,8 @@ function Console() {
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
   const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
-  const frontline = useMemo(() => frontlineQuery.data?.areas ?? [], [frontlineQuery.data]);
-  const fires = useMemo(() => firesQuery.data?.fires ?? [], [firesQuery.data]);
+  const frontline = feeds.frontline;
+  const fires = feeds.fires;
   // Одна привʼязка на консоль: її потребують і тривоги, і фокус по області.
   const regionOf = useMemo(() => assignRegions(allFacilities, regions), [allFacilities, regions]);
   const alarmIds = useMemo(() => {
@@ -664,9 +623,9 @@ function Console() {
         worstSource={worstSource}
         observedShare={groundedness.observedShare}
         airThreat={airThreatSummary}
-        spaceWeather={spaceWeatherQuery.data}
-        outages={outagesQuery.data}
-        weather={weatherQuery.data}
+        spaceWeather={feeds.spaceWeather}
+        outages={feeds.outages}
+        weather={feeds.weather}
       />
 
       <header className="z-20 grid h-14 shrink-0 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
