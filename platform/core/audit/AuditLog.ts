@@ -64,6 +64,48 @@ export class AuditLog {
     return [...this.entries];
   }
 
+  size(): number {
+    return this.entries.length;
+  }
+
+  /**
+   * A page of the chain, newest first.
+   *
+   * `all()` was the only reader, and returning the whole log in one response
+   * was survivable only while the log held agent actions alone. Once every
+   * *read* is recorded too - which is the point of an audit trail, and what
+   * makes "who pulled the substation list" answerable - the log grows with
+   * traffic and a full dump becomes a response nobody can hold in memory or
+   * read. So the endpoint pages, and this is what it pages with.
+   *
+   * Filters are applied before the page is cut, so `actor` + `limit` means
+   * "the last N things this principal did" rather than "whatever of theirs
+   * happens to be in the last N entries overall" - the second is a
+   * surveillance tool that lies by omission.
+   */
+  page(options: {
+    limit?: number;
+    /** Return entries strictly older than this sequence number. */
+    before?: number;
+    actor?: string;
+    action?: string;
+  } = {}): { entries: AuditEntry[]; total: number; matched: number; nextBefore: number | null } {
+    const limit = Math.max(1, Math.min(1000, options.limit ?? 200));
+
+    let matched = this.entries;
+    if (options.actor) matched = matched.filter((e) => e.actor === options.actor);
+    if (options.action) matched = matched.filter((e) => e.action === options.action);
+    if (options.before !== undefined) matched = matched.filter((e) => e.seq < options.before!);
+
+    const page = matched.slice(Math.max(0, matched.length - limit)).reverse();
+    const oldest = page[page.length - 1];
+    // Null when this page reached the beginning of the filtered set: a cursor
+    // that keeps being offered after the end invites an infinite loop.
+    const nextBefore = oldest && matched.length > page.length ? oldest.seq : null;
+
+    return { entries: page, total: this.entries.length, matched: matched.length, nextBefore };
+  }
+
   /** Recomputes every hash in the chain; false means the log was tampered with. */
   verify(): { valid: boolean; brokenAtSeq: number | null } {
     let prevHash = GENESIS_HASH;

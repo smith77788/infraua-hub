@@ -21,6 +21,8 @@ const KEYS = {
   gridInsider: 'test-grid-insider',
   /** Cleared to the top, read into nothing - the case a level alone gets wrong. */
   gridOutsider: 'test-grid-outsider',
+  /** Issued for one named purpose and no other. */
+  restoration: 'test-restoration',
 };
 
 let server: http.Server;
@@ -30,10 +32,11 @@ let dataDir: string;
 async function call(
   method: 'GET' | 'POST',
   route: string,
-  options: { key?: string; body?: unknown } = {},
+  options: { key?: string; body?: unknown; purpose?: string } = {},
 ): Promise<{ status: number; body: any; headers: Headers }> {
   const headers: Record<string, string> = {};
   if (options.key) headers.Authorization = `Bearer ${options.key}`;
+  if (options.purpose) headers['X-Access-Purpose'] = options.purpose;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
   const response = await fetch(`${baseUrl}${route}`, {
@@ -58,6 +61,7 @@ beforeAll(async () => {
     [KEYS.secret]: 'SECRET',
     [KEYS.gridInsider]: { principal: 'insider', clearance: 'SECRET', compartments: ['grid'] },
     [KEYS.gridOutsider]: { principal: 'outsider', clearance: 'TOP_SECRET' },
+    [KEYS.restoration]: { principal: 'dispatcher', clearance: 'INTERNAL', purposes: ['outage-response'] },
   });
   // High enough that the functional tests below never trip it; the rate-limit
   // test uses its own tiny budget via a separate limiter unit test.
@@ -797,5 +801,129 @@ describe('platform API: need-to-know', () => {
     expect(res.body.principal).toBe('insider');
     expect(res.body.compartments).toEqual(['grid']);
     expect(res.body.clearanceName).toBe('SECRET');
+  });
+});
+
+describe('platform API: purpose of access', () => {
+  it('lets a key with no issued purposes work as before', async () => {
+    const res = await call('GET', '/api/platform/graph', { key: KEYS.internal });
+    expect(res.status).toBe(200);
+  });
+
+  it('makes a key issued for a purpose declare one', async () => {
+    const res = await call('GET', '/api/platform/graph', { key: KEYS.restoration });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('outage-response');
+  });
+
+  it('refuses a purpose the key was not issued for', async () => {
+    const res = await call('GET', '/api/platform/graph', { key: KEYS.restoration, purpose: 'audit-review' });
+    expect(res.status).toBe(403);
+  });
+
+  it('treats a purpose nobody declared as a caller mistake, not a denial', async () => {
+    const res = await call('GET', '/api/platform/graph', { key: KEYS.restoration, purpose: 'freelancing' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts the issued purpose and records it against what came back', async () => {
+    const res = await call('GET', '/api/platform/graph', { key: KEYS.restoration, purpose: 'outage-response' });
+    expect(res.status).toBe(200);
+
+    const trail = await call('GET', '/api/platform/audit', {
+      key: KEYS.internal,
+      body: undefined,
+    });
+    const mine = trail.body.entries.find(
+      (e: any) => e.actor === 'dispatcher' && e.action === 'read_access' && e.details.purpose === 'outage-response',
+    );
+    expect(mine).toBeDefined();
+    expect(mine.details.route).toBe('/api/platform/graph');
+  });
+
+  it('records a refusal too, so reaching outside a remit is visible', async () => {
+    await call('GET', '/api/platform/graph', { key: KEYS.restoration, purpose: 'audit-review' });
+    const trail = await call('GET', '/api/platform/audit', { key: KEYS.internal, purpose: 'audit-review' });
+    const refusal = trail.body.entries.find((e: any) => e.actor === 'dispatcher' && e.action === 'access_refused');
+    expect(refusal).toBeDefined();
+    expect(refusal.details.declaredPurpose).toBe('audit-review');
+  });
+});
+
+describe('platform API: reads are on the record', () => {
+  it('records who read what, in counts and never in content', async () => {
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.internal,
+      body: {
+        payload: {
+          facilities: [
+            {
+              id: 'audit-1',
+              name: 'Підстанція Запис',
+              category: 'substation',
+              lat: 50.0,
+              lon: 30.0,
+              source: 'https://openstreetmap.org/way/777',
+            },
+          ],
+          events: [],
+          dependencies: [],
+        },
+        source: 'read-audit-batch',
+        sector: 'infrastructure',
+      },
+    });
+
+    const read = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    expect(read.status).toBe(200);
+
+    const trail = await call('GET', '/api/platform/audit', { key: KEYS.internal, purpose: 'audit-review' });
+    const entry = trail.body.entries.find(
+      (e: any) => e.action === 'read_access' && e.details.route === '/api/platform/graph' && e.details.returned.nodes > 0,
+    );
+    expect(entry).toBeDefined();
+    expect(entry.details.returned.nodes).toBeGreaterThan(0);
+    // The trail says how much came back, never what. A log that copies the data
+    // it describes is a second, less protected copy of that data.
+    expect(JSON.stringify(entry)).not.toContain('Підстанція Запис');
+  });
+
+  it('does not put ids or search terms into the route it logs', async () => {
+    const created = await call('POST', '/api/platform/cases', { key: KEYS.internal, body: { title: 'Маршрут' } });
+    await call('GET', `/api/platform/cases/${created.body.id}`, { key: KEYS.internal });
+
+    const trail = await call('GET', '/api/platform/audit', { key: KEYS.internal, purpose: 'audit-review' });
+    const entry = trail.body.entries.find(
+      (e: any) => e.action === 'read_access' && String(e.details.route).startsWith('/api/platform/cases/'),
+    );
+    expect(entry.details.route).toBe('/api/platform/cases/:id');
+    expect(entry.details.route).not.toContain(created.body.id);
+  });
+
+  it('pages the chain instead of dumping it, and verifies all of it', async () => {
+    const first = await call('GET', '/api/platform/audit', { key: KEYS.internal, purpose: 'audit-review' });
+    expect(first.body.verification.valid).toBe(true);
+    expect(first.body.total).toBeGreaterThan(first.body.entries.length - 1);
+
+    const small = await call('GET', '/api/platform/audit?limit=3', { key: KEYS.internal, purpose: 'audit-review' });
+    expect(small.body.entries).toHaveLength(3);
+    // Newest first, so the cursor walks backwards through history.
+    expect(small.body.entries[0].seq).toBeGreaterThan(small.body.entries[2].seq);
+    expect(small.body.verification.valid).toBe(true);
+
+    const older = await call('GET', `/api/platform/audit?limit=3&before=${small.body.nextBefore}`, {
+      key: KEYS.internal,
+      purpose: 'audit-review',
+    });
+    expect(older.body.entries[0].seq).toBeLessThan(small.body.nextBefore);
+  });
+
+  it('filters by actor before cutting the page, not after', async () => {
+    const res = await call('GET', '/api/platform/audit?actor=dispatcher&limit=5', {
+      key: KEYS.internal,
+      purpose: 'audit-review',
+    });
+    expect(res.body.entries.length).toBeGreaterThan(0);
+    expect(res.body.entries.every((e: any) => e.actor === 'dispatcher')).toBe(true);
   });
 });

@@ -17,6 +17,7 @@ import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
 import { normalizeCompartments, unionCompartments, Viewer } from '../core/security/Marking';
 import { Guardrails } from '../core/security/Guardrails';
+import { PurposePolicy } from '../core/security/PurposePolicy';
 import { EnvApiKeyAuth, Principal } from '../core/security/ApiKeyAuth';
 import { RateLimiter } from '../core/security/RateLimiter';
 import { RiskScorer } from '../core/analytics/RiskScorer';
@@ -36,6 +37,8 @@ declare global {
       principal?: Principal;
       /** The view every read on this request is filtered through. */
       viewer?: Viewer;
+      /** The reason the caller declared for this request, recorded with it. */
+      accessPurpose?: string | null;
     }
   }
 }
@@ -66,6 +69,7 @@ const CONFIG_ROOT = path.join(PLATFORM_ROOT, 'config');
 
 const ontology = OntologyManifest.fromFile(path.join(CONFIG_ROOT, 'ontology.json'));
 const guardrails = Guardrails.fromFile(path.join(CONFIG_ROOT, 'security_policies.json'));
+const purposePolicy = PurposePolicy.fromFile(path.join(CONFIG_ROOT, 'security_policies.json'));
 const riskScorer = RiskScorer.fromFile(path.join(CONFIG_ROOT, 'risk_signals.json'));
 const apiKeyAuth = EnvApiKeyAuth.fromEnv();
 const graph = new GraphStore(path.join(DATA_ROOT, 'graph.json'), ontology);
@@ -189,10 +193,99 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
     return;
   }
   res.setHeader('X-RateLimit-Remaining', String(decision.remaining));
+
+  const purposeCheck = purposePolicy.check(req.header('x-access-purpose') ?? undefined, principal.purposes);
+  if (!purposeCheck.allowed) {
+    // Refused accesses are recorded too. A trail that holds only the successful
+    // ones cannot show an attempt to reach outside a remit, which is exactly
+    // the pattern a purpose is there to make visible.
+    audit.append(principal.id, 'access_refused', {
+      route: routeOf(req),
+      method: req.method,
+      declaredPurpose: req.header('x-access-purpose') ?? null,
+      reason: purposeCheck.reason,
+    });
+    res.status(purposeCheck.status ?? 403).json({ error: purposeCheck.reason });
+    return;
+  }
+  req.accessPurpose = purposeCheck.purpose;
+
   next();
 }
 
+/**
+ * The route pattern, never the concrete path.
+ *
+ * `/api/platform/cases/case-3f9a.../findings` in an audit line would put a case
+ * id - and with query strings, a search term - into a log that is read by more
+ * people than the data it describes. The pattern says which capability was
+ * used, which is what the trail is for; the ids belong in the entry the handler
+ * writes itself, under the classification of the thing it touched.
+ */
+function routeOf(req: Request): string {
+  const base = req.baseUrl ?? '';
+  const route = (req.route as { path?: string } | undefined)?.path;
+  if (typeof route === 'string') return `${base}${route}`;
+  return `${base}${req.path.split('?')[0]}`;
+}
+
+/**
+ * Records what each read returned.
+ *
+ * Until now the chain held what agents *did* and nothing about what people
+ * *saw*: `GET /api/platform/graph` left no trace at all, so "who exported the
+ * substation list, and under what remit" had no answer. That question is the
+ * one an audit trail in this domain exists to answer, and it cannot be
+ * reconstructed after the fact from anything else.
+ *
+ * What is recorded is the shape of the answer - counts, route, purpose, the
+ * view it was filtered through - and never the answer itself. A trail that
+ * copies the data it describes is a second, less protected copy of that data.
+ */
+function auditReads(req: Request, res: Response, next: NextFunction): void {
+  const originalJson = res.json.bind(res);
+  let recorded = false;
+
+  res.json = (body: unknown) => {
+    if (!recorded) {
+      recorded = true;
+      const principal = req.principal;
+      if (principal) {
+        audit.append(principal.id, 'read_access', {
+          route: routeOf(req),
+          method: req.method,
+          status: res.statusCode,
+          purpose: req.accessPurpose ?? null,
+          clearance: principal.clearance,
+          compartments: principal.compartments,
+          returned: describeResult(body),
+        });
+      }
+    }
+    return originalJson(body);
+  };
+  next();
+}
+
+/** Counts, never content: how much came back, of what. */
+function describeResult(body: unknown): Record<string, number> {
+  if (body === null || typeof body !== 'object') return {};
+  const record = body as Record<string, unknown>;
+  const counts: Record<string, number> = {};
+  for (const key of ['nodes', 'edges', 'cases', 'entries', 'paths', 'risk', 'documentHits', 'findings', 'duplicateCandidates']) {
+    const value = record[key];
+    if (Array.isArray(value)) counts[key] = value.length;
+  }
+  const subgraph = record.subgraph as { nodes?: unknown[]; edges?: unknown[] } | undefined;
+  if (subgraph && typeof subgraph === 'object') {
+    if (Array.isArray(subgraph.nodes)) counts.nodes = subgraph.nodes.length;
+    if (Array.isArray(subgraph.edges)) counts.edges = subgraph.edges.length;
+  }
+  return counts;
+}
+
 app.use('/api/platform', requireApiKey);
+app.use('/api/platform', auditReads);
 
 /**
  * Resolves the compartments a write may be marked with.
@@ -241,6 +334,9 @@ app.get('/api/platform/session', (req, res) => {
     clearanceName: ClearanceLevel[principal.clearance],
     compartments: principal.compartments,
     purposes: principal.purposes,
+    purposeRequired: purposePolicy.isRequired,
+    declaredPurposes: purposePolicy.catalogue(),
+    activePurpose: req.accessPurpose ?? null,
   });
 });
 
@@ -626,8 +722,26 @@ app.post('/api/platform/cases/:id/pin', (req, res) => {
   });
 });
 
-app.get('/api/platform/audit', (_req, res) => {
-  res.json({ entries: audit.all(), verification: audit.verify() });
+/**
+ * The chain, paged.
+ *
+ * `verification` covers the **whole** chain, not the page: a page that
+ * verifies while an earlier entry has been altered is a false reassurance, and
+ * the point of the hash chain is that tampering anywhere is detectable
+ * everywhere after it.
+ */
+app.get('/api/platform/audit', (req, res) => {
+  const num = (value: unknown): number | undefined => {
+    const parsed = Number(value);
+    return typeof value === 'string' && value !== '' && Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const page = audit.page({
+    limit: num(req.query.limit),
+    before: num(req.query.before),
+    actor: typeof req.query.actor === 'string' ? req.query.actor : undefined,
+    action: typeof req.query.action === 'string' ? req.query.action : undefined,
+  });
+  res.json({ ...page, verification: audit.verify() });
 });
 
 /**
