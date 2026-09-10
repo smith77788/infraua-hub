@@ -1,0 +1,73 @@
+{
+  "id": "wikidata-dams",
+  "title": "Греблі та гідротехнічні споруди України (Wikidata)",
+  "description": "Греблі України з Wikidata: координати, висота, тип споруди. Підключено тому, що гребля — це обʼєкт, чия відмова має наслідки за межами енергетики: нижче за течією лежать населені пункти й водозабори. У наборі OpenStreetMap греблі є, але без висоти й часто без звʼязку зі станцією; це другий погляд, а не заміна.",
+  "sector": "energy",
+  "recordsAt": "results.bindings",
+  "defaultClearance": "PUBLIC",
+  "compartments": [],
+  "version": 1,
+  "text": [
+    {
+      "from": "itemLabel.value"
+    },
+    {
+      "from": "typeLabel.value"
+    }
+  ],
+  "entities": [
+    {
+      "name": "dam",
+      "type": "Asset",
+      "id": {
+        "from": "item.value",
+        "transform": [
+          "last_path_segment"
+        ],
+        "prefix": "asset:wikidata:"
+      },
+      "label": {
+        "from": "itemLabel.value"
+      },
+      "properties": [
+        {
+          "name": "category",
+          "const": "dam"
+        },
+        {
+          "name": "lat",
+          "from": "coord.value",
+          "transform": [
+            "wkt_lat"
+          ]
+        },
+        {
+          "name": "lon",
+          "from": "coord.value",
+          "transform": [
+            "wkt_lon"
+          ]
+        },
+        {
+          "name": "height_m",
+          "from": "height.value",
+          "transform": [
+            "number"
+          ]
+        },
+        {
+          "name": "structure_type",
+          "from": "typeLabel.value"
+        },
+        {
+          "name": "wikidata_id",
+          "from": "item.value",
+          "transform": [
+            "last_path_segment"
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": []
+}

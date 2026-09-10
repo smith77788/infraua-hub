@@ -1,0 +1,229 @@
+{
+ "head": {
+  "vars": [
+   "item",
+   "itemLabel",
+   "capacity",
+   "coord",
+   "typeLabel",
+   "operator",
+   "operatorLabel",
+   "inception"
+  ]
+ },
+ "results": {
+  "bindings": [
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q909477"
+    },
+    "capacity": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+     "type": "literal",
+     "value": "5700"
+    },
+    "coord": {
+     "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+     "type": "literal",
+     "value": "Point(34.591666666 47.508333333)"
+    },
+    "operator": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q938225"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Запорізька АЕС"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "атомна електростанція"
+    },
+    "operatorLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Енергоатом"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q1037144"
+    },
+    "capacity": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+     "type": "literal",
+     "value": "2000"
+    },
+    "coord": {
+     "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+     "type": "literal",
+     "value": "Point(26.645 50.305)"
+    },
+    "operator": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q938225"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Хмельницька АЕС"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "атомна електростанція"
+    },
+    "operatorLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Енергоатом"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q215419"
+    },
+    "capacity": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+     "type": "literal",
+     "value": "3515"
+    },
+    "coord": {
+     "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+     "type": "literal",
+     "value": "Point(30.099147 51.389553)"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Чорнобильська атомна електростанція"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "атомна електростанція"
+    },
+    "inception": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+     "type": "literal",
+     "value": "1972-01-01T00:00:00Z"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q2498653"
+    },
+    "capacity": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+     "type": "literal",
+     "value": "540"
+    },
+    "coord": {
+     "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+     "type": "literal",
+     "value": "Point(36.100555555 49.971388888)"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Харківська ТЕЦ-5"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "паливна електрівня"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q2498653"
+    },
+    "capacity": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+     "type": "literal",
+     "value": "540"
+    },
+    "coord": {
+     "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+     "type": "literal",
+     "value": "Point(36.100555555 49.971388888)"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Харківська ТЕЦ-5"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "теплоелектроцентраль"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q12114491"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Кременчуцька ТЕЦ"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "паливна електрівня"
+    },
+    "inception": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+     "type": "literal",
+     "value": "1965-01-01T00:00:00Z"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q12114491"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Кременчуцька ТЕЦ"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "газова електростанція"
+    },
+    "inception": {
+     "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+     "type": "literal",
+     "value": "1965-01-01T00:00:00Z"
+    }
+   },
+   {
+    "item": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q12119090"
+    },
+    "itemLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "Львівська ТЕЦ-1"
+    },
+    "typeLabel": {
+     "xml:lang": "uk",
+     "type": "literal",
+     "value": "паливна електрівня"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,121 @@
+{
+  "id": "wikidata-power-plants",
+  "title": "Електростанції України (Wikidata)",
+  "description": "Електростанції України з Wikidata: встановлена потужність (P2109), координати (P625), тип станції. Підключено заради потужності: тег plant:output:electricity в OpenStreetMap заповнений далеко не скрізь, тож наслідки відмови рахувалися в обʼєктах і майже ніколи в мегаватах. Wikidata дає потужність для великих станцій — саме тих, чия втрата важить найбільше. Це не заміна OSM, а другий погляд: обидва набори лишаються окремими вузлами, а їхнє зіставлення пропонує резолвер і підтверджує людина. Оператора Wikidata називає лише для частини станцій (7 із 244 на момент підключення) — переважно атомних і гідро; сутність оператора оголошена необовʼязковою, тож решта записів не потрапляє у «пропущені».",
+  "sector": "energy",
+  "recordsAt": "results.bindings",
+  "defaultClearance": "PUBLIC",
+  "compartments": [],
+  "version": 2,
+  "text": [
+    {
+      "from": "itemLabel.value"
+    },
+    {
+      "from": "typeLabel.value"
+    },
+    {
+      "from": "capacity.value"
+    },
+    {
+      "from": "operatorLabel.value"
+    }
+  ],
+  "entities": [
+    {
+      "name": "plant",
+      "type": "Asset",
+      "id": {
+        "from": "item.value",
+        "transform": [
+          "last_path_segment"
+        ],
+        "prefix": "asset:wikidata:"
+      },
+      "label": {
+        "from": "itemLabel.value"
+      },
+      "properties": [
+        {
+          "name": "category",
+          "const": "power_plant"
+        },
+        {
+          "name": "capacity_mw",
+          "from": "capacity.value",
+          "transform": [
+            "number"
+          ]
+        },
+        {
+          "name": "lat",
+          "from": "coord.value",
+          "transform": [
+            "wkt_lat"
+          ]
+        },
+        {
+          "name": "lon",
+          "from": "coord.value",
+          "transform": [
+            "wkt_lon"
+          ]
+        },
+        {
+          "name": "plant_type",
+          "from": "typeLabel.value"
+        },
+        {
+          "name": "wikidata_id",
+          "from": "item.value",
+          "transform": [
+            "last_path_segment"
+          ]
+        }
+      ],
+      "validFrom": {
+        "from": "inception.value",
+        "transform": [
+          "iso_date"
+        ]
+      }
+    },
+    {
+      "name": "operator",
+      "type": "Organization",
+      "optional": true,
+      "id": {
+        "from": "operator.value",
+        "transform": [
+          "last_path_segment"
+        ],
+        "prefix": "org:wikidata:"
+      },
+      "label": {
+        "from": "operatorLabel.value"
+      },
+      "properties": [
+        {
+          "name": "wikidata_id",
+          "from": "operator.value",
+          "transform": [
+            "last_path_segment"
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "relation": "OPERATED_BY",
+      "from": "plant",
+      "to": "operator",
+      "properties": [
+        {
+          "name": "source",
+          "const": "wikidata"
+        }
+      ]
+    }
+  ]
+}

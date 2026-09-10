@@ -17,6 +17,9 @@ import { InfraUAConnector, InfraUAPayload } from '../core/ingestion/InfraUAConne
 import { ProzorroConnector, ProzorroTender } from '../core/ingestion/ProzorroConnector';
 import { ProzorroClient } from '../core/ingestion/ProzorroClient';
 import { EdrConnector, PERSONAL_DATA_COMPARTMENT, parseEdrBytes } from '../core/ingestion/EdrConnector';
+import { SourceRegistry } from '../core/ingestion/declarative/SourceRegistry';
+import { DeclarativeConnector } from '../core/ingestion/declarative/DeclarativeConnector';
+import { ManifestError } from '../core/ingestion/declarative/SourceManifest';
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
@@ -117,6 +120,9 @@ const infraUA = new InfraUAConnector(graph, vectors, audit);
 const prozorro = new ProzorroConnector(graph, vectors, audit);
 const prozorroClient = new ProzorroClient(process.env.PROZORRO_API_URL);
 const edr = new EdrConnector(graph, vectors, audit);
+const sources = new SourceRegistry(ontology, audit);
+const declarative = new DeclarativeConnector(graph, vectors, audit);
+const loadedSources = sources.loadDirectory(path.join(CONFIG_ROOT, 'sources'));
 const narrativeAdapter = process.env.ANTHROPIC_API_KEY
   ? new ClaudeNarrativeAdapter(process.env.ANTHROPIC_API_KEY)
   : new DeterministicNarrativeAdapter();
@@ -176,6 +182,10 @@ if (consoleBuilt) {
 app.get('/api/platform/health', (_req, res) => {
   res.json({
     status: 'ok',
+    declarative_sources: loadedSources.loaded.length,
+    // A manifest that failed to load is reported rather than swallowed: a feed
+    // that silently stopped existing looks exactly like a feed with no data.
+    declarative_sources_failed: loadedSources.failed,
     documents: vectors.size(),
     nodes: graph.toJSON().nodes.length,
     narrative_engine: narrativeAdapter.name,
@@ -873,6 +883,59 @@ app.post('/api/platform/actions/pending/:pendingId/withdraw', (req, res) => {
 });
 
 /**
+ * The feeds this deployment knows how to ingest, as documents rather than code.
+ *
+ * Every hand-written connector re-implements the same five things: pick fields
+ * out of records, decide identity, apply a marking, attach provenance, set
+ * valid time. That is fine for three connectors and the wrong shape for
+ * thirty. A manifest makes the mapping reviewable by an operator, versioned in
+ * `config/sources/`, and validated against the ontology when it is registered
+ * rather than per-row when data arrives.
+ */
+app.get('/api/platform/sources', (_req, res) => {
+  res.json({ sources: sources.list(), failedToLoad: loadedSources.failed });
+});
+
+app.post('/api/platform/sources', (req, res) => {
+  try {
+    const { manifest, replaced } = sources.register(req.body, req.principal!);
+    res.status(201).json({ manifest, replaced: Boolean(replaced), previousVersion: replaced?.version ?? null });
+  } catch (err) {
+    if (err instanceof ManifestError) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Ingests a payload through a registered manifest.
+ *
+ * The payload is whatever the feed itself returns - the manifest says where
+ * the records are inside it. Asking a caller to reshape a feed before sending
+ * it would put the mapping back in the caller's code, which is the thing this
+ * exists to remove.
+ */
+app.post('/api/platform/ingest/source/:id', (req, res) => {
+  const manifest = sources.get(String(req.params.id));
+  if (!manifest) return res.status(404).json({ error: `No source manifest "${req.params.id}".` });
+
+  try {
+    const result = declarative.ingest(manifest, req.body, {
+      callerClearance: req.callerClearance!,
+      callerCompartments: req.principal!.compartments,
+    });
+    documents.appendMany(result.documents);
+    res.status(201).json({
+      ...result,
+      documents: result.documents.length,
+      snapshot: recordSnapshot(req, `source:${manifest.id}`, manifest.id, req.body, result.recordsRead),
+      alerts: sweepAfterIngest(req),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
  * Ingests the company register.
  *
  * Takes the published XML as a base64 body rather than JSON records: the file
@@ -1422,4 +1485,6 @@ export {
   actions,
   tools,
   snapshots,
+  sources,
+  declarative,
 };
