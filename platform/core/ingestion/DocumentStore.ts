@@ -31,6 +31,23 @@ export class DocumentStore {
     fs.writeFileSync(this.filePath, JSON.stringify(merged, null, 2), 'utf-8');
   }
 
+  /**
+   * Drops every stored document from one ingestion source.
+   *
+   * Retracting a batch from the graph while leaving its documents indexed is
+   * worse than not retracting at all: search keeps answering with data the
+   * operator believes is gone.
+   */
+  removeBySource(sourcePrefix: string): number {
+    if (!sourcePrefix) throw new Error('sourcePrefix is required');
+    const matches = (id: string) => id === sourcePrefix || id.startsWith(`${sourcePrefix}#`);
+    const all = this.loadAll();
+    const kept = all.filter((d) => !matches(d.id) && d.source !== sourcePrefix);
+    if (kept.length === all.length) return 0;
+    fs.writeFileSync(this.filePath, JSON.stringify(kept, null, 2), 'utf-8');
+    return all.length - kept.length;
+  }
+
   loadAll(): IndexedDocument[] {
     if (!fs.existsSync(this.filePath)) return [];
     return JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));

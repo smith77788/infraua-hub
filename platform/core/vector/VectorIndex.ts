@@ -73,6 +73,33 @@ export class VectorIndex {
     return dot / (normA * normB);
   }
 
+  /**
+   * Removes every document from one ingestion source and rebuilds the term
+   * statistics.
+   *
+   * The counts cannot be decremented in place: `termDocFreq` is document
+   * frequency, and a term appearing three times in one removed document must
+   * drop the frequency by one, not three. Recounting from what remains is the
+   * only version that stays correct, and the index is small enough that the
+   * cost is irrelevant next to being wrong.
+   */
+  removeBySource(sourcePrefix: string): number {
+    if (!sourcePrefix) throw new Error('sourcePrefix is required');
+    const matches = (id: string) => id === sourcePrefix || id.startsWith(`${sourcePrefix}#`);
+
+    const before = this.documents.length;
+    this.documents = this.documents.filter((d) => !matches(d.id) && d.source !== sourcePrefix);
+    if (this.documents.length === before) return 0;
+
+    this.termDocFreq = new Map();
+    for (const doc of this.documents) {
+      for (const term of new Set(tokenize(doc.text))) {
+        this.termDocFreq.set(term, (this.termDocFreq.get(term) ?? 0) + 1);
+      }
+    }
+    return before - this.documents.length;
+  }
+
   search(query: string, clearance: ClearanceLevel, topN = 5): SearchHit[] {
     const queryVec = this.vectorize(query);
     const scored = this.documents

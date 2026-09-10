@@ -277,12 +277,18 @@ app.post('/api/platform/retract', (req, res) => {
     return res.status(403).json({ error: 'retraction requires SECRET clearance' });
   }
   try {
-    const result = graph.retractSource(source.trim());
-    audit.append(source.trim(), 'RETRACT_SOURCE', {
+    const name = source.trim();
+    const result = graph.retractSource(name);
+    // Граф і пошук мають зникати разом: відкликана партія, що лишилася в
+    // індексі, — це дані, які оператор вважає прибраними, а пошук їх видає.
+    const documentsRemoved = documents.removeBySource(name);
+    vectors.removeBySource(name);
+    audit.append(name, 'RETRACT_SOURCE', {
       nodesRemoved: result.nodesRemoved.length,
       edgesRemoved: result.edgesRemoved,
+      documentsRemoved,
     });
-    res.json(result);
+    res.json({ ...result, documentsRemoved });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

@@ -677,3 +677,54 @@ describe('platform API: retraction', () => {
     expect(JSON.stringify(entries)).toContain('RETRACT_SOURCE');
   });
 });
+
+describe('platform API: retraction reaches search too', () => {
+  const payload = {
+    facilities: [
+      {
+        id: 'idx-1',
+        name: 'Унікальнеслово Підстанція',
+        category: 'substation',
+        lat: 48.5,
+        lon: 35.0,
+        source: 'https://openstreetmap.org/way/950',
+      },
+    ],
+  };
+
+  it('stops answering search with a batch that was retracted', async () => {
+    // Відкликати з графа й лишити в індексі — гірше, ніж не відкликати:
+    // оператор вважає дані прибраними, а пошук їх видає.
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: { payload, source: 'searchable', sector: 'infrastructure' },
+    });
+    const found = await call('POST', '/api/platform/investigate', {
+      key: KEYS.secret,
+      body: { query: 'Унікальнеслово' },
+    });
+    expect(JSON.stringify(found.body)).toContain('Унікальнеслово');
+
+    const retracted = await call('POST', '/api/platform/retract', {
+      key: KEYS.secret,
+      body: { source: 'searchable' },
+    });
+    expect(retracted.body.documentsRemoved).toBeGreaterThan(0);
+
+    const gone = await call('POST', '/api/platform/investigate', {
+      key: KEYS.secret,
+      body: { query: 'Унікальнеслово' },
+    });
+    expect(JSON.stringify(gone.body)).not.toContain('Унікальнеслово Підстанція');
+  });
+
+  it('reports zero when there is nothing from that source', async () => {
+    const res = await call('POST', '/api/platform/retract', {
+      key: KEYS.secret,
+      body: { source: 'ніколи-не-існувало' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.documentsRemoved).toBe(0);
+    expect(res.body.nodesRemoved).toEqual([]);
+  });
+});
