@@ -21,6 +21,7 @@ import {
   Info,
   Loader2,
   Map as MapIcon,
+  Network,
   RefreshCw,
   Filter,
   HelpCircle,
@@ -89,6 +90,7 @@ const AnalyticsView = lazy(() => import("@/components/AnalyticsView"));
 const ThreatGraph = lazy(() => import("@/components/ThreatGraph"));
 const ThreatChains = lazy(() => import("@/components/ThreatChains"));
 const CasePanel = lazy(() => import("@/components/CasePanel"));
+const PlatformPanel = lazy(() => import("@/components/PlatformPanel"));
 
 const TIME_WINDOWS = [
   { id: "24h", label: "24 год", hours: 24 },
@@ -319,6 +321,7 @@ function Console() {
   const [view, setView] = useState<"map" | "analytics">("map");
   const [showTable, setShowTable] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showPlatform, setShowPlatform] = useState(false);
   const [focus, setFocus] = useState<Focus>(null);
   const [operatorId, setOperatorId] = useState<string | null>(null);
   const [eventKind, setEventKind] = useState<keyof typeof EVENT_KINDS | null>(null);
@@ -979,16 +982,26 @@ function Console() {
                 <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                   Аналітична платформа
                 </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-1.5 h-7 px-2 font-mono text-[10px] uppercase"
-                  disabled={pushState.status === "sending" || allFacilities.length === 0}
-                  onClick={() => void sendToPlatform()}
-                >
-                  <Share2 className="size-3" />
-                  {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
-                </Button>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 font-mono text-[10px] uppercase"
+                    disabled={pushState.status === "sending" || allFacilities.length === 0}
+                    onClick={() => void sendToPlatform()}
+                  >
+                    <Share2 className="size-3" />
+                    {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 font-mono text-[10px] uppercase"
+                    onClick={() => setShowPlatform(true)}
+                  >
+                    <Network className="size-3" /> Аналітика
+                  </Button>
+                </div>
                 {pushState.status === "done" ? (
                   <p
                     className={`mt-1.5 text-[10px] leading-relaxed ${pushState.ok ? "text-muted-foreground" : "text-destructive"}`}
@@ -1250,6 +1263,18 @@ function Console() {
                     </Suspense>
                   </div>
                 </div>
+              ) : null}
+
+              {showPlatform ? (
+                <Suspense
+                  fallback={
+                    <div className="absolute inset-0 z-[600] flex items-center justify-center bg-background/95">
+                      <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                    </div>
+                  }
+                >
+                  <PlatformPanel onClose={() => setShowPlatform(false)} />
+                </Suspense>
               ) : null}
             </main>
 
