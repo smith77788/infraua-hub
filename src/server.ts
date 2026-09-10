@@ -61,7 +61,14 @@ async function runProbes(): Promise<SourceProbe[]> {
       "https://overpass-api.de/api/interpreter",
       {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          // Те саме представлення, що й у робочому шляху, — інакше проба
+          // міряла б не те, що відбувається насправді.
+          "user-agent":
+            "InfraUA-Console/1.0 (critical infrastructure monitor; +https://github.com/smith77788/infraua-hub)",
+          accept: "application/json",
+        },
         // Найдешевший осмислений запит: рахунок підстанцій 110 кВ+ по країні.
         // Він же відповідає на питання, скільки їх насправді.
         body:

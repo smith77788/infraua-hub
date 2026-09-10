@@ -124,13 +124,31 @@ interface OverpassElement {
   geometry?: { lat: number; lon: number }[];
 }
 
+/**
+ * Хто ми такі — за вимогою джерела, а не з ввічливості.
+ *
+ * Політика використання OSM зобовʼязує клієнта представлятися описовим
+ * User-Agent із контактом. Ми не надсилали жодного, тобто зверталися анонімно
+ * до сервісу, який анонімних клієнтів має право відкидати — і, судячи з
+ * відповідей, відкидав: заміряно з Railway, Overpass повертав HTTP 406 за
+ * 513 мс, тоді як USGS і NASA тим самим шляхом відповідали нормально.
+ *
+ * Тобто це не «джерело лежить», а «нас не пускають».
+ */
+const USER_AGENT =
+  "InfraUA-Console/1.0 (critical infrastructure monitor; +https://github.com/smith77788/infraua-hub)";
+
 async function overpass(body: string, signal: AbortSignal): Promise<OverpassElement[]> {
   let lastError: unknown = null;
   for (const url of OVERPASS_ENDPOINTS) {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": USER_AGENT,
+          Accept: "application/json",
+        },
         body: `data=${encodeURIComponent(body)}`,
         signal,
       });
