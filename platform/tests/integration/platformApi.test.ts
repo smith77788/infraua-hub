@@ -1362,3 +1362,78 @@ describe('platform API: the tool catalogue', () => {
     }
   });
 });
+
+describe('platform API: where the picture came from', () => {
+  const batch = (facilities: unknown[]) => ({
+    payload: { facilities, events: [], dependencies: [] },
+    source: 'lineage-feed',
+    sector: 'infrastructure',
+  });
+
+  const facility = (i: number) => ({
+    id: `lin-${i}`,
+    name: `Підстанція Похідна ${i}`,
+    category: 'substation',
+    lat: 48 + i / 100,
+    lon: 35 + i / 100,
+    source: `https://openstreetmap.org/way/${9000 + i}`,
+  });
+
+  it('has nothing to compare the first batch with, and says so', async () => {
+    const res = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: batch([facility(1), facility(2), facility(3), facility(4)]),
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.snapshot.verdict).toBe('first');
+  });
+
+  it('flags a feed that answered with a fraction of its usual rows', async () => {
+    // Not down. Broken in the way that reaches the graph and looks like a
+    // quiet day — which is why nothing else notices it.
+    for (const _ of [1, 2]) {
+      await call('POST', '/api/platform/ingest/infraua', {
+        key: KEYS.secret,
+        body: batch([facility(1), facility(2), facility(3), facility(4)]),
+      });
+    }
+    const thin = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: batch([facility(9)]),
+    });
+    expect(thin.body.snapshot.verdict).toBe('shrunk');
+    expect(thin.status).toBe(201);
+
+    const trail = await call('GET', '/api/platform/audit?limit=30', { key: KEYS.internal, purpose: 'audit-review' });
+    expect(trail.body.entries.some((e: any) => e.action === 'snapshot_anomaly')).toBe(true);
+  });
+
+  it('shows a source history and what it put into this reader graph', async () => {
+    const res = await call('GET', '/api/platform/lineage?source=lineage-feed', { key: KEYS.secret });
+    expect(res.status).toBe(200);
+    expect(res.body.snapshots.length).toBeGreaterThan(1);
+    expect(res.body.inGraph.nodes).toBeGreaterThan(0);
+  });
+
+  it('singles out the sources worth looking at', async () => {
+    const res = await call('GET', '/api/platform/lineage', { key: KEYS.secret });
+    expect(res.body.sources.length).toBeGreaterThan(0);
+    expect(res.body.suspect.map((s: any) => s.source)).toContain('lineage-feed');
+  });
+
+  it('answers which batches an entity rests on', async () => {
+    const graph = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    const node = graph.body.nodes.find((n: any) => n.label.includes('Похідна 1'));
+    const res = await call(`GET`, `/api/platform/lineage/entity/${encodeURIComponent(node.id)}`, {
+      key: KEYS.secret,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.sources.map((s: any) => s.source)).toContain('lineage-feed');
+    expect(res.body.documents.length).toBeGreaterThan(0);
+  });
+
+  it('hides lineage for an entity outside the caller view', async () => {
+    const res = await call('GET', '/api/platform/lineage/entity/nothing-here', { key: KEYS.public });
+    expect(res.status).toBe(404);
+  });
+});

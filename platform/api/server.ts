@@ -6,6 +6,7 @@ import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import { GraphStore } from '../core/graph/GraphStore';
 import { RevisionLog } from '../core/graph/RevisionLog';
+import { SnapshotStore, contentHashOf } from '../core/lineage/SnapshotStore';
 import { OntologyManifest } from '../core/graph/OntologyManifest';
 import { VectorIndex } from '../core/vector/VectorIndex';
 import { AuditLog } from '../core/audit/AuditLog';
@@ -91,6 +92,7 @@ const vectors = new VectorIndex();
 const audit = new AuditLog(path.join(DATA_ROOT, 'audit.log'));
 const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
 const cases = new CaseStore(path.join(DATA_ROOT, 'cases.json'));
+const snapshots = new SnapshotStore(path.join(DATA_ROOT, 'snapshots.log'));
 const alerts = new AlertStore(path.join(DATA_ROOT, 'alerts.json'));
 const actions = new ActionRegistry(graph, audit, path.join(DATA_ROOT, 'pending-actions.json'));
 const tools = new ToolRegistry(
@@ -397,7 +399,12 @@ app.post('/api/platform/documents', (req, res) => {
     clearance: level,
     ...(marks.compartments.length ? { compartments: marks.compartments } : {}),
   });
-  res.status(201).json({ ...result, compartments: marks.compartments, alerts: sweepAfterIngest(req) });
+  res.status(201).json({
+    ...result,
+    compartments: marks.compartments,
+    snapshot: recordSnapshot(req, 'documents', source, text, 1),
+    alerts: sweepAfterIngest(req),
+  });
 });
 
 app.post('/api/platform/documents/structured', (req, res) => {
@@ -419,7 +426,12 @@ app.post('/api/platform/documents/structured', (req, res) => {
     const rows: Record<string, string>[] = records ?? parseCsv(csv);
     const result = structuredConnector.ingest(rows, mapping as StructuredMapping, source, sector, level, marks.compartments);
     documents.appendMany(result.documents);
-    res.status(201).json({ ...result, compartments: marks.compartments, alerts: sweepAfterIngest(req) });
+    res.status(201).json({
+      ...result,
+      compartments: marks.compartments,
+      snapshot: recordSnapshot(req, 'structured', source, rows, rows.length),
+      alerts: sweepAfterIngest(req),
+    });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -454,7 +466,19 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
       marks.compartments
     );
     documents.appendMany(result.documents);
-    res.status(201).json({ ...result, compartments: marks.compartments, alerts: sweepAfterIngest(req) });
+    const batchSource = typeof source === 'string' && source ? source : 'infraua';
+    res.status(201).json({
+      ...result,
+      compartments: marks.compartments,
+      snapshot: recordSnapshot(
+        req,
+        'infraua',
+        batchSource,
+        payload,
+        (payload.facilities?.length ?? 0) + (payload.events?.length ?? 0) + (payload.dependencies?.length ?? 0)
+      ),
+      alerts: sweepAfterIngest(req),
+    });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -483,6 +507,76 @@ function sweepAfterIngest(req: Request): { raised: number; reopened: number; wit
     return { error: message };
   }
 }
+
+/**
+ * Records what a batch looked like, so the next one can be compared with it.
+ *
+ * Called on every ingest, and its verdict never blocks one. A feed
+ * legitimately returns fewer rows on a quiet day, and refusing the batch would
+ * trade a monitoring problem for data loss.
+ */
+function recordSnapshot(req: Request, kind: string, source: string, records: unknown, count: number) {
+  const snapshot = snapshots.record({
+    source,
+    kind,
+    recordCount: count,
+    contentHash: contentHashOf(records),
+    actor: req.principal!.id,
+  });
+  if (snapshot.verdict !== 'normal' && snapshot.verdict !== 'first') {
+    // Only the interesting verdicts reach the chain: an entry per routine
+    // ingest would bury the one that matters.
+    audit.append(req.principal!.id, 'snapshot_anomaly', {
+      source,
+      verdict: snapshot.verdict,
+      recordCount: snapshot.recordCount,
+      baseline: snapshot.baseline,
+    });
+  }
+  return { verdict: snapshot.verdict, note: snapshot.note, baseline: snapshot.baseline };
+}
+
+/**
+ * Where the picture came from.
+ *
+ * `sources.ts` in the console answers "is the feed responding". This answers
+ * the question that costs something: is it still telling the truth. A source
+ * returning HTTP 200 with a third of its usual rows is not down - it is broken
+ * in the way that reaches the graph, moves every derived number, and looks
+ * like a quiet day.
+ */
+app.get('/api/platform/lineage', (req, res) => {
+  const source = typeof req.query.source === 'string' ? req.query.source : '';
+  if (source) {
+    const history = snapshots.forSource(source);
+    const { nodes, edges } = graph.toJSON(req.viewer!);
+    const matches = (docId: string) => docId === source || docId.startsWith(`${source}#`);
+    return res.json({
+      source,
+      snapshots: history,
+      // What this source actually put into the reader's own view of the graph.
+      inGraph: {
+        nodes: nodes.filter((n) => n.source_doc_ids.some(matches)).length,
+        edges: edges.filter((e) => e.source_doc_ids.some(matches)).length,
+      },
+    });
+  }
+  res.json({ sources: snapshots.latestPerSource(), suspect: snapshots.suspect() });
+});
+
+/** Which batches an entity rests on — the question a finding raises first. */
+app.get('/api/platform/lineage/entity/:id', (req, res) => {
+  const node = graph.getNode(String(req.params.id), req.viewer!);
+  if (!node) return res.status(404).json({ error: 'No such entity in your view.' });
+
+  const sources = Array.from(new Set(node.source_doc_ids.map((d) => d.split('#')[0])));
+  res.json({
+    id: node.id,
+    label: node.label,
+    documents: node.source_doc_ids,
+    sources: sources.map((source) => ({ source, snapshots: snapshots.forSource(source, 5) })),
+  });
+});
 
 /**
  * The triage queue.
@@ -627,7 +721,13 @@ app.post('/api/platform/ingest/prozorro', (req, res) => {
       marks.compartments
     );
     documents.appendMany(result.documents);
-    res.status(201).json({ ...result, documents: result.documents.length, alerts: sweepAfterIngest(req) });
+    const batchSource = typeof source === 'string' && source ? source : 'prozorro';
+    res.status(201).json({
+      ...result,
+      documents: result.documents.length,
+      snapshot: recordSnapshot(req, 'prozorro', batchSource, tenders, tenders.length),
+      alerts: sweepAfterIngest(req),
+    });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -826,6 +926,13 @@ app.post('/api/platform/ingest/edr', (req, res) => {
       ...result,
       documents: result.documents.length,
       personCompartments: personMarks,
+      snapshot: recordSnapshot(
+        req,
+        'edr',
+        typeof source === 'string' && source ? source : 'edr',
+        subjects,
+        subjects.length
+      ),
       alerts: sweepAfterIngest(req),
     });
   } catch (err) {
@@ -1314,4 +1421,5 @@ export {
   alertEngine,
   actions,
   tools,
+  snapshots,
 };
