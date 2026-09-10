@@ -654,7 +654,7 @@ function Console() {
         діяти на побаченому.
       */}
       <div
-        className={`flex h-6 shrink-0 items-center justify-center gap-4 border-b px-4 font-mono text-[10px] uppercase tracking-[0.16em] ${
+        className={`flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b px-4 font-mono text-[10px] uppercase tracking-[0.16em] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center ${
           summary.level === "critical"
             ? "border-red-500/40 bg-red-500/10 text-red-300"
             : summary.level === "elevated"
@@ -1133,12 +1133,12 @@ function Console() {
               ) : null}
 
               {facilitiesQuery.isPlaceholderData ? (
-                <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
+                <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
                   <Loader2 className="size-3 animate-spin" /> Опорний набір показано; вантажимо
                   повні дані з OpenStreetMap…
                 </div>
               ) : facilitiesQuery.data?.source === "baseline" ? (
-                <div className="absolute inset-x-0 bottom-3 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
+                <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
                   Live-джерело OpenStreetMap недоступне — показано опорний перелік ключових
                   обʼєктів. Натисніть «Оновити» для повторної спроби.
                 </div>

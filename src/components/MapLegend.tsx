@@ -42,7 +42,7 @@ export default function MapLegend() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="absolute bottom-3 left-3 z-[500] flex items-center gap-1.5 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+        className="absolute bottom-14 left-3 z-[500] flex items-center gap-1.5 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
       >
         <HelpCircle className="size-3.5" /> Легенда
       </button>
@@ -50,7 +50,7 @@ export default function MapLegend() {
   }
 
   return (
-    <div className="absolute bottom-3 left-3 z-[500] max-h-[70svh] w-60 overflow-y-auto rounded border border-border bg-background/95 p-3 backdrop-blur">
+    <div className="absolute bottom-14 left-3 z-[500] max-h-[70svh] w-60 overflow-y-auto rounded border border-border bg-background/95 p-3 backdrop-blur">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
           Легенда карти
