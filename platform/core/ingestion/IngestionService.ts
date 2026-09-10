@@ -12,32 +12,10 @@ export interface IngestResult {
   edgesRejected: { edge: string; reason: string }[];
 }
 
-/**
- * Turns a label into a node id.
- *
- * The character class used to whitelist Latin plus Russian `а-яё`, which
- * silently deleted every Ukrainian letter outside that range - і, ї, є, ґ.
- * "Київобленерго" and "Киівобленерго" both came out as "кивобленерго", so two
- * different operators collided on one id and `upsertNode` overwrote one with
- * the other without a word. Whole-alphabet omissions like that cannot be
- * caught by reading the regex; it took feeding it real Ukrainian names.
- *
- * Now any letter or digit in any script survives, so the question "which
- * alphabets did we remember" no longer exists. NFKD also went: it decomposed
- * й into и plus a combining breve and the mark was then stripped, which is
- * the same class of bug one step removed.
- *
- * Ids produced before this change differ from ids produced after it, so a
- * graph persisted earlier keeps its old ids until it is re-ingested.
- */
-export function slugify(label: string): string {
-  return label
-    .toLowerCase()
-    .normalize('NFC')
-    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
-    .trim()
-    .replace(/\s+/g, '_');
-}
+// Re-exported so existing callers keep importing it from here, while the rule
+// itself lives in one dependency-free file both halves of the product read.
+import { slugify } from './slug';
+export { slugify };
 
 /**
  * Wires ingestion together: extract facts from raw text, register the
