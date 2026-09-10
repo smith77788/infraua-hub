@@ -58,6 +58,7 @@ import {
 import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
+import { projectThreats } from "@/lib/threat-eta";
 import {
   buildThreatGraph,
   correlateAirThreats,
@@ -93,6 +94,19 @@ const TIME_WINDOWS = [
   { id: "30d", label: "30 днів", hours: 720 },
 ] as const;
 type WindowId = (typeof TIME_WINDOWS)[number]["id"];
+
+// Короткі підписи типів цілей для панелей (повні силуети — на карті).
+const AIR_TYPE_LABEL: Record<string, string> = {
+  shahed: "Ударний БпЛА",
+  reactive: "Реактивний БпЛА",
+  cruise: "Крилата ракета",
+  missile: "Ракета",
+  ballistic: "Балістика",
+  kab: "КАБ",
+  recon: "Розвідник",
+  aircraft: "Авіація",
+  unknown: "Тип невідомий",
+};
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -424,6 +438,14 @@ function Console() {
   );
   const airThreatSummary = useMemo(() => summarizeAirThreat(airThreat), [airThreat]);
   const threatGraph = useMemo(() => buildThreatGraph(airThreat, threats), [airThreat, threats]);
+
+  // Проєкція курсу: коли джерело дає heading, рахуємо коридор підльоту й час до
+  // критичних обʼєктів. Це відповідь на питання «куди летить», а не лише «що
+  // поруч» — найцінніший зріз під час нальоту.
+  const projections = useMemo(
+    () => projectThreats(threats, allFacilities),
+    [threats, allFacilities],
+  );
 
   const atRiskList = useMemo(
     () =>
@@ -1193,6 +1215,46 @@ function Console() {
 
           {/* Right panel */}
           <aside className="order-3 flex shrink-0 flex-col overflow-y-auto border-border p-4 lg:w-80 lg:border-l">
+            {projections.length > 0 ? (
+              <section className="mb-5">
+                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
+                  <Waypoints className="size-3" /> Коридор підльоту
+                  <span
+                    className="ml-auto rounded bg-red-500/15 px-1.5 py-0.5 text-red-300"
+                    title="Критичні обʼєкти на курсі цілей із відомим heading — оцінка часу за типовою швидкістю типу"
+                  >
+                    {projections.length}
+                  </span>
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {projections.map((p) => (
+                    <button
+                      key={p.facility.id}
+                      onClick={() => setSelectedId(p.facility.id)}
+                      className="flex w-full items-center gap-2 rounded border border-red-500/30 bg-red-500/5 p-2 text-left transition-colors hover:bg-red-500/10"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[12px] text-foreground">
+                          {p.facility.name}
+                        </span>
+                        <span className="block font-mono text-[10px] text-muted-foreground">
+                          {AIR_TYPE_LABEL[p.threat.type ?? "unknown"]} · {p.distanceKm} км · відхил.{" "}
+                          {p.offAxisDeg}°
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right font-mono">
+                        <span className="block text-[13px] font-semibold text-red-300">
+                          {p.etaMin < 1 ? "<1" : `~${p.etaMin}`}
+                        </span>
+                        <span className="block text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
+                          хв
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
             {airThreat.length > 0 ? (
               <section className="mb-5">
                 <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
