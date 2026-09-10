@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
+import { formatVoltage, highestVoltage, plantOutputMw } from "./osm-tags";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
 
 import {
@@ -173,9 +174,15 @@ function toFacility(el: OverpassElement, category: CategoryId): Facility | null 
   if (typeof lat !== "number" || typeof lon !== "number") return null;
   const tags = el.tags ?? {};
   const name = tags["name:uk"] ?? tags["name"] ?? tags["operator"] ?? "Обʼєкт без назви";
+  // Спільний парсер: той самий тег читався тут інакше, ніж у решті коду —
+  // `split(";")[0]` брав перше значення замість найвищого.
+  const voltage = highestVoltage(tags["voltage"]);
+  const capacityMw = plantOutputMw(tags["plant:output:electricity"]);
+
   const detailParts = [
     tags["plant:source"] && `джерело: ${tags["plant:source"]}`,
-    tags["voltage"] && `${Math.round(Number(tags["voltage"].split(";")[0]) / 1000)} кВ`,
+    voltage !== undefined && formatVoltage(voltage),
+    capacityMw !== undefined && `${capacityMw} МВт`,
     tags["iata"] && `IATA ${tags["iata"]}`,
     tags["emergency"] === "yes" ? "приймальне відділення" : null,
   ].filter(Boolean) as string[];
@@ -187,6 +194,8 @@ function toFacility(el: OverpassElement, category: CategoryId): Facility | null 
     lat,
     lon,
     ...(tags["operator"] ? { operator: tags["operator"] } : {}),
+    ...(voltage !== undefined ? { voltage } : {}),
+    ...(capacityMw !== undefined ? { capacityMw } : {}),
     ...(detailParts.length ? { detail: detailParts.join(" · ") } : {}),
     // Посилання на конкретний запис, а не на вид карти: його можна відкрити
     // й перевірити.

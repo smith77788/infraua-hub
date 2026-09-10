@@ -1,5 +1,6 @@
 import { TIER_LABEL, type FacilityAnalytics } from "./infra-analytics";
 import { CATEGORIES, type Facility } from "./infra-types";
+import { formatVoltage } from "./osm-tags";
 import type { CriticalityBand } from "./infra-criticality";
 
 /**
@@ -11,7 +12,8 @@ import type { CriticalityBand } from "./infra-criticality";
  * на той зріз, який ми йому вибрали.
  */
 
-export type SortKey = "name" | "category" | "operator" | "score" | "dependents" | "state";
+export type SortKey =
+  "name" | "category" | "operator" | "score" | "dependents" | "state" | "voltage";
 export type SortDirection = "asc" | "desc";
 
 export interface EntityRow {
@@ -27,6 +29,10 @@ export interface EntityRow {
   dependents: number;
   atRisk: boolean;
   underAlarm: boolean;
+  /** Напруга у вольтах — для сортування. */
+  voltage: number | null;
+  /** Готовий підпис — щоб вигляд не переказував модель по-своєму. */
+  voltageLabel: string;
   source: string;
 }
 
@@ -50,6 +56,8 @@ export function buildRows(
       dependents: a?.dependents ?? 0,
       atRisk: a?.atRisk ?? false,
       underAlarm: a?.underAlarm ?? false,
+      voltage: f.voltage ?? null,
+      voltageLabel: formatVoltage(f.voltage),
       source: f.source,
     };
   });
@@ -94,6 +102,14 @@ export function sortRows(rows: EntityRow[], key: SortKey, direction: SortDirecti
       case "dependents":
         cmp = a.dependents - b.dependents;
         break;
+      case "voltage":
+        // Невідома напруга завжди в кінці: «немає даних» — не нульова
+        // напруга, і сортувати їх поруч означало б стверджувати протилежне.
+        if (a.voltage === null && b.voltage === null) cmp = 0;
+        else if (a.voltage === null) return 1;
+        else if (b.voltage === null) return -1;
+        else cmp = a.voltage - b.voltage;
+        break;
       case "state":
         cmp = stateWeight(a) - stateWeight(b);
         break;
@@ -108,6 +124,7 @@ export const COLUMNS: { key: SortKey; label: string; numeric?: boolean }[] = [
   { key: "score", label: "Індекс", numeric: true },
   { key: "name", label: "Обʼєкт" },
   { key: "category", label: "Категорія" },
+  { key: "voltage", label: "Напруга", numeric: true },
   { key: "operator", label: "Оператор" },
   { key: "dependents", label: "Залежних", numeric: true },
   { key: "state", label: "Стан" },

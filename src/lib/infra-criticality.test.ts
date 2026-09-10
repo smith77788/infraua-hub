@@ -381,3 +381,56 @@ describe("downstreamCounts", () => {
     expect(counts.get("a")).toBe(3);
   });
 });
+
+describe("клас напруги в оцінці", () => {
+  function sub(id: string, voltage?: number): Facility {
+    return {
+      id,
+      name: id,
+      category: "substation",
+      lat: 50,
+      lon: 30,
+      source: "test",
+      ...(voltage === undefined ? {} : { voltage }),
+    };
+  }
+  const empty = {
+    dependents: new Map<string, number>(),
+    atRisk: new Set<string>(),
+    underAlarm: new Set<string>(),
+  };
+
+  it("ставить магістральний вузол вище за розподільчий", () => {
+    // Раніше вони важили однаково: напруга приходила з OSM і губилася в тексті.
+    const nodes = [sub("backbone", 750_000), sub("local", 110_000)];
+    const edges = [edge("backbone", "local")];
+    const result = assessCriticality({ facilities: nodes, edges, ...empty });
+    expect(result.get("backbone")!.score).toBeGreaterThan(result.get("local")!.score);
+  });
+
+  it("не додає ваги розподільчому рівню — він базовий для набору", () => {
+    const nodes = [sub("a", 110_000), sub("b", 110_000)];
+    const result = assessCriticality({ facilities: nodes, edges: [edge("a", "b")], ...empty });
+    expect(result.get("a")!.signals.some((x) => x.id === "voltage_class")).toBe(false);
+  });
+
+  it("обʼєкт без напруги не отримує ні сигналу, ні вигаданого класу", () => {
+    const result = assessCriticality({
+      facilities: [sub("a"), sub("b")],
+      edges: [edge("a", "b")],
+      ...empty,
+    });
+    expect(result.get("a")!.signals.some((x) => x.id === "voltage_class")).toBe(false);
+  });
+
+  it("доказом сигналу є сама напруга, а не переказ", () => {
+    const result = assessCriticality({
+      facilities: [sub("a", 330_000), sub("b", 110_000)],
+      edges: [edge("a", "b")],
+      ...empty,
+    });
+    const signal = result.get("a")!.signals.find((x) => x.id === "voltage_class")!;
+    expect(signal.evidence).toBe("330 кВ");
+    expect(signal.grounded).toBe(true);
+  });
+});

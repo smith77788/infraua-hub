@@ -1,4 +1,5 @@
 import { distanceKm, type Facility, type GraphEdge } from "./infra-types";
+import { highestVoltage } from "./osm-tags";
 
 /**
  * Побудова **спостереженої** топології енергомережі з реальних ліній OSM.
@@ -72,22 +73,13 @@ export function parsePowerLines(payload: unknown): PowerLine[] {
     );
     if (points.length < 2) continue;
 
-    const voltageTag = raw.tags?.["voltage"];
-    // Тег напруги буває списком через крапку з комою ("330000;110000") —
-    // беремо найвищу, бо саме вона визначає роль лінії в мережі.
-    const voltage = voltageTag
-      ? Math.max(
-          ...voltageTag
-            .split(";")
-            .map((v) => Number(v.trim()))
-            .filter((v) => Number.isFinite(v)),
-        )
-      : undefined;
+    // Спільний парсер тега напруги — див. `osm-tags.ts`.
+    const voltage = highestVoltage(raw.tags?.["voltage"]);
 
     lines.push({
       id: raw.id,
       geometry: points,
-      voltage: Number.isFinite(voltage) ? voltage : undefined,
+      voltage,
       operator: raw.tags?.["operator"],
     });
   }

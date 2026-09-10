@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
 import { backoffMs, sourceUnavailable } from "@/lib/backoff";
 import { applyFocus, focusLabel, type Focus } from "@/lib/focus";
+import { formatVoltage, voltageClass, VOLTAGE_CLASS_LABEL } from "@/lib/osm-tags";
 import { operatorProfile } from "@/lib/operators";
 import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
@@ -1197,6 +1198,21 @@ function Console() {
                   >
                     Оператор: {selected.operator}
                   </button>
+                ) : null}
+                {selected.voltage !== undefined || selected.capacityMw !== undefined ? (
+                  <p className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-[11px]">
+                    {selected.voltage !== undefined ? (
+                      <span
+                        className="text-primary"
+                        title={VOLTAGE_CLASS_LABEL[voltageClass(selected.voltage)!]}
+                      >
+                        {formatVoltage(selected.voltage)}
+                      </span>
+                    ) : null}
+                    {selected.capacityMw !== undefined ? (
+                      <span className="text-muted-foreground">{selected.capacityMw} МВт</span>
+                    ) : null}
+                  </p>
                 ) : null}
                 <p className="mt-1 font-mono text-[11px] text-muted-foreground">
                   {selected.lat.toFixed(4)}, {selected.lon.toFixed(4)}

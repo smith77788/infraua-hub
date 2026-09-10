@@ -1,5 +1,6 @@
 import { CATEGORIES, type Facility, type GraphEdge, type Tier } from "./infra-types";
 import { isObserved } from "./provenance";
+import { formatVoltage, voltageClass, type VoltageClass } from "./osm-tags";
 
 /**
  * Структурна критичність обʼєктів мережі живлення.
@@ -499,6 +500,37 @@ const SECTOR_SIGNAL: Record<Tier, { label: string; contribution: number; reason:
   },
 };
 
+/**
+ * Внесок за класом напруги.
+ *
+ * До цього підстанція 750 кВ і підстанція 110 кВ важили однаково: напруга
+ * приходила з OSM, лягала в текст опису і на цьому губилася. Але в мережі це
+ * різні обʼєкти — магістральний вузол несе переток між областями й на експорт,
+ * розподільчий живить свій район.
+ *
+ * Значення менші за структурні сигнали навмисно: висока напруга каже, чим
+ * вузол *може* бути, а посередництво й мости — чим він є в цьому графі.
+ */
+const VOLTAGE_SIGNAL: Record<VoltageClass, { contribution: number; reason: string }> = {
+  backbone: {
+    contribution: 18,
+    reason:
+      "Магістральний клас (750 кВ+): такі вузли несуть переток між енергосистемами, і їх відмова відчувається далеко за межами району.",
+  },
+  transmission: {
+    contribution: 12,
+    reason: "Основна передача (330 кВ+): вузол міжобласного рівня, а не місцевого живлення.",
+  },
+  sub_transmission: {
+    contribution: 6,
+    reason: "Субпередача (150–220 кВ): проміжний рівень між магістраллю і розподілом.",
+  },
+  distribution: {
+    contribution: 0,
+    reason: "Розподільчий рівень (110 кВ) — базовий для цього набору, окремої ваги не додає.",
+  },
+};
+
 export interface CriticalityInput {
   facilities: Facility[];
   edges: GraphEdge[];
@@ -639,6 +671,19 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
         contribution: 20,
         reason: "Обʼєкт у регіоні з активною повітряною тривогою.",
         evidence: "у зоні повітряної тривоги",
+        grounded: true,
+      });
+    }
+
+    // Клас напруги — властивість самого обʼєкта, з тега OSM, а не наш висновок.
+    const vClass = voltageClass(byId.get(facility.id)?.voltage);
+    if (vClass && VOLTAGE_SIGNAL[vClass].contribution > 0) {
+      signals.push({
+        id: "voltage_class",
+        label: "Клас напруги",
+        contribution: VOLTAGE_SIGNAL[vClass].contribution,
+        reason: VOLTAGE_SIGNAL[vClass].reason,
+        evidence: formatVoltage(byId.get(facility.id)?.voltage),
         grounded: true,
       });
     }

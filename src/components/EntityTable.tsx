@@ -129,6 +129,9 @@ export default function EntityTable({
                     <span className="truncate text-muted-foreground">{r.categoryLabel}</span>
                   </span>
                 </td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground">
+                  {r.voltageLabel || "—"}
+                </td>
                 <td className="max-w-[12rem] truncate px-2 py-1 text-muted-foreground">
                   {r.operator ? (
                     <button

@@ -8,14 +8,13 @@
  */
 
 import type { CategoryId } from "./infra-types";
+import { highestVoltage } from "./osm-tags";
 
 export function categorize(tags: Record<string, string>): CategoryId | null {
   const re = (k: string, rx: RegExp) => tags[k] !== undefined && rx.test(tags[k]!);
-  const voltageOk = () =>
-    (tags["voltage"] ?? "").split(";").some((s) => {
-      const n = parseInt(s, 10);
-      return Number.isFinite(n) && n >= 110000;
-    });
+  // Той самий парсер, що й скрізь: інакше запит і розкладання по категоріях
+  // могли б розійтися в тому, що вважати підстанцією 110 кВ+.
+  const voltageOk = () => (highestVoltage(tags["voltage"]) ?? 0) >= 110_000;
   if (tags["power"] === "plant") return "power_plant";
   if (tags["power"] === "substation" && voltageOk()) return "substation";
   if (
