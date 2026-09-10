@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -87,6 +87,16 @@ const FRESH_TONE: Record<Freshness, { opacity: number; size: number }> = {
   recent: { opacity: 0.9, size: 22 },
   stale: { opacity: 0.5, size: 18 },
 };
+
+/** Точка на відстані `km` за курсом `headingDeg` (0=Пн) — для вектора курсу. */
+function destPoint(lat: number, lon: number, headingDeg: number, km: number): [number, number] {
+  const th = (headingDeg * Math.PI) / 180;
+  const dLat = (km * Math.cos(th)) / 111.32;
+  const dLon = (km * Math.sin(th)) / (111.32 * Math.cos((lat * Math.PI) / 180));
+  return [lat + dLat, lon + dLon];
+}
+const COMPASS = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"];
+const compass = (d: number) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45) % 8];
 
 // Силует + колір за типом цілі. Кольори узгоджені зі звичною семантикою:
 // БпЛА — жовтий, реактивний БпЛА — помаранчевий, ракети/балістика — червоне.
@@ -399,35 +409,57 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         const fresh = freshnessOf(seen);
         const type: ThreatType = t.type ?? "unknown";
         const style = TYPE_STYLE[type];
+        const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
+        const vecEnd = hasCourse ? destPoint(t.lat, t.lon, t.heading as number, 16) : null;
         return (
-          <Marker
-            key={t.id}
-            position={[t.lat, t.lon]}
-            icon={threatIcon(type, fresh, t.reports ?? 1)}
-            zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
-          >
-            <Popup>
-              <div className="space-y-1 font-sans text-xs">
-                <p className="font-semibold" style={{ color: style.color }}>
-                  {style.label}
-                  {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
-                </p>
-                <p className="opacity-80">{t.name}</p>
-                <p className="opacity-70">
-                  {t.reports && t.reports > 1 ? `${t.reports} повідомлень з каналів: ` : "Канал: "}
-                  {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
-                </p>
-                {seen ? (
-                  <p className="opacity-70">
-                    Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
+          <Fragment key={t.id}>
+            {vecEnd ? (
+              <Polyline
+                positions={[[t.lat, t.lon], vecEnd]}
+                pathOptions={{
+                  color: style.color,
+                  weight: 1.6,
+                  opacity: fresh === "stale" ? 0.35 : 0.75,
+                  dashArray: "5 5",
+                }}
+              />
+            ) : null}
+            <Marker
+              position={[t.lat, t.lon]}
+              icon={threatIcon(type, fresh, t.reports ?? 1)}
+              zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
+            >
+              <Popup>
+                <div className="space-y-1 font-sans text-xs">
+                  <p className="font-semibold" style={{ color: style.color }}>
+                    {style.label}
+                    {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
                   </p>
-                ) : null}
-                {type === "unknown" ? (
-                  <p className="opacity-50">Тип не визначено з тексту OSINT-каналів</p>
-                ) : null}
-              </div>
-            </Popup>
-          </Marker>
+                  <p className="opacity-80">{t.name}</p>
+                  <p className="opacity-70">
+                    {t.reports && t.reports > 1
+                      ? `${t.reports} повідомлень з каналів: `
+                      : "Канал: "}
+                    {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
+                  </p>
+                  {hasCourse ? (
+                    <p className="opacity-70">
+                      Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
+                    </p>
+                  ) : null}
+                  {t.confidence ? <p className="opacity-70">Впевненість: {t.confidence}</p> : null}
+                  {seen ? (
+                    <p className="opacity-70">
+                      Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
+                    </p>
+                  ) : null}
+                  {type === "unknown" ? (
+                    <p className="opacity-50">Тип не визначено з тексту OSINT-каналів</p>
+                  ) : null}
+                </div>
+              </Popup>
+            </Marker>
+          </Fragment>
         );
       })}
     </>

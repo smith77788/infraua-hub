@@ -580,7 +580,51 @@ async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null>
  * t.me/s/<канал> віддає останні повідомлення БЕЗ ключа — читаємо його прямо з
  * Workers, класифікуємо тип і зіставляємо з позначкою за назвою пункту.
  */
-const TG_CHANNELS = ["kpszsu", "radar_top_ua", "kudy_letyt", "eRadarrua", "kyivradar"];
+// Канали моніторингу повітряної обстановки для фолбек-класифікації типу
+// (коли основне джерело neptun недоступне). Дедупльований набір хендлів.
+const TG_CHANNELS = [
+  // Радари / ППО
+  "kpszsu",
+  "radar_top_ua",
+  "kudy_letyt",
+  "eRadarrua",
+  "kyivradar",
+  "air_alert_ua",
+  "raketna_neb",
+  "radarkherson",
+  "RadarDnepr",
+  "radar_zp",
+  "tro545fd",
+  // Регіональні (Київ)
+  "real_kyiv",
+  "kyiv_operativ",
+  "kyiv_n",
+  "kievinfo",
+  "novyny_live",
+  // Дніпро / Запоріжжя
+  "dnepr_operativ",
+  "truexazaporozie",
+  // Харків
+  "kharkivlife",
+  "truexakharkiv",
+  "kharkivtypical",
+  "kharkiv_1654",
+  // Львів / Захід
+  "lvivtruexa",
+  "truexalviv",
+  "lviv24x7",
+  "lvivmedia",
+  "volynnews",
+  // Одеса / Південь
+  "odessa_inform",
+  "our_odessa",
+  "odessa_infonews",
+  "inform_odesa",
+  "temporis_odesa",
+  // Загальні
+  "vanek_nikolaev",
+  "truexanewsua",
+];
 
 function normPlace(s: string): string {
   return s
