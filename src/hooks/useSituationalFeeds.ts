@@ -1,7 +1,9 @@
 import { useServerFn } from "@tanstack/react-start";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import type { FirePoint, FrontlineArea, WeatherNow } from "@/lib/air";
+import { ageOf } from "@/lib/freshness";
+import { statusOf, type SourceStatus } from "@/lib/sources";
 import {
   getFires,
   getFrontline,
@@ -27,9 +29,28 @@ export interface SituationalFeeds {
   spaceWeather: SpaceWeather | undefined;
   outages: InternetOutages | undefined;
   weather: WeatherNow | undefined;
+  /** Стан кожного фіду — для єдиної панелі спостережуваності data-plane. */
+  statuses: SourceStatus[];
 }
 
 const SLOW = 20 * 60 * 1000;
+
+/** Свіжість фонового фіду за часом останнього успішного завантаження. */
+function feedStatus(
+  id: string,
+  label: string,
+  count: number,
+  q: UseQueryResult<{ degraded?: boolean } | undefined>,
+): SourceStatus {
+  const iso = q.dataUpdatedAt ? new Date(q.dataUpdatedAt).toISOString() : null;
+  return statusOf({
+    id,
+    label,
+    count,
+    age: ageOf(iso, 60, 180),
+    ...(q.data?.degraded ? { degraded: true } : {}),
+  });
+}
 
 export function useSituationalFeeds(): SituationalFeeds {
   const frontlineFn = useServerFn(getFrontline);
@@ -69,11 +90,25 @@ export function useSituationalFeeds(): SituationalFeeds {
     refetchInterval: 15 * 60 * 1000,
   });
 
+  const frontline = frontlineQ.data?.areas ?? [];
+  const fires = firesQ.data?.fires ?? [];
   return {
-    frontline: frontlineQ.data?.areas ?? [],
-    fires: firesQ.data?.fires ?? [],
+    frontline,
+    fires,
     spaceWeather: spaceWeatherQ.data,
     outages: outagesQ.data,
     weather: weatherQ.data,
+    statuses: [
+      feedStatus("frontline", "Лінія фронту (DeepState)", frontline.length, frontlineQ),
+      feedStatus("fires", "Пожежі (NASA FIRMS)", fires.length, firesQ),
+      feedStatus(
+        "spaceweather",
+        "Космічна погода (NOAA)",
+        spaceWeatherQ.data ? 1 : 0,
+        spaceWeatherQ,
+      ),
+      feedStatus("ioda", "Інтернет-збої (IODA)", outagesQ.data?.count ?? 0, outagesQ),
+      feedStatus("weather", "Погода (open-meteo)", weatherQ.data ? 1 : 0, weatherQ),
+    ],
   };
 }

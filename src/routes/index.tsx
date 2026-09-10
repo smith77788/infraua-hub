@@ -573,6 +573,9 @@ function Console() {
         age: unknownAge,
       }),
       statusOf({ id: "zones", label: "Полігони тривог", count: zones.length, age: unknownAge }),
+      // Ситуаційні фонові фіди — той самий data-plane, та сама панель: оператор
+      // бачить стан усіх джерел в одному місці, а не по кутах.
+      ...feeds.statuses,
     ];
   }, [
     allFacilities.length,
@@ -591,6 +594,7 @@ function Console() {
     regions,
     threats.length,
     zones.length,
+    feeds.statuses,
   ]);
   const { hiddenLinks, shownLinks } = useMemo(() => {
     const known = new Set(allFacilities.map((f) => f.id));
