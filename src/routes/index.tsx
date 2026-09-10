@@ -724,7 +724,7 @@ function Console() {
           <span className="hidden font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground sm:inline">
             консоль
           </span>
-          <span className="mx-1 hidden h-4 w-px bg-border md:inline-block" />
+          <span className="mx-1 hidden h-4 w-px bg-border xl:inline-block" />
           <ClientOnly fallback={null}>
             <HudClock />
           </ClientOnly>
