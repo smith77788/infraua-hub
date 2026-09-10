@@ -49,7 +49,7 @@ import {
   getEvents,
   getFacilities,
   getPowerLines,
-  getSubstationTiles,
+  getFacilityTiles,
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
@@ -197,38 +197,38 @@ function Console() {
    * Доповнення, а не заміна: `getFacilities` лишається основним джерелом, і
    * якщо цей шлях відмовить, консоль працює як раніше.
    */
-  const substationTilesFn = useServerFn(getSubstationTiles);
-  const [subTiles, setSubTiles] = useState<Map<string, Facility[]>>(() => new Map());
-  const subTilesRef = useRef(subTiles);
-  subTilesRef.current = subTiles;
+  const facilityTilesFn = useServerFn(getFacilityTiles);
+  const [facTiles, setFacTiles] = useState<Map<string, Facility[]>>(() => new Map());
+  const facTilesRef = useRef(facTiles);
+  facTilesRef.current = facTiles;
 
-  const [subEmpty, setSubEmpty] = useState(0);
-  const subTilesQuery = useQuery({
-    queryKey: ["substation-tiles"],
-    queryFn: () => substationTilesFn({ data: { have: [...subTilesRef.current.keys()] } }),
+  const [facEmpty, setFacEmpty] = useState(0);
+  const facTilesQuery = useQuery({
+    queryKey: ["facility-tiles"],
+    queryFn: () => facilityTilesFn({ data: { have: [...facTilesRef.current.keys()] } }),
     staleTime: 60 * 1000,
     refetchInterval: (q) => {
       const data = q.state.data;
-      if (!data || subTilesRef.current.size >= data.tilesTotal) return false;
-      return backoffMs(subEmpty);
+      if (!data || facTilesRef.current.size >= data.tilesTotal) return false;
+      return backoffMs(facEmpty);
     },
   });
 
-  const newSubTiles = subTilesQuery.data?.tiles;
+  const newFacTiles = facTilesQuery.data?.tiles;
   useEffect(() => {
-    if (!newSubTiles) return;
-    if (newSubTiles.length === 0) {
-      setSubEmpty((n) => n + 1);
+    if (!newFacTiles) return;
+    if (newFacTiles.length === 0) {
+      setFacEmpty((n) => n + 1);
       return;
     }
-    setSubEmpty(0);
-    setSubTiles((prev) =>
+    setFacEmpty(0);
+    setFacTiles((prev) =>
       mergeTiles(
         prev,
-        newSubTiles.map((t) => ({ key: t.key, value: t.facilities })),
+        newFacTiles.map((t) => ({ key: t.key, value: t.facilities })),
       ),
     );
-  }, [newSubTiles]);
+  }, [newFacTiles]);
 
   const eventsQuery = useQuery({
     queryKey: ["events"],
@@ -292,15 +292,15 @@ function Console() {
 
   const allFacilities = useMemo(() => {
     const base = facilitiesQuery.data?.facilities ?? [];
-    if (subTiles.size === 0) return base;
+    if (facTiles.size === 0) return base;
     // Ідентифікатор — це `${type}/${id}` з OSM, тож той самий обʼєкт із
     // загального запиту й з тайла зливається в один, а не подвоюється.
     const byId = new Map(base.map((f) => [f.id, f]));
-    for (const tile of subTiles.values()) {
+    for (const tile of facTiles.values()) {
       for (const f of tile) if (!byId.has(f.id)) byId.set(f.id, f);
     }
     return [...byId.values()];
-  }, [facilitiesQuery.data, subTiles]);
+  }, [facilitiesQuery.data, facTiles]);
   const allEvents = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
@@ -498,7 +498,7 @@ function Console() {
     return ageOf(newest, FRESHNESS_THRESHOLDS.events.aging, FRESHNESS_THRESHOLDS.events.stale);
   }, [allEvents]);
 
-  const sourceDown = sourceUnavailable(powerEmpty) || sourceUnavailable(subEmpty);
+  const sourceDown = sourceUnavailable(powerEmpty) || sourceUnavailable(facEmpty);
 
   /*
    * Сім джерел, кожне зі своїм способом бути не в порядку. Зведено в одне
@@ -517,13 +517,13 @@ function Console() {
         ...(truncated.length > 0 ? { truncated: true } : {}),
       }),
       statusOf({
-        id: "substations",
-        label: "Підстанції по ділянках",
-        count: [...subTiles.values()].reduce((n, t) => n + t.length, 0),
+        id: "facility-tiles",
+        label: "Обʼєкти по ділянках (тайли)",
+        count: [...facTiles.values()].reduce((n, t) => n + t.length, 0),
         age: unknownAge,
-        ...(sourceUnavailable(subEmpty) ? { down: true } : {}),
-        ...(subTilesQuery.data
-          ? { coverage: { loaded: subTiles.size, total: subTilesQuery.data.tilesTotal } }
+        ...(sourceUnavailable(facEmpty) ? { down: true } : {}),
+        ...(facTilesQuery.data
+          ? { coverage: { loaded: facTiles.size, total: facTilesQuery.data.tilesTotal } }
           : {}),
       }),
       statusOf({
@@ -565,9 +565,9 @@ function Console() {
     facilitiesAge,
     facilitiesQuery.data,
     truncated.length,
-    subTiles,
-    subEmpty,
-    subTilesQuery.data,
+    facTiles,
+    facEmpty,
+    facTilesQuery.data,
     powerLines.length,
     powerLinesQuery.data,
     powerEmpty,
@@ -1237,8 +1237,8 @@ function Console() {
                         {" "}
                         Завантажено {powerTiles.size} з {powerLinesQuery.data.tilesTotal} ділянок
                         ліній
-                        {subTilesQuery.data
-                          ? ` і ${subTiles.size} з ${subTilesQuery.data.tilesTotal} — підстанцій`
+                        {facTilesQuery.data
+                          ? ` і ${facTiles.size} з ${facTilesQuery.data.tilesTotal} — ділянок обʼєктів`
                           : ""}{" "}
                         — частка фактів ще зросте.
                       </>

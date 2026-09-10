@@ -12,6 +12,7 @@ import {
   type ThreatType,
 } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
+import { categorize } from "./osm-categorize";
 import { SEED_FACILITIES } from "./infra-seed";
 import {
   distanceKm,
@@ -1020,6 +1021,83 @@ export const getSubstationTiles = createServerFn({ method: "GET" })
       }
     } catch (err) {
       console.error("substation tile failed", err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    return { tiles: fetched, tilesTotal: all.length };
+  });
+
+/**
+ * Усі категорії обʼєктів по тайлах — знімає загальнокраїнну стелю `out center N`
+ * для КОЖНОЇ категорії, а не лише для підстанцій. Один обʼєднаний запит на тайл
+ * повертає всі типи одразу; `categorize` розкладає елементи по категоріях.
+ *
+ * Це і є повний тайлинг, якого бракувало: набір більше не «22 секунди або
+ * нічого» з жорсткою стелею, а прогресивне повне покриття по 2°×2° ділянках,
+ * що кешуються на сервері та накопичуються на клієнті.
+ *
+ * `getFacilities` лишається як миттєвий опорний прошарок (швидкий перший показ);
+ * тайли доповнюють його до повного набору, дедуп за OSM-id.
+ */
+const facilityTiles = new Map<string, Facility[]>();
+
+export interface FacilityTile {
+  key: string;
+  facilities: Facility[];
+}
+
+export interface FacilityTilesPayload {
+  tiles: FacilityTile[];
+  tilesTotal: number;
+}
+
+/** Стеля на тайл (усі категорії разом) — запобіжник, а не робоче обмеження. */
+const FACILITIES_PER_TILE = 8000;
+
+export const getFacilityTiles = createServerFn({ method: "GET" })
+  .validator((input: unknown): { have: string[] } => {
+    const have = (input as { have?: unknown } | undefined)?.have;
+    if (!Array.isArray(have)) return { have: [] };
+    return { have: have.filter((k): k is string => typeof k === "string") };
+  })
+  .handler(async ({ data }): Promise<FacilityTilesPayload> => {
+    const all = grid();
+    const pending = pendingTiles(all, data.have, TILES_PER_CALL);
+    const fetched: FacilityTile[] = [];
+    if (pending.length === 0) return { tiles: fetched, tilesTotal: all.length };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+    try {
+      for (const tile of pending) {
+        const key = tileKey(tile);
+        const cached = facilityTiles.get(key);
+        if (cached) {
+          fetched.push({ key, facilities: cached });
+          continue;
+        }
+        const b = tileBBox(tile, TILE_DEG);
+        const bbox = `${b.south},${b.west},${b.north},${b.east}`;
+        // Обʼєднання фільтрів усіх категорій в один запит на тайл.
+        const union = Object.values(QUERIES)
+          .map((q) => q.replaceAll("{{bbox}}", bbox))
+          .join("");
+        const query = `[out:json][timeout:90];(${union});out center ${FACILITIES_PER_TILE};`;
+        const elements = await overpass(query, controller.signal);
+        const facilities: Facility[] = [];
+        for (const el of elements) {
+          const cat = categorize(el.tags ?? {});
+          if (!cat) continue;
+          const f = toFacility(el, cat);
+          if (f) facilities.push(f);
+        }
+        // Порожній тайл теж кешуємо: над морем/за кордоном обʼєктів немає.
+        facilityTiles.set(key, facilities);
+        fetched.push({ key, facilities });
+      }
+    } catch (err) {
+      console.error("facility tile failed", err);
     } finally {
       clearTimeout(timer);
     }
