@@ -26,6 +26,8 @@ export interface BotCommand {
   chatId: number;
   command: string;
   args: string;
+  /** Тип чату: кнопки Mini App приймаються лише в приватному. */
+  chatType: string;
 }
 
 /**
@@ -44,6 +46,7 @@ export function parseCommand(update: unknown): BotCommand | null {
 
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return null;
+  const chatType = message?.chat?.type ?? "private";
 
   // У групах команда приходить як `/status@Radar_UAbot` — суфікс треба зняти,
   // інакше бот у групі не відповідає ніколи.
@@ -51,7 +54,7 @@ export function parseCommand(update: unknown): BotCommand | null {
   const command = head!.slice(1).split("@")[0]!.toLowerCase();
   if (!command) return null;
 
-  return { chatId, command, args: rest.join(" ") };
+  return { chatId, command, args: rest.join(" "), chatType };
 }
 
 /**
@@ -150,4 +153,20 @@ export function renderHelp(consoleUrl: string): string {
 /** Відповідь на невідому команду. Мовчати — гірше: виглядає як поломка. */
 export function renderUnknown(command: string): string {
   return `Не знаю команди <code>/${escapeHtml(command)}</code>. Спробуйте /help`;
+}
+
+/**
+ * Кнопка, що відкриває консоль як Mini App.
+ *
+ * Telegram приймає `web_app` у клавіатурі **лише в приватному чаті** — у групі
+ * такий запит відхиляється цілком, і повідомлення не доходить взагалі. Тому в
+ * групі повертається `undefined`, і текст іде без кнопки: посилання в ньому
+ * все одно є.
+ */
+export function miniAppKeyboard(
+  url: string,
+  chatType: string,
+): { inline_keyboard: { text: string; web_app: { url: string } }[][] } | undefined {
+  if (chatType !== "private") return undefined;
+  return { inline_keyboard: [[{ text: "Відкрити консоль", web_app: { url } }]] };
 }

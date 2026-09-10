@@ -6,6 +6,7 @@ import {
   renderHelp,
   renderStart,
   renderStatus,
+  miniAppKeyboard,
   renderUnknown,
   secretMatches,
 } from "./telegram";
@@ -22,6 +23,7 @@ describe("parseCommand", () => {
       chatId: 42,
       command: "status",
       args: "зараз",
+      chatType: "private",
     });
   });
 
@@ -143,5 +145,32 @@ describe("тексти команд", () => {
 
   it("екранує невідому команду, а не вставляє її як розмітку", () => {
     expect(renderUnknown("<b>")).toContain("&lt;b&gt;");
+  });
+});
+
+describe("miniAppKeyboard", () => {
+  it("дає кнопку в приватному чаті", () => {
+    const kb = miniAppKeyboard(CONSOLE, "private")!;
+    expect(kb.inline_keyboard[0]![0]!.web_app.url).toBe(CONSOLE);
+  });
+
+  it("не дає кнопки в групі — інакше повідомлення не доходить узагалі", () => {
+    // Telegram відхиляє запит із web_app-кнопкою в групі цілком, а не просто
+    // ігнорує кнопку.
+    expect(miniAppKeyboard(CONSOLE, "group")).toBeUndefined();
+    expect(miniAppKeyboard(CONSOLE, "supergroup")).toBeUndefined();
+    expect(miniAppKeyboard(CONSOLE, "channel")).toBeUndefined();
+  });
+});
+
+describe("parseCommand — тип чату", () => {
+  it("повертає тип чату разом із командою", () => {
+    expect(
+      parseCommand({ message: { chat: { id: 5, type: "supergroup" }, text: "/status" } })?.chatType,
+    ).toBe("supergroup");
+  });
+
+  it("без типу вважає чат приватним", () => {
+    expect(parseCommand(update("/status"))?.chatType).toBe("private");
   });
 });

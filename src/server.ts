@@ -3,6 +3,7 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import {
+  miniAppKeyboard,
   parseCommand,
   renderHelp,
   renderStart,
@@ -121,7 +122,12 @@ function consoleUrl(request: Request): string {
   return `${url.protocol}//${url.host}`;
 }
 
-async function telegramSend(token: string, chatId: number, text: string): Promise<void> {
+async function telegramSend(
+  token: string,
+  chatId: number,
+  text: string,
+  replyMarkup?: unknown,
+): Promise<void> {
   const response = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -130,6 +136,7 @@ async function telegramSend(token: string, chatId: number, text: string): Promis
       text,
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     }),
   });
   if (!response.ok) {
@@ -209,7 +216,7 @@ async function telegramWebhook(request: Request): Promise<Response> {
       text = renderUnknown(parsed.command);
   }
 
-  await telegramSend(token, parsed.chatId, text);
+  await telegramSend(token, parsed.chatId, text, miniAppKeyboard(url, parsed.chatType));
   return new Response("ok", { status: 200 });
 }
 
