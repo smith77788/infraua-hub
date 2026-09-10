@@ -8,13 +8,7 @@ import { formatVoltage, voltageClass, VOLTAGE_CLASS_LABEL } from "@/lib/osm-tags
 import { operatorProfile } from "@/lib/operators";
 import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
-import {
-  SOURCE_STATE_LABEL,
-  SOURCE_STATE_TONE,
-  statusOf,
-  worstState,
-  type SourceStatus,
-} from "@/lib/sources";
+import { statusOf, worstState, type SourceStatus } from "@/lib/sources";
 import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -46,6 +40,7 @@ import HudClock from "@/components/HudClock";
 import MapLayers, { type LayerToggle } from "@/components/MapLayers";
 import MapLegend from "@/components/MapLegend";
 import SituationBar from "@/components/SituationBar";
+import StatusStrip from "@/components/StatusStrip";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -663,81 +658,16 @@ function Console() {
         звʼязків, що спираються на факт. Три речі, від яких залежить, чи можна
         діяти на побаченому.
       */}
-      <div
-        className={`flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b px-4 font-mono text-[10px] uppercase tracking-[0.16em] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center ${
-          summary.level === "critical"
-            ? "border-red-500/40 bg-red-500/10 text-red-300"
-            : summary.level === "elevated"
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-              : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-        }`}
-      >
-        <span>{summary.label}</span>
-        <span className="opacity-40">·</span>
-        <span className="flex items-center gap-1.5">
-          <span className={`size-1.5 rounded-full ${SOURCE_STATE_TONE[worstSource]}`} />
-          джерела: {SOURCE_STATE_LABEL[worstSource]}
-        </span>
-        <span className="opacity-40">·</span>
-        <span className="hidden sm:inline">
-          факт {Math.round(groundedness.observedShare * 100)}% звʼязків
-        </span>
-        {airThreatSummary.total > 0 ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span className="flex items-center gap-1.5 text-red-300">
-              <span className="size-1.5 animate-pulse rounded-full bg-red-400" />
-              повітря: {airThreatSummary.total} обʼєкт(ів) під загрозою
-              {airThreatSummary.critical > 0 ? `, ${airThreatSummary.critical} критич.` : ""}
-            </span>
-          </>
-        ) : null}
-        {spaceWeatherQuery.data && !spaceWeatherQuery.data.degraded ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span
-              className={`hidden items-center gap-1.5 sm:flex ${
-                spaceWeatherQuery.data.level === "storm"
-                  ? "text-red-300"
-                  : spaceWeatherQuery.data.level === "unsettled"
-                    ? "text-amber-300"
-                    : "text-muted-foreground"
-              }`}
-              title="Планетарний Kp-індекс (NOAA). Бурі погіршують ГНСС/навігацію."
-            >
-              Kp {spaceWeatherQuery.data.kp}
-              {spaceWeatherQuery.data.gScale > 0 ? ` · буря G${spaceWeatherQuery.data.gScale}` : ""}
-            </span>
-          </>
-        ) : null}
-        {outagesQuery.data && !outagesQuery.data.degraded && outagesQuery.data.count > 0 ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span
-              className="hidden items-center gap-1.5 text-amber-300 md:flex"
-              title="Інтернет-збої по Україні за 24 год (IODA, Georgia Tech). Падіння звʼязності часто супроводжує удари по інфраструктурі."
-            >
-              інтернет-збої: {outagesQuery.data.count} за 24 год
-            </span>
-          </>
-        ) : null}
-        {weatherQuery.data && !weatherQuery.data.degraded ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span
-              className="hidden items-center gap-1.5 text-muted-foreground lg:flex"
-              title="Погода над Києвом (open-meteo). Вітер важить для роботи БпЛА й поширення пожеж."
-            >
-              Київ {weatherQuery.data.tempC}° · вітер {weatherQuery.data.windKmh} км/год{" "}
-              {
-                ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"][
-                  Math.round((((weatherQuery.data.windDir % 360) + 360) % 360) / 45) % 8
-                ]
-              }
-            </span>
-          </>
-        ) : null}
-      </div>
+      <StatusStrip
+        level={summary.level}
+        label={summary.label}
+        worstSource={worstSource}
+        observedShare={groundedness.observedShare}
+        airThreat={airThreatSummary}
+        spaceWeather={spaceWeatherQuery.data}
+        outages={outagesQuery.data}
+        weather={weatherQuery.data}
+      />
 
       <header className="z-20 grid h-14 shrink-0 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
