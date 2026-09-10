@@ -22,7 +22,7 @@ import { EnvApiKeyAuth, Principal } from '../core/security/ApiKeyAuth';
 import { RateLimiter } from '../core/security/RateLimiter';
 import { RiskScorer } from '../core/analytics/RiskScorer';
 import { betweenness, components, degrees, allShortestPaths } from '../core/analytics/GraphMetrics';
-import { findDuplicateCandidates } from '../core/analytics/EntityResolver';
+import { resolveDuplicates } from '../core/analytics/EntityResolver';
 import { CaseStore } from '../core/cases/CaseStore';
 import { AlertStore, AlertState } from '../core/alerts/AlertStore';
 import { AlertEngine } from '../core/alerts/AlertEngine';
@@ -660,7 +660,16 @@ app.get('/api/platform/analytics', (req, res) => {
     },
     centrality: betweenness(nodes, edges).slice(0, 10),
     connectivity: degrees(nodes, edges).slice(0, 10),
-    duplicateCandidates: findDuplicateCandidates(nodes, edges, { limit: 20 }),
+    ...(() => {
+      const resolution = resolveDuplicates(nodes, edges, { limit: 20 });
+      return {
+        duplicateCandidates: resolution.candidates,
+        // Reported rather than hidden: blocking drops keys that stop
+        // discriminating, and an analyst deciding whether the resolver looked
+        // hard enough needs to know it stopped looking somewhere.
+        resolution: resolution.stats,
+      };
+    })(),
   });
 });
 

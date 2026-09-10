@@ -1,4 +1,4 @@
-import { GraphEdge, GraphNode } from '../graph/types';
+import { GraphEdge, GraphNode, NodeType } from '../graph/types';
 import { buildAdjacency } from '../analytics/GraphMetrics';
 import { RiskAssessment } from '../analytics/RiskScorer';
 import { AlertCondition, PropertyPredicate } from './AlertRule';
@@ -25,6 +25,60 @@ export interface MatchContext {
   edges: GraphEdge[];
   /** Risk assessments for this same snapshot, keyed by node id. */
   risk: Map<string, RiskAssessment>;
+}
+
+/**
+ * A grid index over the nodes that carry coordinates.
+ *
+ * `proximity` asks "is there an Event within 15 km of this Asset", and the
+ * straightforward answer scans every node for every node. On the Ukrainian set
+ * - 4109 substations before anything else is loaded - that is sixteen million
+ * distance computations per rule per sweep, and sweeps run on every ingest.
+ *
+ * Buckets are whole degrees of latitude and longitude. Deliberately crude: the
+ * index only has to narrow the search, and the exact distance is computed
+ * afterwards on the handful of candidates, so a loose bucket costs a few extra
+ * haversines and never changes an answer. The lookup widens by however many
+ * degrees the radius spans, so a large radius stays correct rather than
+ * quietly truncating - the failure mode that would make a geofence miss the
+ * thing it was drawn around.
+ */
+class GridIndex {
+  private cells = new Map<string, GraphNode[]>();
+
+  constructor(nodes: GraphNode[], type: NodeType) {
+    for (const node of nodes) {
+      if (node.type !== type) continue;
+      const at = coordsOf(node);
+      if (!at) continue;
+      const key = cellKey(at.lat, at.lon);
+      const cell = this.cells.get(key);
+      if (cell) cell.push(node);
+      else this.cells.set(key, [node]);
+    }
+  }
+
+  /** Every indexed node in the cells a circle of `radiusKm` can reach. */
+  near(at: { lat: number; lon: number }, radiusKm: number): GraphNode[] {
+    // One degree of latitude is ~111 km; one of longitude is less, and shrinks
+    // towards the poles. Using the latitude figure for both over-selects in
+    // longitude, which is the safe direction.
+    const span = Math.max(1, Math.ceil(radiusKm / 111));
+    const found: GraphNode[] = [];
+    const baseLat = Math.floor(at.lat);
+    const baseLon = Math.floor(at.lon);
+    for (let dLat = -span; dLat <= span; dLat++) {
+      for (let dLon = -span; dLon <= span; dLon++) {
+        const cell = this.cells.get(`${baseLat + dLat}:${baseLon + dLon}`);
+        if (cell) found.push(...cell);
+      }
+    }
+    return found;
+  }
+}
+
+function cellKey(lat: number, lon: number): string {
+  return `${Math.floor(lat)}:${Math.floor(lon)}`;
 }
 
 export interface ConditionMatch {
@@ -96,7 +150,16 @@ export function evaluateCondition(
   node: GraphNode,
   context: MatchContext,
   adjacency = buildAdjacency(context.nodes, context.edges),
+  grids: Map<NodeType, GridIndex> = new Map(),
 ): string[] | null {
+  const gridFor = (type: NodeType): GridIndex => {
+    const existing = grids.get(type);
+    if (existing) return existing;
+    const built = new GridIndex(context.nodes, type);
+    grids.set(type, built);
+    return built;
+  };
+
   switch (condition.kind) {
     case 'entity': {
       const evidence: string[] = [];
@@ -143,8 +206,8 @@ export function evaluateCondition(
       const here = coordsOf(node);
       if (!here) return null;
       let nearest: { node: GraphNode; km: number } | null = null;
-      for (const other of context.nodes) {
-        if (other.id === node.id || other.type !== condition.nearType) continue;
+      for (const other of gridFor(condition.nearType).near(here, condition.radiusKm)) {
+        if (other.id === node.id) continue;
         const there = coordsOf(other);
         if (!there) continue;
         const km = haversineKm(here, there);
@@ -177,7 +240,7 @@ export function evaluateCondition(
     case 'all': {
       const evidence: string[] = [];
       for (const child of condition.of) {
-        const hit = evaluateCondition(child, node, context, adjacency);
+        const hit = evaluateCondition(child, node, context, adjacency, grids);
         if (hit === null) return null;
         evidence.push(...hit);
       }
@@ -186,7 +249,7 @@ export function evaluateCondition(
 
     case 'any': {
       for (const child of condition.of) {
-        const hit = evaluateCondition(child, node, context, adjacency);
+        const hit = evaluateCondition(child, node, context, adjacency, grids);
         if (hit !== null) return hit;
       }
       return null;
@@ -199,9 +262,13 @@ export function evaluateCondition(
 
 export function matchNodes(condition: AlertCondition, context: MatchContext): ConditionMatch[] {
   const adjacency = buildAdjacency(context.nodes, context.edges);
+  // Built once for the whole sweep over this condition, not per node: the
+  // index is the entire saving, and rebuilding it per node would be slower
+  // than not having one.
+  const grids = new Map<NodeType, GridIndex>();
   const matches: ConditionMatch[] = [];
   for (const node of context.nodes) {
-    const evidence = evaluateCondition(condition, node, context, adjacency);
+    const evidence = evaluateCondition(condition, node, context, adjacency, grids);
     if (evidence !== null) matches.push({ node, evidence });
   }
   return matches;
