@@ -46,7 +46,10 @@
   },
   "edge_types": {
     "AFFILIATED_WITH": {
-      "from": "Person",
+      "from": [
+        "Person",
+        "Organization"
+      ],
       "to": "Organization"
     },
     "HIDDEN_BENEFICIARY_OF": {
@@ -110,6 +113,13 @@
         "Location",
         "Event"
       ]
+    },
+    "BENEFICIARY_OF": {
+      "from": [
+        "Person",
+        "Organization"
+      ],
+      "to": "Organization"
     }
   }
 }

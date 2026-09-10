@@ -32,7 +32,15 @@ export type SignalType =
    * `relation` type would score every counterparty of every public buyer
    * identically, which is the same as scoring nothing.
    */
-  | 'relation_property';
+  | 'relation_property'
+  /**
+   * Something the entity's own record says. Needed because the register
+   * contributes facts about a company that are not relations at all - a filing
+   * that declares no beneficial owner, a founder in a jurisdiction where the
+   * ownership chain stops being followable. Scoring those through a relation
+   * type would have meant inventing an edge to represent an absence.
+   */
+  | 'node_property';
 
 export interface RiskSignalConfig {
   id: string;
@@ -216,6 +224,21 @@ export class RiskScorer {
         const present = new Set(context.edges.map((e) => e.relation));
         if (!required.every((r) => present.has(r))) return null;
         return `holds all of: ${required.join(', ')}`;
+      }
+
+      case 'node_property': {
+        const property = signal.property;
+        if (!property) return null;
+        const value = node.properties[property];
+        if (value === undefined || value === null) return null;
+        if (signal.equals !== undefined) {
+          if (value !== signal.equals) return null;
+          return `${property} = ${String(signal.equals)}`;
+        }
+        const threshold = signal.threshold;
+        if (threshold === undefined) return `${property} is present`;
+        if (typeof value !== 'number' || value < threshold) return null;
+        return `${property} ${value.toLocaleString('en-US')} ≥ ${threshold.toLocaleString('en-US')}`;
       }
 
       case 'relation_property': {

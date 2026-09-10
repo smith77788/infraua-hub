@@ -15,6 +15,7 @@ import { StructuredRecordConnector, StructuredMapping } from '../core/ingestion/
 import { InfraUAConnector, InfraUAPayload } from '../core/ingestion/InfraUAConnector';
 import { ProzorroConnector, ProzorroTender } from '../core/ingestion/ProzorroConnector';
 import { ProzorroClient } from '../core/ingestion/ProzorroClient';
+import { EdrConnector, PERSONAL_DATA_COMPARTMENT, parseEdrBytes } from '../core/ingestion/EdrConnector';
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
@@ -102,6 +103,7 @@ const structuredConnector = new StructuredRecordConnector(graph, vectors, audit)
 const infraUA = new InfraUAConnector(graph, vectors, audit);
 const prozorro = new ProzorroConnector(graph, vectors, audit);
 const prozorroClient = new ProzorroClient(process.env.PROZORRO_API_URL);
+const edr = new EdrConnector(graph, vectors, audit);
 const narrativeAdapter = process.env.ANTHROPIC_API_KEY
   ? new ClaudeNarrativeAdapter(process.env.ANTHROPIC_API_KEY)
   : new DeterministicNarrativeAdapter();
@@ -722,6 +724,67 @@ app.post('/api/platform/actions/pending/:pendingId/withdraw', (req, res) => {
 });
 
 /**
+ * Ingests the company register.
+ *
+ * Takes the published XML as a base64 body rather than JSON records: the file
+ * is windows-1251, and asking a caller to transcode it first is asking them to
+ * do the one step most likely to go wrong silently. The decoder lives in the
+ * connector (`core/ingestion/EdrConnector.ts`) for the same reason.
+ *
+ * Gated at CONFIDENTIAL. Not because the register is secret - it is open - but
+ * because this write creates a graph of **named individuals and their
+ * holdings**, which is a different object from a map of substations and should
+ * not be creatable with a key issued to read the map.
+ */
+app.post('/api/platform/ingest/edr', (req, res) => {
+  if (!clearanceAtLeast(req.callerClearance!, ClearanceLevel.CONFIDENTIAL)) {
+    return res.status(403).json({ error: 'ingesting personal data requires CONFIDENTIAL clearance' });
+  }
+  const { xmlBase64, source, personCompartments } = req.body ?? {};
+  if (typeof xmlBase64 !== 'string' || !xmlBase64) {
+    return res.status(400).json({ error: 'xmlBase64 is required: the register file, base64-encoded, as published' });
+  }
+
+  const marks = resolveWriteCompartments(req);
+  if ('error' in marks) return res.status(403).json({ error: marks.error });
+
+  // Personal data defaults to its own compartment. A caller may name a
+  // different one, but only one they hold themselves — the same rule as every
+  // other write, and it matters most here.
+  let personMarks: string[];
+  try {
+    personMarks =
+      personCompartments === undefined
+        ? [PERSONAL_DATA_COMPARTMENT]
+        : normalizeCompartments(personCompartments);
+  } catch (err) {
+    return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+  const held = new Set(req.principal!.compartments);
+  const beyond = personMarks.filter((c) => c !== PERSONAL_DATA_COMPARTMENT && !held.has(c));
+  if (beyond.length > 0) {
+    return res.status(403).json({ error: `You are not read into: ${beyond.join(', ')}.` });
+  }
+
+  try {
+    const subjects = parseEdrBytes(Buffer.from(xmlBase64, 'base64'));
+    const result = edr.ingest(subjects, typeof source === 'string' && source ? source : 'edr', {
+      orgCompartments: marks.compartments,
+      personCompartments: personMarks,
+    });
+    documents.appendMany(result.documents);
+    res.status(201).json({
+      ...result,
+      documents: result.documents.length,
+      personCompartments: personMarks,
+      alerts: sweepAfterIngest(req),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
  * Retracts an ingestion batch by its source.
  *
  * Destructive, so it is gated at SECRET rather than at the caller's own level:
@@ -1163,6 +1226,7 @@ export {
   structuredConnector,
   infraUA,
   prozorro,
+  edr,
   investigator,
   cases,
   alerts,

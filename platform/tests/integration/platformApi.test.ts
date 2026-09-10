@@ -1233,3 +1233,59 @@ describe('platform API: actions', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('platform API: the company register', () => {
+  const fixture = () =>
+    fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'edr-subjects.xml')).toString('base64');
+
+  it('will not create a graph of named individuals with a map-reading key', async () => {
+    const res = await call('POST', '/api/platform/ingest/edr', {
+      key: KEYS.internal,
+      body: { xmlBase64: fixture(), source: 'edr-api' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('takes the file as published, encoding and all', async () => {
+    // Asking a caller to transcode windows-1251 first is asking them to do the
+    // one step most likely to go wrong silently.
+    const res = await call('POST', '/api/platform/ingest/edr', {
+      key: KEYS.secret,
+      body: { xmlBase64: fixture(), source: 'edr-api' },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.organizationsIngested).toBeGreaterThan(0);
+    expect(res.body.peopleIngested).toBeGreaterThan(0);
+    expect(res.body.personCompartments).toEqual(['personal-data']);
+    expect(res.body.rejected).toEqual([]);
+  });
+
+  it('hides the people from a key that is not read into personal data', async () => {
+    const outside = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    // Only the register's people: free-text ingestion elsewhere in this suite
+    // creates unmarked Person nodes, and those are legitimately visible.
+    const persons = outside.body.nodes.filter((n: { id: string }) => n.id.startsWith('person:edr:'));
+    expect(persons).toHaveLength(0);
+    // The companies themselves stay readable: the register is open.
+    expect(outside.body.nodes.some((n: { id: string }) => n.id.startsWith('org:edr:'))).toBe(true);
+  });
+
+  it('refuses a personal-data compartment the caller does not hold', async () => {
+    const res = await call('POST', '/api/platform/ingest/edr', {
+      key: KEYS.secret,
+      body: { xmlBase64: fixture(), source: 'edr-api2', personCompartments: ['someone-elses-circle'] },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a body that is not the register', async () => {
+    const res = await call('POST', '/api/platform/ingest/edr', {
+      key: KEYS.secret,
+      body: { xmlBase64: Buffer.from('<nonsense/>').toString('base64'), source: 'edr-junk' },
+    });
+    // Parses to zero subjects rather than throwing: an empty file is a real
+    // thing the publisher does, and it is not an error.
+    expect(res.status).toBe(201);
+    expect(res.body.subjectsRead).toBe(0);
+  });
+});
