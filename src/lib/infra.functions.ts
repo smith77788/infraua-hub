@@ -935,6 +935,57 @@ export const getFires = createServerFn({ method: "GET" }).handler(
   },
 );
 
+// Космічна погода — планетарний Kp-індекс (NOAA SWPC, keyless). Геомагнітні бурі
+// погіршують ГНСС/КХ-звʼязок — релевантно для навігації й РЕБ-фону. Порт модуля
+// osiris/geo; це індикатор стану, не шар карти.
+const KP_ENDPOINT = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json";
+
+export interface SpaceWeather {
+  kp: number;
+  /** quiet | unsettled | storm */
+  level: "quiet" | "unsettled" | "storm";
+  /** G-шкала бурі (0 = немає), 1..5. */
+  gScale: number;
+  observedAt: string;
+  degraded: boolean;
+}
+
+export const getSpaceWeather = createServerFn({ method: "GET" }).handler(
+  async (): Promise<SpaceWeather> => {
+    const cached = readCache<SpaceWeather>("spaceweather", 20 * 60 * 1000);
+    if (cached) return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    try {
+      const res = await fetch(KP_ENDPOINT, {
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`kp ${res.status}`);
+      const rows = (await res.json()) as Array<{ time_tag?: string; Kp?: number }>;
+      let last: { time_tag?: string; Kp?: number } | undefined;
+      for (const r of rows) if (typeof r?.Kp === "number") last = r;
+      if (!last || typeof last.Kp !== "number") throw new Error("no kp");
+      const kp = Math.round(last.Kp * 10) / 10;
+      const gScale = kp >= 5 ? Math.min(5, Math.floor(kp) - 4) : 0;
+      const level: SpaceWeather["level"] = kp >= 5 ? "storm" : kp >= 4 ? "unsettled" : "quiet";
+      const payload: SpaceWeather = {
+        kp,
+        level,
+        gScale,
+        observedAt: last.time_tag ?? "",
+        degraded: false,
+      };
+      writeCache("spaceweather", payload);
+      return payload;
+    } catch {
+      return { kp: 0, level: "quiet", gScale: 0, observedAt: "", degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
 interface ZonesPayload {
   zones: AlertZone[];
   fetchedAt: string;

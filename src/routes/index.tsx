@@ -40,6 +40,7 @@ import EntityTable from "@/components/EntityTable";
 import OperatorPanel from "@/components/OperatorPanel";
 import SourceHealth from "@/components/SourceHealth";
 import HudClock from "@/components/HudClock";
+import MapLegend from "@/components/MapLegend";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ import {
   getFacilityTiles,
   getFires,
   getFrontline,
+  getSpaceWeather,
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
@@ -268,6 +270,14 @@ function Console() {
   const firesQuery = useQuery({
     queryKey: ["fires"],
     queryFn: () => firesFn(),
+    staleTime: 20 * 60 * 1000,
+    refetchInterval: 20 * 60 * 1000,
+  });
+  // Космічна погода (NOAA Kp) — індикатор геомагнітних бур (ГНСС/КХ).
+  const spaceWeatherFn = useServerFn(getSpaceWeather);
+  const spaceWeatherQuery = useQuery({
+    queryKey: ["space-weather"],
+    queryFn: () => spaceWeatherFn(),
     staleTime: 20 * 60 * 1000,
     refetchInterval: 20 * 60 * 1000,
   });
@@ -652,6 +662,24 @@ function Console() {
               <span className="size-1.5 animate-pulse rounded-full bg-red-400" />
               повітря: {airThreatSummary.total} обʼєкт(ів) під загрозою
               {airThreatSummary.critical > 0 ? `, ${airThreatSummary.critical} критич.` : ""}
+            </span>
+          </>
+        ) : null}
+        {spaceWeatherQuery.data && !spaceWeatherQuery.data.degraded ? (
+          <>
+            <span className="opacity-40">·</span>
+            <span
+              className={`hidden items-center gap-1.5 sm:flex ${
+                spaceWeatherQuery.data.level === "storm"
+                  ? "text-red-300"
+                  : spaceWeatherQuery.data.level === "unsettled"
+                    ? "text-amber-300"
+                    : "text-muted-foreground"
+              }`}
+              title="Планетарний Kp-індекс (NOAA). Бурі погіршують ГНСС/навігацію."
+            >
+              Kp {spaceWeatherQuery.data.kp}
+              {spaceWeatherQuery.data.gScale > 0 ? ` · буря G${spaceWeatherQuery.data.gScale}` : ""}
             </span>
           </>
         ) : null}
@@ -1079,6 +1107,7 @@ function Console() {
               ) : null}
 
               <TimelinePlayer onCursor={setPlayCursor} />
+              <MapLegend />
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
