@@ -68,7 +68,7 @@
         "HIDDEN_BENEFICIARY_OF"
       ],
       "weight": 35,
-      "reason": "Both awards contracts to an organization and holds an undisclosed interest in one — the combination is the self-dealing pattern itself, and is worth more than either relation alone."
+      "reason": "І присуджує контракти організації, і має в такій організації нерозкриту частку — комбінація і є самим візерунком. УВАГА: цей сигнал бачить лише випадок, коли обидва звʼязки висять на **одному** вузлі, тобто коли обидві ролі тримає організація. Людський випадок — особа є керівником замовника і бенефіціаром постачальника — це шлях у три кроки, і жодне правило, що дивиться на власні ребра одного вузла, його не побачить. Його рахує GET /api/platform/analytics/conflicts (core/analytics/ConflictOfInterest.ts), а не цей файл."
     },
     {
       "id": "non_competitive_award",

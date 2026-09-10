@@ -1289,3 +1289,28 @@ describe('platform API: the company register', () => {
     expect(res.body.subjectsRead).toBe(0);
   });
 });
+
+describe('platform API: conflicts of interest', () => {
+  it('is its own route, not a corner of analytics', async () => {
+    // "Who is on both ends of a contract" is an accusation-shaped question
+    // about named people, and it belongs in the read audit under its own name.
+    const res = await call('GET', '/api/platform/analytics/conflicts', { key: KEYS.secret });
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('confirmed');
+    expect(res.body).toHaveProperty('unconfirmed');
+    expect(res.body).toHaveProperty('commonOwnership');
+
+    const trail = await call('GET', '/api/platform/audit?limit=50', { key: KEYS.internal, purpose: 'audit-review' });
+    const entry = trail.body.entries.find(
+      (e: any) => e.action === 'read_access' && e.details.route === '/api/platform/analytics/conflicts',
+    );
+    expect(entry).toBeDefined();
+  });
+
+  it('never merges settled findings with open identity questions', async () => {
+    const res = await call('GET', '/api/platform/analytics/conflicts', { key: KEYS.secret });
+    expect(Array.isArray(res.body.confirmed)).toBe(true);
+    expect(Array.isArray(res.body.unconfirmed)).toBe(true);
+    expect(res.body.note).toContain('link_same_as');
+  });
+});

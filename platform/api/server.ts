@@ -27,6 +27,7 @@ import { RateLimiter } from '../core/security/RateLimiter';
 import { RiskScorer } from '../core/analytics/RiskScorer';
 import { betweenness, components, degrees, allShortestPaths } from '../core/analytics/GraphMetrics';
 import { resolveDuplicates } from '../core/analytics/EntityResolver';
+import { findCommonOwnership, findConflictsOfInterest } from '../core/analytics/ConflictOfInterest';
 import { CaseStore } from '../core/cases/CaseStore';
 import { AlertStore, AlertState } from '../core/alerts/AlertStore';
 import { AlertEngine } from '../core/alerts/AlertEngine';
@@ -952,6 +953,38 @@ app.get('/api/platform/analytics', (req, res) => {
         resolution: resolution.stats,
       };
     })(),
+  });
+});
+
+/**
+ * Conflicts of interest across procurement and the company register.
+ *
+ * Kept off `/analytics` deliberately. That endpoint answers "what does this
+ * graph look like"; this one answers "who is on both ends of a contract",
+ * which is an accusation-shaped question about named people and deserves to be
+ * asked on purpose - and to appear in the read audit as its own route.
+ *
+ * The response separates findings a human has confirmed from questions about
+ * identity that nobody has settled yet, and never merges them.
+ */
+app.get('/api/platform/analytics/conflicts', (req, res) => {
+  const { nodes, edges } = graph.toJSON(req.viewer!);
+  const minAmount = Number(req.query.minAmount);
+  const options = { minAmount: Number.isFinite(minAmount) ? minAmount : 0, limit: 50 };
+
+  const conflicts = findConflictsOfInterest(nodes, edges, options);
+  const commonOwnership = findCommonOwnership(nodes, edges, options);
+
+  res.json({
+    ...conflicts,
+    commonOwnership,
+    totals: {
+      confirmed: conflicts.confirmed.length,
+      unconfirmed: conflicts.unconfirmed.length,
+      commonOwnership: commonOwnership.length,
+    },
+    note:
+      'Непідтверджені — це питання про тотожність осіб, а не висновки про них. Тотожність встановлює людина дією link_same_as.',
   });
 });
 
