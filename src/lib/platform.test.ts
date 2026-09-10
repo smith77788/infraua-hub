@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { pushSplit, pushableDependencies } from "./palanter.functions";
+import { pushSplit, pushableDependencies } from "./platform.functions";
 import type { CategoryId, Facility, GraphEdge } from "./infra-types";
 
 function facility(id: string, category: CategoryId = "substation"): Facility {

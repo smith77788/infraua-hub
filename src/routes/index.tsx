@@ -62,11 +62,11 @@ import {
   type ThreatSeverity,
 } from "@/lib/threat-correlation";
 import {
-  palanterStatus,
+  platformStatus,
   pushSplit,
-  pushToPalanter,
+  pushToPlatform,
   pushableDependencies,
-} from "@/lib/palanter.functions";
+} from "@/lib/platform.functions";
 import { SEED_FACILITIES } from "@/lib/infra-seed";
 import { analyzeNetwork, assignRegions } from "@/lib/infra-analytics";
 import {
@@ -263,15 +263,15 @@ function Console() {
     refetchInterval: 30 * 60 * 1000,
   });
   /*
-   * Звʼязок із платформою Palanter. Ключ лишається на сервері, тому і статус, і
+   * Звʼязок з аналітичною платформою. Ключ лишається на сервері, тому і статус, і
    * саме надсилання — серверні функції. Незаданий звʼязок — штатний стан:
    * консоль самодостатня, і кнопки тоді просто немає.
    */
-  const palanterStatusFn = useServerFn(palanterStatus);
-  const pushFn = useServerFn(pushToPalanter);
+  const platformStatusFn = useServerFn(platformStatus);
+  const pushFn = useServerFn(pushToPlatform);
   const palanterQuery = useQuery({
     queryKey: ["palanter-status"],
-    queryFn: () => palanterStatusFn(),
+    queryFn: () => platformStatusFn(),
     staleTime: Infinity,
   });
   const [pushState, setPushState] = useState<
@@ -902,7 +902,7 @@ function Console() {
             {palanterQuery.data?.configured ? (
               <div className="rounded border border-border bg-card p-2.5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                  Платформа Palanter
+                  Аналітична платформа
                 </p>
                 <Button
                   size="sm"

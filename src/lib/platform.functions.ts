@@ -4,7 +4,7 @@ import type { Facility, GraphEdge, InfraEvent } from "./infra-types";
 import { isObserved, type Provenance } from "./provenance";
 
 /**
- * Передача картини InfraUA у платформу Palanter.
+ * Передача картини InfraUA у аналітичну платформу.
  *
  * Це друга половина обʼєднання двох частин продукту. Консоль будує граф
  * залежностей у браузері й губить його при перезавантаженні: жодного
@@ -16,7 +16,7 @@ import { isObserved, type Provenance } from "./provenance";
  *
  * Це серверна функція навмисно. Palanter автентифікує запити bearer-ключем;
  * якби виклик ішов із браузера, ключ довелося б покласти у клієнтський бандл,
- * тобто віддати кожному відвідувачу. `PALANTER_API_KEY` і `PALANTER_API_URL`
+ * тобто віддати кожному відвідувачу. `PLATFORM_API_KEY` і `PLATFORM_API_URL`
  * читаються тут, на сервері, і клієнт бачить лише результат.
  *
  * ## Незаданий звʼязок — не помилка
@@ -34,7 +34,7 @@ interface PalanterDependency {
   provenance: Provenance;
 }
 
-export interface PalanterPushResult {
+export interface PlatformPushResult {
   /** false — звʼязок із платформою не налаштований, і це не помилка. */
   configured: boolean;
   ok: boolean;
@@ -99,11 +99,11 @@ function parseInput(raw: unknown): PushInput {
   };
 }
 
-export const pushToPalanter = createServerFn({ method: "POST" })
+export const pushToPlatform = createServerFn({ method: "POST" })
   .validator(parseInput)
-  .handler(async ({ data }): Promise<PalanterPushResult> => {
-    const base = process.env["PALANTER_API_URL"];
-    const key = process.env["PALANTER_API_KEY"];
+  .handler(async ({ data }): Promise<PlatformPushResult> => {
+    const base = process.env["PLATFORM_API_URL"];
+    const key = process.env["PLATFORM_API_KEY"];
     if (!base || !key) return { configured: false, ok: false };
 
     const controller = new AbortController();
@@ -156,8 +156,8 @@ export const pushToPalanter = createServerFn({ method: "POST" })
   });
 
 /** Чи налаштований звʼязок із платформою — щоб не показувати мертву кнопку. */
-export const palanterStatus = createServerFn({ method: "GET" }).handler(async () => ({
-  configured: Boolean(process.env["PALANTER_API_URL"] && process.env["PALANTER_API_KEY"]),
+export const platformStatus = createServerFn({ method: "GET" }).handler(async () => ({
+  configured: Boolean(process.env["PLATFORM_API_URL"] && process.env["PLATFORM_API_KEY"]),
 }));
 
 /**
