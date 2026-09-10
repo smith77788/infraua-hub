@@ -581,7 +581,7 @@ function Console() {
   const { hiddenLinks, shownLinks } = useMemo(() => {
     const known = new Set(allFacilities.map((f) => f.id));
     const drawable = edges.filter((e) => known.has(e.from) && known.has(e.to));
-    const sel = selectVisibleLinks(drawable, 1200);
+    const sel = selectVisibleLinks(drawable, 3000);
     return { hiddenLinks: sel.hidden, shownLinks: sel.visible.length };
   }, [edges, allFacilities]);
 

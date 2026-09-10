@@ -501,7 +501,7 @@ export default function InfraMap({
   const lines = useMemo(() => {
     if (!showLinks) return [];
     const drawable = edges.filter((e) => byId.has(e.from) && byId.has(e.to));
-    return selectVisibleLinks(drawable, 1200).visible.map((e) => ({
+    return selectVisibleLinks(drawable, 3000).visible.map((e) => ({
       e,
       a: byId.get(e.from)!,
       b: byId.get(e.to)!,
