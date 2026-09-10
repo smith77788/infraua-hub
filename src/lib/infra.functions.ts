@@ -995,6 +995,63 @@ export const getSpaceWeather = createServerFn({ method: "GET" }).handler(
   },
 );
 
+// Інтернет-збої по Україні — IODA (Georgia Tech), keyless. Порт модуля
+// osiris/geo: падіння звʼязності напряму корелює з ударами по енергетиці/
+// інфраструктурі, тож це цінний незалежний сигнал стану.
+const IODA_ENDPOINT = "https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events";
+
+export interface InternetOutages {
+  count: number;
+  maxScore: number;
+  latestStart: number;
+  sources: string[];
+  degraded: boolean;
+}
+
+export const getInternetOutages = createServerFn({ method: "GET" }).handler(
+  async (): Promise<InternetOutages> => {
+    const cached = readCache<InternetOutages>("ioda", 10 * 60 * 1000);
+    if (cached) return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const from = now - 86400;
+      const url = `${IODA_ENDPOINT}?from=${from}&until=${now}&entityType=country&entityCode=UA&limit=200`;
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`ioda ${res.status}`);
+      const json = (await res.json()) as {
+        data?: Array<{ score?: number; start?: number; duration?: number; datasource?: string }>;
+      };
+      const data = json.data ?? [];
+      let maxScore = 0;
+      let latestStart = 0;
+      const sources = new Set<string>();
+      for (const e of data) {
+        if (typeof e.score === "number" && e.score > maxScore) maxScore = e.score;
+        if (typeof e.start === "number" && e.start > latestStart) latestStart = e.start;
+        if (e.datasource) sources.add(e.datasource.replace(/_/g, " "));
+      }
+      const payload: InternetOutages = {
+        count: data.length,
+        maxScore: Math.round(maxScore),
+        latestStart,
+        sources: [...sources],
+        degraded: false,
+      };
+      writeCache("ioda", payload);
+      return payload;
+    } catch {
+      return { count: 0, maxScore: 0, latestStart: 0, sources: [], degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
 interface ZonesPayload {
   zones: AlertZone[];
   fetchedAt: string;

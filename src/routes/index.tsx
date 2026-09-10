@@ -55,6 +55,7 @@ import {
   getFacilityTiles,
   getFires,
   getFrontline,
+  getInternetOutages,
   getSpaceWeather,
   getThreats,
 } from "@/lib/infra.functions";
@@ -281,6 +282,14 @@ function Console() {
     queryFn: () => spaceWeatherFn(),
     staleTime: 20 * 60 * 1000,
     refetchInterval: 20 * 60 * 1000,
+  });
+  // Інтернет-збої по Україні (IODA) — сигнал падіння звʼязності.
+  const outagesFn = useServerFn(getInternetOutages);
+  const outagesQuery = useQuery({
+    queryKey: ["internet-outages"],
+    queryFn: () => outagesFn(),
+    staleTime: 10 * 60 * 1000,
+    refetchInterval: 10 * 60 * 1000,
   });
   /*
    * Звʼязок з аналітичною платформою. Ключ лишається на сервері, тому і статус, і
@@ -681,6 +690,17 @@ function Console() {
             >
               Kp {spaceWeatherQuery.data.kp}
               {spaceWeatherQuery.data.gScale > 0 ? ` · буря G${spaceWeatherQuery.data.gScale}` : ""}
+            </span>
+          </>
+        ) : null}
+        {outagesQuery.data && !outagesQuery.data.degraded && outagesQuery.data.count > 0 ? (
+          <>
+            <span className="opacity-40">·</span>
+            <span
+              className="hidden items-center gap-1.5 text-amber-300 md:flex"
+              title="Інтернет-збої по Україні за 24 год (IODA, Georgia Tech). Падіння звʼязності часто супроводжує удари по інфраструктурі."
+            >
+              інтернет-збої: {outagesQuery.data.count} за 24 год
             </span>
           </>
         ) : null}
