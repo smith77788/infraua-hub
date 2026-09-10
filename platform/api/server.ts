@@ -15,7 +15,7 @@ import { InfraUAConnector, InfraUAPayload } from '../core/ingestion/InfraUAConne
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
-import { normalizeCompartments, unionCompartments, Viewer } from '../core/security/Marking';
+import { canRead, normalizeCompartments, unionCompartments, Viewer } from '../core/security/Marking';
 import { Guardrails } from '../core/security/Guardrails';
 import { PurposePolicy } from '../core/security/PurposePolicy';
 import { EnvApiKeyAuth, Principal } from '../core/security/ApiKeyAuth';
@@ -24,6 +24,9 @@ import { RiskScorer } from '../core/analytics/RiskScorer';
 import { betweenness, components, degrees, allShortestPaths } from '../core/analytics/GraphMetrics';
 import { findDuplicateCandidates } from '../core/analytics/EntityResolver';
 import { CaseStore } from '../core/cases/CaseStore';
+import { AlertStore, AlertState } from '../core/alerts/AlertStore';
+import { AlertEngine } from '../core/alerts/AlertEngine';
+import { AlertSeverity, parseRule } from '../core/alerts/AlertRule';
 import { DeterministicNarrativeAdapter } from '../agents/analyst/narrative/DeterministicNarrativeAdapter';
 import { ClaudeNarrativeAdapter } from '../agents/analyst/narrative/ClaudeNarrativeAdapter';
 
@@ -77,6 +80,14 @@ const vectors = new VectorIndex();
 const audit = new AuditLog(path.join(DATA_ROOT, 'audit.log'));
 const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
 const cases = new CaseStore(path.join(DATA_ROOT, 'cases.json'));
+const alerts = new AlertStore(path.join(DATA_ROOT, 'alerts.json'));
+const alertEngine = new AlertEngine(
+  graph,
+  alerts,
+  riskScorer,
+  audit,
+  AlertEngine.rulesFromFile(path.join(CONFIG_ROOT, 'alert_rules.json'))
+);
 for (const doc of documents.loadAll()) vectors.addDocument(doc);
 
 const ingestion = new IngestionService(graph, vectors, audit);
@@ -144,6 +155,7 @@ app.get('/api/platform/health', (_req, res) => {
     documents: vectors.size(),
     nodes: graph.toJSON().nodes.length,
     narrative_engine: narrativeAdapter.name,
+    standing_rules: alertEngine.listRules().filter((r) => r.enabled).length,
   });
 });
 
@@ -363,7 +375,7 @@ app.post('/api/platform/documents', (req, res) => {
     clearance: level,
     ...(marks.compartments.length ? { compartments: marks.compartments } : {}),
   });
-  res.status(201).json({ ...result, compartments: marks.compartments });
+  res.status(201).json({ ...result, compartments: marks.compartments, alerts: sweepAfterIngest(req) });
 });
 
 app.post('/api/platform/documents/structured', (req, res) => {
@@ -385,7 +397,7 @@ app.post('/api/platform/documents/structured', (req, res) => {
     const rows: Record<string, string>[] = records ?? parseCsv(csv);
     const result = structuredConnector.ingest(rows, mapping as StructuredMapping, source, sector, level, marks.compartments);
     documents.appendMany(result.documents);
-    res.status(201).json({ ...result, compartments: marks.compartments });
+    res.status(201).json({ ...result, compartments: marks.compartments, alerts: sweepAfterIngest(req) });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -420,11 +432,149 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
       marks.compartments
     );
     documents.appendMany(result.documents);
-    res.status(201).json({ ...result, compartments: marks.compartments });
+    res.status(201).json({ ...result, compartments: marks.compartments, alerts: sweepAfterIngest(req) });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+
+/**
+ * Re-runs the standing queries right after data lands.
+ *
+ * Evaluating on ingest rather than on a timer is what makes this a standing
+ * query instead of a report: the interesting moment is the one where the
+ * picture changed, and a poll finds it somewhere between zero and one interval
+ * later. Ingests here are batch-sized and human-paced, so there is no sweep
+ * storm to debounce; if that ever changes, this is the place to coalesce.
+ *
+ * A failure here must not fail the ingestion. Data that arrived is data that
+ * arrived, and losing it because a rule was malformed would trade a monitoring
+ * problem for a data-loss one.
+ */
+function sweepAfterIngest(req: Request): { raised: number; reopened: number; withheld: number } | { error: string } {
+  try {
+    const outcome = alertEngine.evaluate(req.principal!.id, req.viewer!);
+    return { raised: outcome.raised, reopened: outcome.reopened, withheld: outcome.hidden };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    audit.append(req.principal!.id, 'alerts_sweep_failed', { reason: message });
+    return { error: message };
+  }
+}
+
+/**
+ * The triage queue.
+ *
+ * Alerts are filtered by the reader's own view, exactly like graph nodes: an
+ * alert carries the label, the location and the fact that a rule matched, all
+ * of which are the disclosure the entity's marking exists to prevent.
+ */
+app.get('/api/platform/alerts', (req, res) => {
+  const state = typeof req.query.state === 'string' ? (req.query.state as AlertState) : undefined;
+  if (state && !['new', 'acknowledged', 'resolved'].includes(state)) {
+    return res.status(400).json({ error: 'state must be new, acknowledged or resolved' });
+  }
+  const minSeverity = typeof req.query.minSeverity === 'string' ? (req.query.minSeverity as AlertSeverity) : undefined;
+  if (minSeverity && !['info', 'elevated', 'high', 'critical'].includes(minSeverity)) {
+    return res.status(400).json({ error: 'minSeverity must be info, elevated, high or critical' });
+  }
+
+  const list = alerts.list(req.viewer!, {
+    state,
+    minSeverity,
+    ruleId: typeof req.query.ruleId === 'string' ? req.query.ruleId : undefined,
+  });
+  res.json({ alerts: list, summary: alerts.summary(req.viewer!) });
+});
+
+app.get('/api/platform/alerts/rules', (req, res) => {
+  res.json({ rules: alertEngine.listRules(req.viewer!) });
+});
+
+/**
+ * Adds or replaces a standing query.
+ *
+ * Gated at CONFIDENTIAL: a rule is not data, it is a decision about what the
+ * platform watches for and who gets woken. It is also the one write that can
+ * be used to *stop* watching, by replacing a rule with a version that never
+ * matches - which is why the previous version is recorded in the audit entry.
+ */
+app.post('/api/platform/alerts/rules', (req, res) => {
+  if (!clearanceAtLeast(req.callerClearance!, ClearanceLevel.CONFIDENTIAL)) {
+    return res.status(403).json({ error: 'defining a standing query requires CONFIDENTIAL clearance' });
+  }
+  try {
+    const rule = parseRule(req.body);
+    // A rule may not be marked into a circle its author does not hold, for the
+    // same reason data may not be: they could not read what it produces.
+    const held = new Set(req.principal!.compartments);
+    const beyond = rule.compartments.filter((c) => !held.has(c));
+    if (beyond.length > 0) {
+      return res.status(403).json({ error: `You are not read into: ${beyond.join(', ')}.` });
+    }
+    if (rule.clearance > req.callerClearance!) {
+      return res.status(403).json({ error: 'A rule cannot be classified above its author.' });
+    }
+
+    // Looked up across *all* rules, not the caller's view: silently creating a
+    // second rule with an id that already exists somewhere they cannot see
+    // would leave two versions firing.
+    const previous = alertEngine.listRules().find((r) => r.id === rule.id);
+    if (previous && !canRead(req.viewer!, { clearance: previous.clearance, compartments: previous.compartments })) {
+      return res.status(403).json({ error: `Rule id "${rule.id}" is already in use outside your view.` });
+    }
+    alertEngine.upsertRule(rule);
+    audit.append(req.principal!.id, previous ? 'alert_rule_replaced' : 'alert_rule_created', {
+      ruleId: rule.id,
+      name: rule.name,
+      severity: rule.severity,
+      condition: rule.condition,
+      previousCondition: previous?.condition ?? null,
+      previouslyEnabled: previous?.enabled ?? null,
+    });
+    res.status(201).json({ rule, replaced: Boolean(previous) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/platform/alerts/evaluate', (req, res) => {
+  try {
+    const outcome = alertEngine.evaluate(req.principal!.id, req.viewer!);
+    res.json(outcome);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Takes ownership of an alert, or closes it.
+ *
+ * The actor is the principal, not the key hash: a handover has to be able to
+ * say who has this one, and a hash cannot be paged.
+ */
+function moveAlert(to: AlertState) {
+  return (req: Request, res: Response) => {
+    const note = typeof (req.body ?? {}).note === 'string' ? req.body.note.trim() : undefined;
+
+    const id = String(req.params.id);
+    const result = alerts.transition(id, req.viewer!, to, req.principal!.id, note);
+    if (result === null) return res.status(404).json({ error: 'No such alert in your view.' });
+    if ('error' in result) return res.status(409).json({ error: result.error });
+
+    audit.append(req.principal!.id, 'alert_transitioned', {
+      alertId: result.alert.id,
+      ruleId: result.alert.ruleId,
+      entityId: result.alert.entityId,
+      to,
+      hasNote: Boolean(note),
+    });
+    res.json(result.alert);
+  };
+}
+
+app.post('/api/platform/alerts/:id/acknowledge', moveAlert('acknowledged'));
+app.post('/api/platform/alerts/:id/resolve', moveAlert('resolved'));
 
 /**
  * Retracts an ingestion batch by its source.
@@ -770,4 +920,4 @@ if (require.main === module) {
   });
 }
 
-export { app, graph, vectors, audit, ingestion, structuredConnector, infraUA, investigator, cases };
+export { app, graph, vectors, audit, ingestion, structuredConnector, infraUA, investigator, cases, alerts, alertEngine };

@@ -927,3 +927,121 @@ describe('platform API: reads are on the record', () => {
     expect(res.body.entries.every((e: any) => e.actor === 'dispatcher')).toBe(true);
   });
 });
+
+describe('platform API: the triage queue', () => {
+  it('fires standing queries when data lands, not when somebody remembers to ask', async () => {
+    const res = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: {
+        payload: {
+          facilities: [
+            {
+              id: 'queue-sub',
+              name: 'Підстанція Черга',
+              category: 'substation',
+              lat: 48.4,
+              lon: 35.1,
+              source: 'https://openstreetmap.org/way/4242',
+            },
+          ],
+          events: [
+            { id: 'queue-fire', title: 'Пожежа поруч', kind: 'fire', lat: 48.41, lon: 35.11, time: '2026-09-10T10:00:00Z', source: 'firms' },
+          ],
+          dependencies: [],
+        },
+        source: 'queue-batch',
+        sector: 'infrastructure',
+      },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.alerts.raised).toBeGreaterThan(0);
+  });
+
+  it('shows the queue with the evidence that produced each entry', async () => {
+    const res = await call('GET', '/api/platform/alerts', { key: KEYS.secret });
+    expect(res.status).toBe(200);
+    const alert = res.body.alerts.find((a: any) => a.entityId.includes('queue-sub'));
+    expect(alert).toBeDefined();
+    expect(alert.evidence.length).toBeGreaterThan(0);
+    expect(alert.ruleDescription).toBeTruthy();
+    expect(res.body.summary.byState.new).toBeGreaterThan(0);
+  });
+
+  it('records who took an alert and who closed it', async () => {
+    const queue = await call('GET', '/api/platform/alerts?state=new', { key: KEYS.secret });
+    const target = queue.body.alerts[0];
+
+    const acked = await call('POST', `/api/platform/alerts/${target.id}/acknowledge`, { key: KEYS.secret });
+    expect(acked.status).toBe(200);
+    expect(acked.body.state).toBe('acknowledged');
+
+    const resolved = await call('POST', `/api/platform/alerts/${target.id}/resolve`, {
+      key: KEYS.secret,
+      body: { note: 'перевірено' },
+    });
+    expect(resolved.body.state).toBe('resolved');
+    expect(resolved.body.transitions).toHaveLength(2);
+
+    // A resolved alert reopens when its condition fires again, not by hand.
+    const again = await call('POST', `/api/platform/alerts/${target.id}/acknowledge`, { key: KEYS.secret });
+    expect(again.status).toBe(409);
+  });
+
+  it('answers "no such alert" the same way for hidden and missing', async () => {
+    const res = await call('POST', '/api/platform/alerts/alert-does-not-exist/acknowledge', { key: KEYS.public });
+    expect(res.status).toBe(404);
+  });
+
+  it('will not let a rule be defined below CONFIDENTIAL', async () => {
+    const res = await call('POST', '/api/platform/alerts/rules', {
+      key: KEYS.public,
+      body: { id: 'nope', name: 'x', description: 'y', condition: { kind: 'entity' } },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses a rule marked into a circle its author does not hold', async () => {
+    const res = await call('POST', '/api/platform/alerts/rules', {
+      key: KEYS.secret,
+      body: {
+        id: 'grid-only',
+        name: 'x',
+        description: 'y',
+        compartments: ['grid'],
+        condition: { kind: 'entity' },
+      },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a malformed rule with a reason, rather than storing a rule that will throw mid-sweep', async () => {
+    const res = await call('POST', '/api/platform/alerts/rules', {
+      key: KEYS.secret,
+      body: { id: 'broken', name: 'x', description: 'y', condition: { kind: 'telepathy' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('unknown condition kind');
+  });
+
+  it('accepts a well-formed rule and reports that it replaced the previous version', async () => {
+    const body = {
+      id: 'operator-rule',
+      name: 'Обʼєкти оператора',
+      description: 'Усі обʼєкти, позначені як підстанції.',
+      severity: 'info',
+      condition: { kind: 'entity', nodeType: 'Asset', labelContains: 'Черга' },
+    };
+    const first = await call('POST', '/api/platform/alerts/rules', { key: KEYS.secret, body });
+    expect(first.status).toBe(201);
+    expect(first.body.replaced).toBe(false);
+
+    const second = await call('POST', '/api/platform/alerts/rules', {
+      key: KEYS.secret,
+      body: { ...body, description: 'Оновлено.' },
+    });
+    expect(second.body.replaced).toBe(true);
+
+    const run = await call('POST', '/api/platform/alerts/evaluate', { key: KEYS.secret });
+    expect(run.body.evaluatedRules).toBeGreaterThan(0);
+  });
+});
