@@ -23,6 +23,15 @@ export interface SourceProbe {
   /** Мілісекунди до відповіді; `null`, якщо не відповіло. */
   ms: number | null;
   detail: string;
+  /**
+   * Початок відповіді.
+   *
+   * Кількість байтів каже, що щось прийшло, і не каже що саме. Для коротких
+   * службових відповідей — а `out count` в Overpass саме така — корисніше
+   * побачити зміст: проба тоді відповідає не лише «джерело живе», а й на
+   * питання, заради якого запит узагалі складений.
+   */
+  sample?: string;
 }
 
 export interface HealthReport {
@@ -72,6 +81,8 @@ export async function probe(
           ? `${text.length} байт JSON`
           : `HTTP ${response.status}, але не JSON — джерело перевантажене`
         : `HTTP ${response.status}`,
+      // Обрізаємо: проба має діагностувати, а не переносити дані.
+      ...(looksJson && text.length <= 600 ? { sample: text.slice(0, 600) } : {}),
     };
   } catch (err) {
     return {
