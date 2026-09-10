@@ -195,3 +195,13 @@ export interface FirePoint {
   acqTime: string;
   daynight: string;
 }
+
+/** Поточна погода (open-meteo) — вітер важить для БпЛА й поширення пожеж. */
+export interface WeatherNow {
+  tempC: number;
+  windKmh: number;
+  /** Напрямок вітру, градуси (звідки дме). */
+  windDir: number;
+  precip: number;
+  degraded: boolean;
+}

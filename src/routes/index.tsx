@@ -60,6 +60,7 @@ import {
   getInternetOutages,
   getSpaceWeather,
   getThreats,
+  getWeather,
 } from "@/lib/infra.functions";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
@@ -293,6 +294,14 @@ function Console() {
     queryFn: () => outagesFn(),
     staleTime: 10 * 60 * 1000,
     refetchInterval: 10 * 60 * 1000,
+  });
+  // Погода над Києвом (open-meteo) — вітер для БпЛА/пожеж.
+  const weatherFn = useServerFn(getWeather);
+  const weatherQuery = useQuery({
+    queryKey: ["weather"],
+    queryFn: () => weatherFn(),
+    staleTime: 15 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000,
   });
   /*
    * Звʼязок з аналітичною платформою. Ключ лишається на сервері, тому і статус, і
@@ -708,6 +717,22 @@ function Console() {
               title="Інтернет-збої по Україні за 24 год (IODA, Georgia Tech). Падіння звʼязності часто супроводжує удари по інфраструктурі."
             >
               інтернет-збої: {outagesQuery.data.count} за 24 год
+            </span>
+          </>
+        ) : null}
+        {weatherQuery.data && !weatherQuery.data.degraded ? (
+          <>
+            <span className="opacity-40">·</span>
+            <span
+              className="hidden items-center gap-1.5 text-muted-foreground lg:flex"
+              title="Погода над Києвом (open-meteo). Вітер важить для роботи БпЛА й поширення пожеж."
+            >
+              Київ {weatherQuery.data.tempC}° · вітер {weatherQuery.data.windKmh} км/год{" "}
+              {
+                ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"][
+                  Math.round((((weatherQuery.data.windDir % 360) + 360) % 360) / 45) % 8
+                ]
+              }
             </span>
           </>
         ) : null}

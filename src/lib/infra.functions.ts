@@ -15,6 +15,7 @@ import {
   type FrontlineArea,
   type Threat,
   type ThreatType,
+  type WeatherNow,
 } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
@@ -1005,6 +1006,50 @@ export const getInternetOutages = createServerFn({ method: "GET" }).handler(
       return payload;
     } catch {
       return { count: 0, maxScore: 0, latestStart: 0, sources: [], degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
+// Поточна погода над Києвом — open-meteo, keyless. Вітер важить для роботи БпЛА
+// й поширення пожеж; це фоновий оперативний показник, не шар карти.
+const WEATHER_ENDPOINT =
+  "https://api.open-meteo.com/v1/forecast?latitude=50.45&longitude=30.52&current=temperature_2m,wind_speed_10m,wind_direction_10m,precipitation&timezone=UTC";
+
+export const getWeather = createServerFn({ method: "GET" }).handler(
+  async (): Promise<WeatherNow> => {
+    const cached = readCache<WeatherNow>("weather", 15 * 60 * 1000);
+    if (cached) return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(WEATHER_ENDPOINT, {
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`weather ${res.status}`);
+      const data = (await res.json()) as {
+        current?: {
+          temperature_2m?: number;
+          wind_speed_10m?: number;
+          wind_direction_10m?: number;
+          precipitation?: number;
+        };
+      };
+      const c = data.current;
+      if (!c || typeof c.temperature_2m !== "number") throw new Error("no current");
+      const payload: WeatherNow = {
+        tempC: Math.round(c.temperature_2m),
+        windKmh: Math.round(c.wind_speed_10m ?? 0),
+        windDir: Math.round(c.wind_direction_10m ?? 0),
+        precip: c.precipitation ?? 0,
+        degraded: false,
+      };
+      writeCache("weather", payload);
+      return payload;
+    } catch {
+      return { tempC: 0, windKmh: 0, windDir: 0, precip: 0, degraded: true };
     } finally {
       clearTimeout(timer);
     }
