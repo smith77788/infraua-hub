@@ -8,6 +8,7 @@ import {
   mercToLatLon,
   moreSevereType,
   type AlertZone,
+  type FrontlineArea,
   type Threat,
   type ThreatType,
 } from "./air";
@@ -764,6 +765,85 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
     clearTimeout(timer);
   }
 });
+
+// Лінія фронту — відкрите джерело DeepState Map (GeoJSON, keyless). Порт модуля
+// osiris/Palanter: ключовий шар ситуативної картини України, поруч із обʼєктами
+// та повітряною загрозою.
+const FRONTLINE_ENDPOINT = "https://deepstatemap.live/api/history/last";
+
+interface FrontlinePayload {
+  areas: FrontlineArea[];
+  datetime: string;
+  degraded: boolean;
+}
+
+function simplifyRing(ring: number[][], max = 140): [number, number][] {
+  const step = Math.max(1, Math.ceil(ring.length / max));
+  const out: [number, number][] = [];
+  for (let i = 0; i < ring.length; i += step) {
+    const p = ring[i];
+    if (!p) continue;
+    const [lon, lat] = p;
+    if (typeof lon === "number" && typeof lat === "number")
+      out.push([Math.round(lat * 1e4) / 1e4, Math.round(lon * 1e4) / 1e4]);
+  }
+  return out;
+}
+
+/** Назва DeepState: «Окуповано /// Occupied /// geoJSON.status.occupied» → перша частина. */
+function statusFromName(name: string | undefined): string {
+  return (
+    (name ?? "")
+      .split("///")[0]
+      ?.replace(/\u00a0/g, " ")
+      .trim() ?? ""
+  );
+}
+
+export const getFrontline = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FrontlinePayload> => {
+    const cached = readCache<FrontlinePayload>("frontline", 30 * 60 * 1000);
+    if (cached) return cached;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(FRONTLINE_ENDPOINT, {
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`frontline ${res.status}`);
+      const data = (await res.json()) as {
+        datetime?: string;
+        map?: {
+          features?: Array<{
+            geometry?: { type?: string; coordinates?: unknown };
+            properties?: { stroke?: string; name?: string };
+          }>;
+        };
+      };
+      const feats = data.map?.features ?? [];
+      const areas: FrontlineArea[] = [];
+      for (const f of feats) {
+        if (f?.geometry?.type !== "Polygon") continue;
+        const coords = f.geometry.coordinates as number[][][] | undefined;
+        const rings = (coords ?? []).map((r) => simplifyRing(r)).filter((r) => r.length >= 3);
+        if (!rings.length) continue;
+        areas.push({
+          polygons: rings,
+          color: f.properties?.stroke ?? "#ff4d4d",
+          status: statusFromName(f.properties?.name),
+        });
+      }
+      const payload: FrontlinePayload = { areas, datetime: data.datetime ?? "", degraded: false };
+      if (areas.length) writeCache("frontline", payload);
+      return payload;
+    } catch {
+      return { areas: [], datetime: "", degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
 
 interface ZonesPayload {
   zones: AlertZone[];

@@ -51,6 +51,7 @@ import {
   getFacilities,
   getPowerLines,
   getFacilityTiles,
+  getFrontline,
   getThreats,
 } from "@/lib/infra.functions";
 import { simulateOutage } from "@/lib/contingency";
@@ -253,6 +254,14 @@ function Console() {
     staleTime: 12 * 1000,
     refetchInterval: 15 * 1000,
   });
+  // Лінія фронту (DeepState) — оновлюється рідко, тримаємо довгий інтервал.
+  const frontlineFn = useServerFn(getFrontline);
+  const frontlineQuery = useQuery({
+    queryKey: ["frontline"],
+    queryFn: () => frontlineFn(),
+    staleTime: 30 * 60 * 1000,
+    refetchInterval: 30 * 60 * 1000,
+  });
   /*
    * Звʼязок із платформою Palanter. Ключ лишається на сервері, тому і статус, і
    * саме надсилання — серверні функції. Незаданий звʼязок — штатний стан:
@@ -281,6 +290,7 @@ function Console() {
   const [query, setQuery] = useState("");
   const [showLinks, setShowLinks] = useState(true);
   const [showGraph, setShowGraph] = useState(false);
+  const [showFrontline, setShowFrontline] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
@@ -307,6 +317,7 @@ function Console() {
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
   const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
+  const frontline = useMemo(() => frontlineQuery.data?.areas ?? [], [frontlineQuery.data]);
   // Одна привʼязка на консоль: її потребують і тривоги, і фокус по області.
   const regionOf = useMemo(() => assignRegions(allFacilities, regions), [allFacilities, regions]);
   const alarmIds = useMemo(() => {
@@ -838,6 +849,21 @@ function Console() {
             </button>
 
             <button
+              onClick={() => setShowFrontline((v) => !v)}
+              disabled={frontline.length === 0}
+              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
+                showFrontline
+                  ? "border-red-500/60 text-red-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              <AlertTriangle className="size-3.5" /> Лінія фронту (DeepState)
+              {frontline.length > 0 ? (
+                <span className="ml-auto font-mono text-[10px] opacity-70">{frontline.length}</span>
+              ) : null}
+            </button>
+
+            <button
               onClick={() => setShowGraph((v) => !v)}
               disabled={threatGraph.nodes.length === 0}
               className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
@@ -991,6 +1017,8 @@ function Console() {
                     alerts={regions}
                     zones={zones}
                     threats={threats}
+                    frontline={frontline}
+                    showFrontline={showFrontline}
                     alarmIds={alarmIds}
                     showLinks={showLinks}
                     riskIds={riskIds}

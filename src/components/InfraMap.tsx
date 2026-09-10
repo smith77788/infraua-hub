@@ -15,7 +15,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import { type AlertZone, type Threat, type ThreatType } from "@/lib/air";
+import { type AlertZone, type FrontlineArea, type Threat, type ThreatType } from "@/lib/air";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { type AlertRegion } from "@/lib/alerts";
 import {
@@ -34,6 +34,8 @@ interface Props {
   alerts: AlertRegion[];
   zones: AlertZone[];
   threats: Threat[];
+  frontline: FrontlineArea[];
+  showFrontline: boolean;
   alarmIds: Set<string>;
   showLinks: boolean;
   riskIds: Set<string>;
@@ -482,6 +484,8 @@ export default function InfraMap({
   alerts,
   zones,
   threats,
+  frontline,
+  showFrontline,
   showLinks,
   riskIds,
   impactedIds,
@@ -518,6 +522,35 @@ export default function InfraMap({
       style={{ background: "#0a0e14" }}
     >
       <BaseLayers />
+
+      {/* Лінія фронту (DeepState) — під усіма іншими шарами */}
+      {showFrontline
+        ? frontline.flatMap((a, ai) =>
+            a.polygons.map((ring, i) => (
+              <Polygon
+                key={`fl-${ai}-${i}`}
+                positions={ring}
+                pathOptions={{
+                  color: a.color,
+                  fillColor: a.color,
+                  fillOpacity: 0.12,
+                  weight: 1,
+                  opacity: 0.7,
+                }}
+              >
+                {a.status ? (
+                  <Popup>
+                    <div className="font-sans text-xs">
+                      <p className="font-semibold">Лінія фронту</p>
+                      <p className="opacity-80">{a.status}</p>
+                      <p className="opacity-60">Джерело: DeepState Map</p>
+                    </div>
+                  </Popup>
+                ) : null}
+              </Polygon>
+            )),
+          )
+        : null}
 
       {/* Зони тривог: реальні полігони регіонів, або кола-фолбек */}
       {zones.length > 0

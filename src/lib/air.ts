@@ -174,3 +174,11 @@ export interface AlertZone {
   /** Зовнішні кільця у форматі Leaflet: [lat, lon][]. */
   polygons: [number, number][][];
 }
+
+/** Ділянка лінії фронту (DeepState): кільця + колір статусу. */
+export interface FrontlineArea {
+  /** Кільця у форматі Leaflet: [lat, lon][]. */
+  polygons: [number, number][][];
+  color: string;
+  status: string;
+}
