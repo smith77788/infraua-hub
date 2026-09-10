@@ -85,3 +85,35 @@ NITRO_PRESET=node-server
 
 Запуск на Railway: `npm start` (`node .output/server/index.mjs`). Порт бере з
 `PORT`, який Railway задає сам.
+
+## Платформа (`platform/`)
+
+Аналітична платформа — онтологія, граф знань із рівнями доступу, ланцюжок
+аудиту, пісочниця для обчислень, слідчий агент. Раніше вона жила в окремому
+репозиторії `Palanter`; тепер це один продукт і один репозиторій, а `platform/`
+— її місце тут.
+
+```
+npm run platform:typecheck   # tsc -p platform/tsconfig.json
+npm run platform:test        # bun test platform/tests  (203 тести)
+npm run platform:build       # компіляція + межа CommonJS
+npm run platform:start       # node platform/dist/api/server.js
+```
+
+`npm run check` виконує і консоль, і платформу — тими самими кроками, що й CI.
+
+**Чому окремий tsconfig.** Консоль — це ESM зі строгими правилами під браузер;
+платформа — CommonJS під Node. Одні налаштування на двох означали б послабити
+консоль до рівня, який влаштовує сервер.
+
+**Чому крок збірки, а не просто `tsc`.** У корені оголошено `"type": "module"`
+— цього вимагає консоль. Node дивиться на найближчий package.json, тож
+скомпільований CommonJS вантажився б як ESM і падав на першому `exports.`.
+`platform/build.mjs` кладе у `platform/dist` вкладений package.json із
+`"type": "commonjs"` — межа двох модульних систем проходить по каталогу.
+
+Тести платформи не потребують jest: у них немає жодного виклику `jest.*`, тож
+вони працюють під вбудованим рушієм Bun, як і решта репозиторію.
+
+Змінні середовища: `PLATFORM_API_KEYS` (JSON-мапа ключ → рівень доступу),
+`CORS_ORIGINS`, `PLATFORM_DATA_DIR`, необовʼязково `ANTHROPIC_API_KEY`.

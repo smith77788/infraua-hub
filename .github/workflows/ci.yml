@@ -42,6 +42,18 @@ jobs:
       - name: Build
         run: bun run build
 
+      # Платформа переїхала сюди з окремого репозиторію і живе під platform/.
+      # У неї власний tsconfig (CommonJS, Node) і власні тести, тож кроки
+      # окремі — падіння має називати себе.
+      - name: Platform typecheck
+        run: bun run platform:typecheck
+
+      - name: Platform tests
+        run: bun run platform:test
+
+      - name: Platform build
+        run: bun run platform:build
+
   # The air-radar backend is Python with its own tests, and nothing was running
   # them. Kept as a separate job so a failure there is attributable and does not
   # mask a frontend failure.

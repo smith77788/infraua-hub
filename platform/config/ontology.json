@@ -1,0 +1,78 @@
+{
+  "entity_types": {
+    "Person": {
+      "properties": [
+        "role",
+        "risk_score",
+        "last_seen"
+      ],
+      "default_clearance": "PUBLIC"
+    },
+    "Organization": {
+      "properties": [
+        "country",
+        "structure_type"
+      ],
+      "default_clearance": "PUBLIC"
+    },
+    "Asset": {
+      "properties": [
+        "type",
+        "serial_number"
+      ],
+      "default_clearance": "PUBLIC"
+    },
+    "Location": {
+      "properties": [
+        "lat",
+        "lon"
+      ],
+      "default_clearance": "PUBLIC"
+    },
+    "Event": {
+      "properties": [
+        "timestamp",
+        "severity"
+      ],
+      "default_clearance": "PUBLIC"
+    }
+  },
+  "edge_types": {
+    "AFFILIATED_WITH": {
+      "from": "Person",
+      "to": "Organization"
+    },
+    "HIDDEN_BENEFICIARY_OF": {
+      "from": "Person",
+      "to": "Organization"
+    },
+    "AWARDED_CONTRACT": {
+      "from": "Person",
+      "to": "Organization"
+    },
+    "SUPPLY_DISRUPTION": {
+      "from": "Organization",
+      "to": "Organization"
+    },
+    "LOCATED_AT": {
+      "from": [
+        "Person",
+        "Organization",
+        "Asset"
+      ],
+      "to": "Location"
+    },
+    "SUPPLIES_POWER": {
+      "from": "Asset",
+      "to": "Asset"
+    },
+    "OPERATED_BY": {
+      "from": "Asset",
+      "to": "Organization"
+    },
+    "THREATENS": {
+      "from": "Event",
+      "to": "Asset"
+    }
+  }
+}

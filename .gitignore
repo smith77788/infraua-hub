@@ -33,3 +33,5 @@ dist-ssr
 
 # Generated from a GeoNames dump by `python -m backend.build_geodb`.
 air-radar/backend/data/
+platform/dist
+platform/workspace

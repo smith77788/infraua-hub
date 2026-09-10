@@ -1,0 +1,15 @@
+{
+  "ingress_guardrails": {
+    "blocked_patterns": [
+      "override.?acl",
+      "bypass.?(security|clearance|guardrail)",
+      "drop (the )?(database|graph|table)",
+      "delete all",
+      "ignore (all )?(previous|prior|above) instructions",
+      "reveal (the )?system prompt",
+      "grant (me )?(top.?secret|admin|root) (access|clearance)",
+      "act as (an? )?(unrestricted|jailbroken|dan)"
+    ],
+    "max_query_length": 2000
+  }
+}

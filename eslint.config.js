@@ -6,7 +6,10 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", ".output", ".vinxi", "air-radar"] },
+  // platform/ — серверний код платформи: CommonJS, Node-глобали, власний
+  // tsconfig. Правила консолі (браузерні глобали, react-hooks) до нього не
+  // застосовні; він перевіряється своїм `npm run platform:typecheck`.
+  { ignores: ["dist", ".output", ".vinxi", "air-radar", "platform"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],

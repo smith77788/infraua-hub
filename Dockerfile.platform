@@ -1,0 +1,37 @@
+# Образ API платформи.
+#
+# Консоль сюди НЕ збирається: вона розгортається окремим сервісом із того ж
+# репозиторію. Платформа лишається чистим API — так її і тестують.
+#
+# Збірка йде з кореня репозиторію, бо залежності оголошені в кореневому
+# package.json: платформа переїхала сюди з окремого репозиторію і тепер живе
+# під platform/.
+
+FROM node:20-alpine AS build
+WORKDIR /app
+
+COPY package.json bun.lock ./
+RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts \
+ && npm install --no-save typescript@^5.9.3 @types/node @types/express @types/cors @types/uuid
+
+COPY platform ./platform
+RUN node platform/build.mjs
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY package.json ./
+RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts
+
+COPY --from=build /app/platform/dist ./platform/dist
+# Конфігурація читається у рантаймі: онтологія та політики безпеки — це
+# налаштування оператора, а не константи в коді.
+COPY platform/config ./platform/config
+
+# Стан платформи (граф, аудит, справи) має пережити перезапуск контейнера.
+ENV PLATFORM_DATA_DIR=/data
+VOLUME ["/data"]
+
+EXPOSE 4500
+CMD ["node", "platform/dist/api/server.js"]
