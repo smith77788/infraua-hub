@@ -54,24 +54,39 @@ describe('the company register', () => {
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   describe('encoding', () => {
-    it('decodes windows-1251, which neither Node nor Bun can', () => {
-      // TextDecoder supports this label in browsers and throws
-      // ERR_ENCODING_NOT_SUPPORTED on the server. That is the *good* failure;
-      // the bad one is reading the bytes as UTF-8, which raises nothing and
-      // turns every Ukrainian name into mojibake that reaches the graph
-      // looking like bad source data.
-      expect(() => new TextDecoder('windows-1251')).toThrow();
-
+    it('decodes the register whatever the runtime underneath supports', () => {
+      // This assertion used to read `expect(() => new TextDecoder(
+      // 'windows-1251')).toThrow()`, which passed locally and broke CI the
+      // moment it ran on a newer Bun that has the label. That was a test of
+      // the runtime, not of this code - and the lesson is the reason the
+      // decoder exists at all: whether a given Node or Bun build carries the
+      // ICU tables for this encoding is not something a connector should
+      // depend on, and finding out the hard way means mojibake in the graph.
       const subjects = parseEdrBytes(bytes);
       expect(subjects.length).toBeGreaterThan(0);
       const names = subjects.map((s) => s.name ?? '').join(' ');
       expect(names).toMatch(/[А-ЯІЇЄҐа-яіїєґ]/);
-      expect(names).not.toContain('�');
+      expect(names).not.toContain('\ufffd');
     });
 
-    it('maps every byte the way the reference codec does', () => {
-      // The table was generated rather than typed, and this is what keeps it
-      // honest: one wrong entry corrupts a single letter everywhere, silently.
+    it('agrees with the platform decoder wherever the platform has one', () => {
+      // A real cross-check where it is available, and silently skipped where
+      // it is not - rather than an assertion about which runtime this is.
+      let platform: TextDecoder;
+      try {
+        platform = new TextDecoder('windows-1251');
+      } catch {
+        return;
+      }
+      const sample = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) sample[i] = i;
+      expect(decodeWindows1251(sample)).toBe(platform.decode(sample));
+    });
+
+    it('maps every byte the way the encoding standard does', () => {
+      // The table came from the WHATWG index rather than being typed, and this
+      // is what keeps it honest: one wrong entry corrupts a single letter
+      // everywhere, silently.
       const all = new Uint8Array(256);
       for (let i = 0; i < 256; i++) all[i] = i;
       const decoded = decodeWindows1251(all);

@@ -116,28 +116,37 @@ const ABSENCE_PREFIX = /^\s*причин[аи]\s+відсутност/i;
 /**
  * Bytes 0x80-0xFF of windows-1251. Below 0x80 the encoding is ASCII.
  *
- * Generated from a reference codec rather than typed out, because a single
- * wrong character here corrupts one Ukrainian letter everywhere and nothing
- * reports an error - the table is checked against the published register in
- * the tests.
+ * Taken from the WHATWG encoding index rather than typed out or lifted from a
+ * language's own codec, and the distinction is not academic: the two disagree
+ * on exactly one byte. `0x98` is unassigned in the original Microsoft code
+ * page, so Python's codec rejects it, while the WHATWG index - which is what
+ * every `TextDecoder` implements - maps it to U+0098. Following the standard
+ * makes this a drop-in for the platform decoder, which is what lets the test
+ * compare the two byte for byte wherever the platform has one.
  */
 const WINDOWS_1251_HIGH =
-  'ЂЃ‚ѓ„…†‡€‰Љ‹ЊЌЋЏђ‘’“”•–—\ufffd™љ›њќћџ\u00a0ЎўЈ¤Ґ¦§Ё©Є«¬\u00ad®Ї°±Ііґµ¶·ё№є»јЅѕї' +
+  'ЂЃ‚ѓ„…†‡€‰Љ‹ЊЌЋЏђ‘’“”•–—\u0098™љ›њќћџ\u00a0ЎўЈ¤Ґ¦§Ё©Є«¬\u00ad®Ї°±Ііґµ¶·ё№є»јЅѕї' +
   'АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя';
 
 /**
- * Decodes windows-1251, which the register is published in and which neither
- * Node nor Bun can decode.
+ * Decodes windows-1251, the encoding the register is published in.
  *
- * `TextDecoder` supports it in browsers and throws
- * `ERR_ENCODING_NOT_SUPPORTED` on the server, so the obvious call fails loudly
- * - which is the good case. The bad case is the workaround somebody reaches
- * for next: reading the bytes as UTF-8 or latin1 raises no error at all and
- * turns every Ukrainian name in the file into mojibake, and the corruption
- * arrives in the graph looking exactly like bad source data.
+ * Whether the runtime can do this itself is not something to build on.
+ * `TextDecoder` carries the label only when the build ships the ICU tables for
+ * it: browsers always do, Node without full ICU does not, and Bun gained it
+ * between versions - which is exactly how a test asserting the absence passed
+ * locally and broke CI on a newer runtime. The deployment target here is Node,
+ * and a connector whose correctness depends on which ICU build happens to be
+ * underneath is a connector that works until it is deployed somewhere else.
  *
- * So the decoder lives here, next to the only thing that needs it, rather than
- * being a step every caller has to remember.
+ * The failure it prevents is the quiet one. A missing label throws, which is
+ * survivable; the workaround somebody reaches for next - reading the bytes as
+ * UTF-8 or latin1 - raises nothing at all and turns every Ukrainian name in
+ * the file into mojibake that arrives in the graph looking like bad source
+ * data.
+ *
+ * So the decoder lives here, next to the only thing that needs it, and the
+ * test cross-checks it against the platform decoder wherever one exists.
  */
 export function decodeWindows1251(bytes: Uint8Array): string {
   let out = '';
