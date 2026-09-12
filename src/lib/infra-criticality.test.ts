@@ -6,9 +6,11 @@ import {
   betweennessDetailed,
   bridges,
   components,
+  criticalityClaim,
   downstreamCounts,
 } from "./infra-criticality";
 import type { Facility, GraphEdge } from "./infra-types";
+import { explain, isFullyObserved } from "./claim";
 
 function node(id: string): Facility {
   return { id, name: id, category: "substation", lat: 50, lon: 30, source: "test" };
@@ -432,5 +434,70 @@ describe("клас напруги в оцінці", () => {
     const signal = result.get("a")!.signals.find((x) => x.id === "voltage_class")!;
     expect(signal.evidence).toBe("330 кВ");
     expect(signal.grounded).toBe(true);
+  });
+});
+
+describe("criticalityClaim", () => {
+  const empty = {
+    dependents: new Map<string, number>(),
+    atRisk: new Set<string>(),
+    underAlarm: new Set<string>(),
+  };
+
+  function inferredEdge(from: string, to: string): GraphEdge {
+    return {
+      from,
+      to,
+      km: 1,
+      kind: "supply",
+      provenance: {
+        kind: "inferred",
+        method: "найближча підстанція",
+        params: {},
+        confidence: 0.25,
+        caveat: "тест",
+      },
+    };
+  }
+
+  it("оцінка на спостережених сигналах лишається впевненою", () => {
+    const nodes = ["a", "b", "c"].map(node);
+    const result = assessCriticality({
+      facilities: nodes,
+      edges: [edge("a", "b"), edge("b", "c")],
+      ...empty,
+    });
+    const claim = criticalityClaim(result.get("b")!);
+    expect(claim.value).toBe(result.get("b")!.score);
+    expect(claim.confidence).toBe(1);
+    expect(isFullyObserved(claim.lineage)).toBe(true);
+  });
+
+  it("один сигнал на здогадці обмежує весь висновок", () => {
+    // Три надійні сигнали не рятують оцінку, що спирається на четвертий
+    // ненадійний — саме тому це мінімум, а не частка.
+    const nodes = ["a", "b", "c", "d"].map(node);
+    const edges = [edge("a", "b"), edge("b", "c"), edge("c", "a"), inferredEdge("c", "d")];
+    const result = assessCriticality({ facilities: nodes, edges, ...empty });
+    const claim = criticalityClaim(result.get("c")!);
+    expect(claim.confidence).toBeLessThan(1);
+    expect(isFullyObserved(claim.lineage)).toBe(false);
+  });
+
+  it("нуль означає відсутність підстав, а не перевірену безпеку", () => {
+    const claim = criticalityClaim({ id: "x", score: 0, band: "low", signals: [] });
+    expect(claim.value).toBe(0);
+    expect(explain(claim.lineage)).toContain("оцінка критичності");
+  });
+
+  it("ланцюг називає сигнали, що дали внесок", () => {
+    const nodes = ["a", "b", "c"].map(node);
+    const result = assessCriticality({
+      facilities: nodes,
+      edges: [edge("a", "b"), edge("b", "c")],
+      ...empty,
+    });
+    const text = explain(criticalityClaim(result.get("b")!).lineage);
+    expect(text).toContain("сума названих сигналів");
   });
 });

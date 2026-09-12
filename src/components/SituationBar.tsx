@@ -46,19 +46,38 @@ function LevelIcon({ level, className }: { level: SituationLevel; className?: st
  * Кожне число тут — вхід у свій зріз, а не напис. «Під загрозою 14» без
  * можливості побачити ці чотирнадцять змушувало шукати їх очима по карті
  * серед тисяч інших.
+ *
+ * Колір тут — не оформлення, а рівень терміновості, і словник у нього рівно
+ * один:
+ *
+ * - **червоне** — вимагає дії зараз (ціль іде на наші обʼєкти, постраждало
+ *   життєзабезпечення);
+ * - **бурштинове** — тримати в полі зору (тривога, обʼєкти під подією);
+ * - **сіре** — фон.
+ *
+ * До цього червоним світилися одночасно тривога, цілі й життєзабезпечення, і
+ * всі три пульсували. Коли терміновим позначено все, не позначено нічого:
+ * повітряна тривога в Україні майже щоденна, тож червоний чип на ній горів
+ * постійно і забирав увагу в тих двох, які справді означають «дій зараз».
  */
 export default function SituationBar({
   summary,
   loading,
   threats = 0,
+  airThreat = { total: 0, critical: 0 },
   focus = null,
   onFocus,
   eventKind = null,
   onEventKind,
+  showInfra = true,
 }: {
   summary: SituationSummary;
   loading: boolean;
+  /** Лічильники, що рахують наші обʼєкти, зникають разом із ними. */
+  showInfra?: boolean;
   threats?: number;
+  /** Скільки наших обʼєктів корелює з цілями в повітрі — з них і береться червоне. */
+  airThreat?: { total: number; critical: number };
   focus?: Focus;
   onFocus?: (focus: Focus) => void;
   /** Обраний вид події — стрічка й карта показують лише його. */
@@ -94,35 +113,58 @@ export default function SituationBar({
       </span>
 
       {threats > 0 ? (
-        <span className="flex items-center gap-1.5 rounded-full border border-red-500/60 bg-red-500/15 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400">
-          <Crosshair className="size-3.5 animate-pulse" />
+        <span
+          title={
+            airThreat.total > 0
+              ? `Цілей у повітрі: ${threats}. Поруч із ними ${airThreat.total} наших обʼєкт(ів).`
+              : `Цілей у повітрі: ${threats}. Поруч із нашими обʼєктами наразі немає.`
+          }
+          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] ${
+            airThreat.total > 0
+              ? "border-red-500/60 bg-red-500/15 text-red-400"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-400"
+          }`}
+        >
+          <Crosshair className={`size-3.5 ${airThreat.total > 0 ? "animate-pulse" : ""}`} />
           Повітряні цілі
           <span>{threats}</span>
+          {airThreat.total > 0 ? (
+            <span className="font-normal normal-case tracking-normal opacity-90">
+              → {airThreat.total} обʼєкт(ів)
+              {airThreat.critical > 0 ? `, ${airThreat.critical} критич.` : ""}
+            </span>
+          ) : null}
         </span>
       ) : null}
 
       {summary.alarms > 0 ? (
         <button
           onClick={toggle({ kind: "alarm" })}
-          title={`Показати ${focusLabel({ kind: "alarm" })}`}
-          className={`flex items-center gap-1.5 rounded-full border border-red-500/50 bg-red-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400 transition-colors hover:bg-red-500/20 ${active({ kind: "alarm" })}`}
+          title={
+            summary.underAlarm > 0
+              ? `Тривога у ${summary.alarms} обл., під нею ${summary.underAlarm} наших обʼєкт(ів). Показати ${focusLabel({ kind: "alarm" })}`
+              : `Тривога у ${summary.alarms} обл., наших обʼєктів у цих областях немає. Показати ${focusLabel({ kind: "alarm" })}`
+          }
+          className={`flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-400 transition-colors hover:bg-amber-500/20 ${active({ kind: "alarm" })}`}
         >
-          <Siren className="size-3.5 animate-pulse" />
+          <Siren className="size-3.5" />
           Повітряна тривога
           <span>{summary.alarms} обл.</span>
         </button>
       ) : null}
 
-      <button
-        onClick={toggle({ kind: "risk" })}
-        disabled={summary.atRisk === 0}
-        title={`Показати ${focusLabel({ kind: "risk" })}`}
-        className={`flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground ${active({ kind: "risk" })}`}
-      >
-        <AlertTriangle className="size-3 text-amber-400" />
-        Під загрозою
-        <span className="font-semibold text-foreground">{summary.atRisk}</span>
-      </button>
+      {showInfra ? (
+        <button
+          onClick={toggle({ kind: "risk" })}
+          disabled={summary.atRisk === 0}
+          title={`Показати ${focusLabel({ kind: "risk" })}`}
+          className={`flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground ${active({ kind: "risk" })}`}
+        >
+          <AlertTriangle className="size-3 text-amber-400" />
+          Під загрозою
+          <span className="font-semibold text-foreground">{summary.atRisk}</span>
+        </button>
+      ) : null}
 
       {summary.lifeAtRisk > 0 ? (
         <button

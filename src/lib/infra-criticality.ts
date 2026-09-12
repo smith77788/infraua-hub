@@ -1,5 +1,6 @@
 import { CATEGORIES, type Facility, type GraphEdge, type Tier } from "./infra-types";
 import { isObserved } from "./provenance";
+import { combine, inferred, observed, type Claim, type Lineage } from "./claim";
 import { formatVoltage, voltageClass, type VoltageClass } from "./osm-tags";
 
 /**
@@ -709,4 +710,45 @@ export function assessCriticality(input: CriticalityInput): Map<string, Critical
   }
 
   return out;
+}
+
+/**
+ * Оцінка критичності як твердження з походженням.
+ *
+ * Число «73» саме по собі не можна ні перевірити, ні порівняти з оцінкою
+ * достовірності OSINT-повідомлення чи з впевненістю ребра графа. Загорнуте в
+ * `Claim`, воно несе повний ланцюг: які сигнали спрацювали, які з них стоять
+ * на спостереженнях, а які — на виведених звʼязках, і наскільки цьому можна
+ * вірити за тією самою шкалою, що й усьому іншому в системі.
+ *
+ * Впевненість — за найслабшою ланкою: оцінка, у якій хоч один сигнал тримається
+ * на здогадці, не буває надійнішою за цю здогадку. Саме тому вона не
+ * підмінюється часткою «скільки сигналів обґрунтовані»: три надійні сигнали не
+ * рятують висновок, що спирається на четвертий ненадійний.
+ */
+export function criticalityClaim(assessment: CriticalityAssessment): Claim<number> {
+  if (assessment.signals.length === 0) {
+    return inferred(0, "оцінка критичності", 1, {
+      caveat:
+        "Жоден сигнал не спрацював — нуль тут означає відсутність підстав, а не перевірену безпеку.",
+    });
+  }
+
+  const parts: Claim<number>[] = assessment.signals.map((signal) =>
+    signal.grounded
+      ? observed(signal.contribution, signal.label, { ref: signal.evidence })
+      : inferred(signal.contribution, signal.label, 0.35, {
+          caveat: signal.reason,
+        }),
+  );
+
+  return combine(parts, "сума названих сигналів", assessment.score, {
+    caveat:
+      "Оцінка дорівнює сумі внесків, обмеженій сотнею. Впевненість — за найслабшим сигналом: один, що спирається на виведені звʼязки, обмежує весь висновок.",
+  });
+}
+
+/** Ланцюг походження оцінки — для інтерфейсу, що показує «звідки це». */
+export function criticalityLineage(assessment: CriticalityAssessment): Lineage {
+  return criticalityClaim(assessment).lineage;
 }

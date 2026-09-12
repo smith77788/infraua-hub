@@ -8,13 +8,7 @@ import { formatVoltage, voltageClass, VOLTAGE_CLASS_LABEL } from "@/lib/osm-tags
 import { operatorProfile } from "@/lib/operators";
 import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
-import {
-  SOURCE_STATE_LABEL,
-  SOURCE_STATE_TONE,
-  statusOf,
-  worstState,
-  type SourceStatus,
-} from "@/lib/sources";
+import { statusOf, worstState, type SourceStatus } from "@/lib/sources";
 import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -27,8 +21,10 @@ import {
   Info,
   Loader2,
   Map as MapIcon,
+  Network,
   RefreshCw,
   Filter,
+  HelpCircle,
   Search,
   Share2,
   Table2,
@@ -46,7 +42,9 @@ import HudClock from "@/components/HudClock";
 import MapLayers, { type LayerToggle } from "@/components/MapLayers";
 import { INFRA_DISABLED_NOTICE, infraLayersOff } from "@/lib/infra-gate";
 import MapLegend from "@/components/MapLegend";
+import OrientationCard, { hasSeenOrientation } from "@/components/OrientationCard";
 import SituationBar from "@/components/SituationBar";
+import StatusStrip from "@/components/StatusStrip";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,15 +55,13 @@ import {
   getFacilities,
   getPowerLines,
   getFacilityTiles,
-  getFires,
-  getFrontline,
-  getInternetOutages,
-  getSpaceWeather,
   getThreats,
-  getWeather,
 } from "@/lib/infra.functions";
+import { platformEntityId } from "@/lib/cases";
+import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
+import { projectThreats } from "@/lib/threat-eta";
 import {
   buildThreatGraph,
   correlateAirThreats,
@@ -92,6 +88,9 @@ import {
 const InfraMap = lazy(() => import("@/components/InfraMap"));
 const AnalyticsView = lazy(() => import("@/components/AnalyticsView"));
 const ThreatGraph = lazy(() => import("@/components/ThreatGraph"));
+const ThreatChains = lazy(() => import("@/components/ThreatChains"));
+const CasePanel = lazy(() => import("@/components/CasePanel"));
+const PlatformPanel = lazy(() => import("@/components/PlatformPanel"));
 
 const TIME_WINDOWS = [
   { id: "24h", label: "24 год", hours: 24 },
@@ -100,6 +99,19 @@ const TIME_WINDOWS = [
   { id: "30d", label: "30 днів", hours: 720 },
 ] as const;
 type WindowId = (typeof TIME_WINDOWS)[number]["id"];
+
+// Короткі підписи типів цілей для панелей (повні силуети — на карті).
+const AIR_TYPE_LABEL: Record<string, string> = {
+  shahed: "Ударний БпЛА",
+  reactive: "Реактивний БпЛА",
+  cruise: "Крилата ракета",
+  missile: "Ракета",
+  ballistic: "Балістика",
+  kab: "КАБ",
+  recon: "Розвідник",
+  aircraft: "Авіація",
+  unknown: "Тип невідомий",
+};
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -264,46 +276,9 @@ function Console() {
     staleTime: 12 * 1000,
     refetchInterval: 15 * 1000,
   });
-  // Лінія фронту (DeepState) — оновлюється рідко, тримаємо довгий інтервал.
-  const frontlineFn = useServerFn(getFrontline);
-  const frontlineQuery = useQuery({
-    queryKey: ["frontline"],
-    queryFn: () => frontlineFn(),
-    staleTime: 30 * 60 * 1000,
-    refetchInterval: 30 * 60 * 1000,
-  });
-  // Активні пожежі (NASA FIRMS) — оновлюються кілька разів на добу.
-  const firesFn = useServerFn(getFires);
-  const firesQuery = useQuery({
-    queryKey: ["fires"],
-    queryFn: () => firesFn(),
-    staleTime: 20 * 60 * 1000,
-    refetchInterval: 20 * 60 * 1000,
-  });
-  // Космічна погода (NOAA Kp) — індикатор геомагнітних бур (ГНСС/КХ).
-  const spaceWeatherFn = useServerFn(getSpaceWeather);
-  const spaceWeatherQuery = useQuery({
-    queryKey: ["space-weather"],
-    queryFn: () => spaceWeatherFn(),
-    staleTime: 20 * 60 * 1000,
-    refetchInterval: 20 * 60 * 1000,
-  });
-  // Інтернет-збої по Україні (IODA) — сигнал падіння звʼязності.
-  const outagesFn = useServerFn(getInternetOutages);
-  const outagesQuery = useQuery({
-    queryKey: ["internet-outages"],
-    queryFn: () => outagesFn(),
-    staleTime: 10 * 60 * 1000,
-    refetchInterval: 10 * 60 * 1000,
-  });
-  // Погода над Києвом (open-meteo) — вітер для БпЛА/пожеж.
-  const weatherFn = useServerFn(getWeather);
-  const weatherQuery = useQuery({
-    queryKey: ["weather"],
-    queryFn: () => weatherFn(),
-    staleTime: 15 * 60 * 1000,
-    refetchInterval: 15 * 60 * 1000,
-  });
+  // Ситуаційні фонові фіди (фронт, пожежі, Kp, інтернет-збої, погода) — в одному
+  // місці, окремим хуком data-plane.
+  const feeds = useSituationalFeeds();
   /*
    * Звʼязок з аналітичною платформою. Ключ лишається на сервері, тому і статус, і
    * саме надсилання — серверні функції. Незаданий звʼязок — штатний стан:
@@ -332,12 +307,21 @@ function Console() {
   const [query, setQuery] = useState("");
   const [showLinks, setShowLinks] = useState(true);
   const [showGraph, setShowGraph] = useState(false);
+  /*
+   * Панель звʼязків відкривається списком, а не графом. Питання під час
+   * нальоту — «що під ударом і скільки часу», і на нього відповідає рядок із
+   * назвою; граф вузлів корисний вужче — коли треба побачити спільну ціль — і
+   * тому стоїть другою вкладкою.
+   */
+  const [linkView, setLinkView] = useState<"list" | "graph">("list");
   const [showFrontline, setShowFrontline] = useState(true);
   const [showFires, setShowFires] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
   const [showTable, setShowTable] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showPlatform, setShowPlatform] = useState(false);
   const [focus, setFocus] = useState<Focus>(null);
   const [operatorId, setOperatorId] = useState<string | null>(null);
   const [eventKind, setEventKind] = useState<keyof typeof EVENT_KINDS | null>(null);
@@ -348,17 +332,15 @@ function Console() {
    * Вимикач шарів інфраструктури. Рішення ухвалює сервер (`infra-gate.ts`),
    * клієнт лише дізнається про нього з відповіді: так порожній набір не
    * читається як «джерело лежить», і ніхто не йде лагодити те, що вимкнули
-   * навмисно.
-   */
-  /*
-   * Поки відповіді немає — вважаємо вимкненим, а не увімкненим.
-   *
-   * Сторінка збирається на сервері до того, як запит устигне відповісти, тож
-   * зворотне усталене значення давало б кадр, у якому вся обстановка шарів
-   * інфраструктури вже намальована (нехай і порожня), і лише потім зникала.
-   * Помилятися тут треба в бік «не показувати».
+   * навмисно. Поки відповіді немає — вважаємо вимкненим.
    */
   const infraDisabled = infraLayersOff(facilitiesQuery.data);
+
+  // Перше відкриття: показуємо орієнтир, щоб консоль не була «незрозумілою».
+  // Тільки на клієнті — інакше SSR і гідратація розійшлися б.
+  useEffect(() => {
+    if (!hasSeenOrientation()) setShowHelp(true);
+  }, []);
 
   const allFacilities = useMemo(() => {
     const base = facilitiesQuery.data?.facilities ?? [];
@@ -376,8 +358,8 @@ function Console() {
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
   const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
-  const frontline = useMemo(() => frontlineQuery.data?.areas ?? [], [frontlineQuery.data]);
-  const fires = useMemo(() => firesQuery.data?.fires ?? [], [firesQuery.data]);
+  const frontline = feeds.frontline;
+  const fires = feeds.fires;
   // Одна привʼязка на консоль: її потребують і тривоги, і фокус по області.
   const regionOf = useMemo(() => assignRegions(allFacilities, regions), [allFacilities, regions]);
   const alarmIds = useMemo(() => {
@@ -457,8 +439,8 @@ function Console() {
   }, [allFacilities, active, query, focus, riskIds, alarmIds, regionOf]);
 
   const summary = useMemo(
-    () => summarize(allFacilities, riskMap, events, activeAlarms),
-    [allFacilities, riskMap, events, activeAlarms],
+    () => summarize(allFacilities, riskMap, events, activeAlarms, alarmIds.size),
+    [allFacilities, riskMap, events, activeAlarms, alarmIds],
   );
 
   /*
@@ -477,6 +459,14 @@ function Console() {
   );
   const airThreatSummary = useMemo(() => summarizeAirThreat(airThreat), [airThreat]);
   const threatGraph = useMemo(() => buildThreatGraph(airThreat, threats), [airThreat, threats]);
+
+  // Проєкція курсу: коли джерело дає heading, рахуємо коридор підльоту й час до
+  // критичних обʼєктів. Це відповідь на питання «куди летить», а не лише «що
+  // поруч» — найцінніший зріз під час нальоту.
+  const projections = useMemo(
+    () => projectThreats(threats, allFacilities),
+    [threats, allFacilities],
+  );
 
   const atRiskList = useMemo(
     () =>
@@ -504,6 +494,18 @@ function Console() {
   const impactedIds = useMemo(() => outage?.lost ?? new Set<string>(), [outage]);
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
+
+  /*
+   * Зіставлення «ідентифікатор платформи → обʼєкт консолі» для приколотих у
+   * справах. Справа переживає сеанс, а завантажений набір обʼєктів — ні, тож
+   * зіставлення часткове за побудовою: що не завантажене, лишається
+   * ідентифікатором і не вдає з себе посилання.
+   */
+  const platformIds = useMemo(() => {
+    const m = new Map<string, Facility>();
+    for (const f of allFacilities) m.set(platformEntityId(f.id), f);
+    return m;
+  }, [allFacilities]);
   const selectedAnalytics = selectedId ? (analysis.perFacility.get(selectedId) ?? null) : null;
   /*
    * Досьє будується з усього набору, а не з відфільтрованого: воно описує
@@ -641,6 +643,9 @@ function Console() {
         age: unknownAge,
       }),
       statusOf({ id: "zones", label: "Полігони тривог", count: zones.length, age: unknownAge }),
+      // Ситуаційні фонові фіди — той самий data-plane, та сама панель: оператор
+      // бачить стан усіх джерел в одному місці, а не по кутах.
+      ...feeds.statuses,
     ];
   }, [
     infraDisabled,
@@ -660,6 +665,7 @@ function Console() {
     regions,
     threats.length,
     zones.length,
+    feeds.statuses,
   ]);
   const { hiddenLinks, shownLinks } = useMemo(() => {
     const known = new Set(allFacilities.map((f) => f.id));
@@ -686,81 +692,14 @@ function Console() {
         звʼязків, що спираються на факт. Три речі, від яких залежить, чи можна
         діяти на побаченому.
       */}
-      <div
-        className={`flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b px-4 font-mono text-[10px] uppercase tracking-[0.16em] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center ${
-          summary.level === "critical"
-            ? "border-red-500/40 bg-red-500/10 text-red-300"
-            : summary.level === "elevated"
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-              : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-        }`}
-      >
-        <span>{summary.label}</span>
-        <span className="opacity-40">·</span>
-        <span className="flex items-center gap-1.5">
-          <span className={`size-1.5 rounded-full ${SOURCE_STATE_TONE[worstSource]}`} />
-          джерела: {SOURCE_STATE_LABEL[worstSource]}
-        </span>
-        <span className="opacity-40">·</span>
-        <span className="hidden sm:inline">
-          факт {Math.round(groundedness.observedShare * 100)}% звʼязків
-        </span>
-        {airThreatSummary.total > 0 ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span className="flex items-center gap-1.5 text-red-300">
-              <span className="size-1.5 animate-pulse rounded-full bg-red-400" />
-              повітря: {airThreatSummary.total} обʼєкт(ів) під загрозою
-              {airThreatSummary.critical > 0 ? `, ${airThreatSummary.critical} критич.` : ""}
-            </span>
-          </>
-        ) : null}
-        {spaceWeatherQuery.data && !spaceWeatherQuery.data.degraded ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span
-              className={`hidden items-center gap-1.5 sm:flex ${
-                spaceWeatherQuery.data.level === "storm"
-                  ? "text-red-300"
-                  : spaceWeatherQuery.data.level === "unsettled"
-                    ? "text-amber-300"
-                    : "text-muted-foreground"
-              }`}
-              title="Планетарний Kp-індекс (NOAA). Бурі погіршують ГНСС/навігацію."
-            >
-              Kp {spaceWeatherQuery.data.kp}
-              {spaceWeatherQuery.data.gScale > 0 ? ` · буря G${spaceWeatherQuery.data.gScale}` : ""}
-            </span>
-          </>
-        ) : null}
-        {outagesQuery.data && !outagesQuery.data.degraded && outagesQuery.data.count > 0 ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span
-              className="hidden items-center gap-1.5 text-amber-300 md:flex"
-              title="Інтернет-збої по Україні за 24 год (IODA, Georgia Tech). Падіння звʼязності часто супроводжує удари по інфраструктурі."
-            >
-              інтернет-збої: {outagesQuery.data.count} за 24 год
-            </span>
-          </>
-        ) : null}
-        {weatherQuery.data && !weatherQuery.data.degraded ? (
-          <>
-            <span className="opacity-40">·</span>
-            <span
-              className="hidden items-center gap-1.5 text-muted-foreground lg:flex"
-              title="Погода над Києвом (open-meteo). Вітер важить для роботи БпЛА й поширення пожеж."
-            >
-              Київ {weatherQuery.data.tempC}° · вітер {weatherQuery.data.windKmh} км/год{" "}
-              {
-                ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"][
-                  Math.round((((weatherQuery.data.windDir % 360) + 360) % 360) / 45) % 8
-                ]
-              }
-            </span>
-          </>
-        ) : null}
-      </div>
+      <StatusStrip
+        worstSource={worstSource}
+        observedShare={groundedness.observedShare}
+        showInfra={!infraDisabled}
+        spaceWeather={feeds.spaceWeather}
+        outages={feeds.outages}
+        weather={feeds.weather}
+      />
 
       <header className="z-20 grid h-14 shrink-0 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -842,6 +781,17 @@ function Console() {
             </Link>
           </Button>
           <Button
+            size="sm"
+            variant="ghost"
+            title="Як читати консоль"
+            aria-label="Як читати консоль"
+            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
+            onClick={() => setShowHelp(true)}
+          >
+            <HelpCircle className="size-3" />
+            <span className="hidden sm:inline">Як читати</span>
+          </Button>
+          <Button
             asChild
             size="sm"
             variant="ghost"
@@ -859,10 +809,12 @@ function Console() {
         summary={summary}
         loading={loading}
         threats={threats.length}
+        airThreat={airThreatSummary}
         focus={focus}
         onFocus={setFocus}
         eventKind={eventKind}
         onEventKind={setEventKind}
+        showInfra={!infraDisabled}
       />
 
       {/*
@@ -1030,11 +982,11 @@ function Console() {
                 disabled={threatGraph.nodes.length === 0}
                 className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
                   showGraph
-                    ? "border-red-500/60 text-red-300"
+                    ? "border-primary/60 text-foreground"
                     : "border-border text-muted-foreground"
                 }`}
               >
-                <Share2 className="size-3.5" /> Граф загроз «ціль → обʼєкт»
+                <Share2 className="size-3.5" /> Що під загрозою з повітря
                 {threatGraph.nodes.length > 0 ? (
                   <span className="ml-auto font-mono text-[10px] opacity-70">
                     {threatGraph.nodes.length}
@@ -1069,16 +1021,26 @@ function Console() {
                 <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                   Аналітична платформа
                 </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-1.5 h-7 px-2 font-mono text-[10px] uppercase"
-                  disabled={pushState.status === "sending" || allFacilities.length === 0}
-                  onClick={() => void sendToPlatform()}
-                >
-                  <Share2 className="size-3" />
-                  {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
-                </Button>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 font-mono text-[10px] uppercase"
+                    disabled={pushState.status === "sending" || allFacilities.length === 0}
+                    onClick={() => void sendToPlatform()}
+                  >
+                    <Share2 className="size-3" />
+                    {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 font-mono text-[10px] uppercase"
+                    onClick={() => setShowPlatform(true)}
+                  >
+                    <Network className="size-3" /> Аналітика
+                  </Button>
+                </div>
                 {pushState.status === "done" ? (
                   <p
                     className={`mt-1.5 text-[10px] leading-relaxed ${pushState.ok ? "text-muted-foreground" : "text-destructive"}`}
@@ -1133,8 +1095,8 @@ function Console() {
             ) : null}
 
             <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
-              Дані: OpenStreetMap (обʼєкти), NASA EONET та GDACS (події), USGS (сейсміка),
-              detoyshahed.in.ua (тривоги, полігони, повітряні цілі — OSINT).
+              Дані: {infraDisabled ? "" : "OpenStreetMap (обʼєкти), "}NASA EONET та GDACS (події),
+              USGS (сейсміка), detoyshahed.in.ua (тривоги, полігони, повітряні цілі — OSINT).
               {facilitiesQuery.data?.fetchedAt
                 ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
                 : ""}
@@ -1256,7 +1218,7 @@ function Console() {
                       : [
                           {
                             key: "graph",
-                            label: "Граф загроз",
+                            label: "Під загрозою",
                             active: showGraph,
                             disabled: threatGraph.nodes.length === 0,
                             color: "#ff4d4d",
@@ -1275,22 +1237,46 @@ function Console() {
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
-                  <div className="flex items-center justify-between border-b border-border px-4 py-2">
-                    <div className="flex items-center gap-3 font-mono text-[11px] uppercase tracking-[0.1em]">
-                      <span className="flex items-center gap-1.5 text-red-300">
-                        <Share2 className="size-3.5" /> Граф звʼязків: загроза → обʼєкт → канал
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+                    <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] uppercase tracking-[0.1em]">
+                      <span className="flex items-center gap-1.5 text-foreground">
+                        <Share2 className="size-3.5" /> Що під загрозою з повітря
                       </span>
-                      <span className="hidden items-center gap-2 text-[9px] text-muted-foreground sm:flex">
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-red-500" /> обʼєкт
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-amber-400" /> ціль
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-slate-500" /> канал
-                        </span>
+                      <span className="flex overflow-hidden rounded-md border border-border">
+                        {(
+                          [
+                            ["list", "Список"],
+                            ["graph", "Граф"],
+                          ] as const
+                        ).map(([id, label]) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setLinkView(id)}
+                            className={`px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] transition-colors ${
+                              linkView === id
+                                ? "bg-primary/15 text-foreground"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
                       </span>
+                      {linkView === "graph" ? (
+                        <span className="hidden items-center gap-2 text-[9px] text-muted-foreground sm:flex">
+                          <span className="flex items-center gap-1">
+                            <span className="size-2 rounded-full bg-red-500" /> обʼєкт
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="size-2 rounded-full bg-amber-400" /> ціль
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="size-2 rounded-full bg-slate-500" /> канал
+                          </span>
+                          <span>наведіть — підсвітить ланцюжок</span>
+                        </span>
+                      ) : null}
                     </div>
                     <Button
                       size="sm"
@@ -1309,16 +1295,39 @@ function Console() {
                         </div>
                       }
                     >
-                      <ThreatGraph
-                        graph={threatGraph}
-                        onSelectAsset={(id) => {
-                          setSelectedId(id);
-                          setShowGraph(false);
-                        }}
-                      />
+                      {linkView === "list" ? (
+                        <ThreatChains
+                          correlations={airThreat}
+                          projections={projections}
+                          onSelect={(id) => {
+                            setSelectedId(id);
+                            setShowGraph(false);
+                          }}
+                        />
+                      ) : (
+                        <ThreatGraph
+                          graph={threatGraph}
+                          onSelectAsset={(id) => {
+                            setSelectedId(id);
+                            setShowGraph(false);
+                          }}
+                        />
+                      )}
                     </Suspense>
                   </div>
                 </div>
+              ) : null}
+
+              {showPlatform ? (
+                <Suspense
+                  fallback={
+                    <div className="absolute inset-0 z-[600] flex items-center justify-center bg-background/95">
+                      <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                    </div>
+                  }
+                >
+                  <PlatformPanel onClose={() => setShowPlatform(false)} />
+                </Suspense>
               ) : null}
             </main>
 
@@ -1341,6 +1350,46 @@ function Console() {
 
           {/* Right panel */}
           <aside className="order-3 flex shrink-0 flex-col overflow-y-auto border-border p-4 lg:w-80 lg:border-l">
+            {projections.length > 0 ? (
+              <section className="mb-5">
+                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
+                  <Waypoints className="size-3" /> Коридор підльоту
+                  <span
+                    className="ml-auto rounded bg-red-500/15 px-1.5 py-0.5 text-red-300"
+                    title="Критичні обʼєкти на курсі цілей із відомим heading — оцінка часу за типовою швидкістю типу"
+                  >
+                    {projections.length}
+                  </span>
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {projections.map((p) => (
+                    <button
+                      key={p.facility.id}
+                      onClick={() => setSelectedId(p.facility.id)}
+                      className="flex w-full items-center gap-2 rounded border border-red-500/30 bg-red-500/5 p-2 text-left transition-colors hover:bg-red-500/10"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[12px] text-foreground">
+                          {p.facility.name}
+                        </span>
+                        <span className="block font-mono text-[10px] text-muted-foreground">
+                          {AIR_TYPE_LABEL[p.threat.type ?? "unknown"]} · {p.distanceKm} км · відхил.{" "}
+                          {p.offAxisDeg}°
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right font-mono">
+                        <span className="block text-[13px] font-semibold text-red-300">
+                          {p.etaMin < 1 ? "<1" : `~${p.etaMin}`}
+                        </span>
+                        <span className="block text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
+                          хв
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
             {airThreat.length > 0 ? (
               <section className="mb-5">
                 <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
@@ -1600,6 +1649,21 @@ function Console() {
               </section>
             )}
 
+            {/*
+              Справи стоять одразу під інспектором, бо саме там зʼявляється те,
+              що варто зберегти. Панель мовчить, коли звʼязок із платформою не
+              налаштований: консоль самодостатня, і це штатний стан.
+            */}
+            <Suspense fallback={null}>
+              <div className="mb-5">
+                <CasePanel
+                  facility={selected ?? undefined}
+                  knownEntities={platformIds}
+                  onOpenFacility={setSelectedId}
+                />
+              </div>
+            </Suspense>
+
             <section className="min-h-0">
               <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                 <Activity className="size-3" /> Стрічка подій
@@ -1634,6 +1698,10 @@ function Console() {
           </aside>
         </div>
       )}
+
+      {showHelp ? (
+        <OrientationCard onClose={() => setShowHelp(false)} showInfra={!infraDisabled} />
+      ) : null}
     </div>
   );
 }
