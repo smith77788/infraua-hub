@@ -52,11 +52,17 @@ export interface Verification {
 /**
  * Рівень верифікації позначки для показу поруч із ціллю: підтверджене
  * незалежними джерелами не має виглядати як одиночна непідтверджена чутка.
- * Спирається на наявну оцінку Адміралтейства, лише зводячи її до рівня, який
- * можна показати кольором.
+ *
+ * Важливо: основне джерело консолі — агрегатор (neptun), який САМ зводить
+ * багато Telegram-каналів в одну позначку й віддає це числом `reports`
+ * (скільки каналів) та власним рівнем `confidence`. Тому не можна судити лише
+ * за роллю рядка-джерела «neptun.in.ua» (вона невідома) — інакше КОЖНА ціль
+ * виглядала б непідтвердженою. Підтвердження тут несуть `reports` і
+ * `confidence`, а роль джерела лишається окремим, сильнішим сигналом (офіційний
+ * канал), коли він є.
  */
 export function verifyThreat(
-  threat: Pick<Threat, "sources" | "source" | "reports">,
+  threat: Pick<Threat, "sources" | "source" | "reports" | "confidence">,
   roleOf: (source: string) => SourceRole,
   officialCorroboration = false,
 ): Verification {
@@ -69,17 +75,35 @@ export function verifyThreat(
     ...(threat.reports != null ? { reports: threat.reports } : {}),
   });
   const roles = sources.map(roleOf);
+  const reports = threat.reports ?? 0;
+  const conf = (threat.confidence ?? "").toLowerCase();
+  const knownSource = roles.some((r) => r !== "unknown");
+
+  const reasons: string[] = [];
   let level: VerificationLevel;
-  if (roles.includes("official")) level = "official";
-  else if (a.independentSources >= 2) level = "corroborated";
-  else if (a.reliability === "F") level = "unverified";
-  else level = "single";
+  if (roles.includes("official")) {
+    level = "official";
+    reasons.push("серед джерел є офіційний канал");
+  } else if (a.independentSources >= 2 || reports >= 3 || conf === "high") {
+    level = "corroborated";
+    if (a.independentSources >= 2) reasons.push(`${a.independentSources} незалежних джерела`);
+    if (reports >= 3) reasons.push(`зведено з ${reports} повідомлень каналів`);
+    if (conf === "high") reasons.push("джерело оцінює як високу впевненість");
+  } else if (reports >= 2 || conf === "medium" || knownSource) {
+    level = "single";
+    if (reports >= 2) reasons.push(`${reports} повідомлення`);
+    else reasons.push("одне джерело, без незалежного підтвердження");
+    if (conf === "medium") reasons.push("середня впевненість джерела");
+  } else {
+    level = "unverified";
+    reasons.push("непідтверджене одиночне повідомлення");
+  }
   return {
     level,
     label: VERIFICATION_LABEL[level],
     code: a.code,
     independentSources: a.independentSources,
-    reasons: a.reasons,
+    reasons,
   };
 }
 

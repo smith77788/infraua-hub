@@ -24,6 +24,7 @@ import {
 } from "@/lib/air";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { type AlertRegion } from "@/lib/alerts";
+import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -32,6 +33,7 @@ import {
   type GraphEdge,
   type InfraEvent,
 } from "@/lib/infra-types";
+import { roleOfSource } from "@/lib/osint-sources";
 
 interface Props {
   facilities: Facility[];
@@ -146,10 +148,51 @@ const TYPE_STYLE: Record<ThreatType, { color: string; glyph: string; label: stri
   },
 };
 
+// Колір і значок рівня верифікації (анти-фейк) для попапа цілі.
+const VERIFICATION_COLOR: Record<VerificationLevel, string> = {
+  official: "#34d399", // офіційне джерело — зелений
+  corroborated: "#22d3ee", // підтверджено незалежними — блакитний
+  single: "#fbbf24", // одне джерело — жовтий
+  unverified: "#f87171", // надійність невідома — червоний
+};
+const VERIFICATION_MARK: Record<VerificationLevel, string> = {
+  official: "★",
+  corroborated: "✔",
+  single: "?",
+  unverified: "!",
+};
+
 const threatIconCache = new Map<string, L.DivIcon>();
-function threatIcon(type: ThreatType, fresh: Freshness, reports: number): L.DivIcon {
+/**
+ * Позначка цілі, ПОВЕРНУТА за курсом. Гліфи намальовані вістрям на північ
+ * (0°), тож поворот на `heading` градусів (за годинниковою) спрямовує їх
+ * уздовж траєкторії — так само, як пунктирний вектор курсу. Раніше поворот не
+ * застосовувався, і всі стрілки дивилися вгору незалежно від напрямку руху.
+ *
+ * `heading === null` — курсу ми не знаємо. Тоді НЕ вигадуємо напрямок: значок
+ * без стрілки не бреше про рух (див. ROTATABLE).
+ */
+const ROTATABLE: Partial<Record<ThreatType, boolean>> = {
+  shahed: true,
+  reactive: true,
+  missile: true,
+  cruise: true,
+  ballistic: true,
+  kab: true,
+  recon: true,
+  aircraft: true,
+};
+function threatIcon(
+  type: ThreatType,
+  fresh: Freshness,
+  reports: number,
+  heading: number | null,
+): L.DivIcon {
   const badge = reports > 1 ? Math.min(reports, 99) : 0;
-  const key = `${type}|${fresh}|${badge}`;
+  // Курс округлюємо до 5° — досить для ока й тримає кеш маленьким.
+  const rot =
+    heading != null && ROTATABLE[type] ? Math.round((((heading % 360) + 360) % 360) / 5) * 5 : null;
+  const key = `${type}|${fresh}|${badge}|${rot ?? "x"}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
   const { color, glyph } = TYPE_STYLE[type];
@@ -160,8 +203,11 @@ function threatIcon(type: ThreatType, fresh: Freshness, reports: number): L.DivI
     badge > 0
       ? `<b style="position:absolute;top:-5px;right:-5px;min-width:13px;height:13px;padding:0 2px;border-radius:7px;background:${color};color:#0a0e14;font:700 9px 'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0a0e14">${badge}</b>`
       : "";
+  // Повертаємо лише гліф (SVG), а не весь контейнер — значок-лічильник має
+  // лишатися вертикальним і читабельним.
+  const svgTransform = rot != null ? ` style="transform:rotate(${rot}deg)"` : "";
   const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round">${glyph}</svg>${badgeHtml}</div>`;
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg>${badgeHtml}</div>`;
   const icon = L.divIcon({
     html,
     className: "threat-pin",
@@ -436,7 +482,12 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             ) : null}
             <Marker
               position={[t.lat, t.lon]}
-              icon={threatIcon(type, fresh, t.reports ?? 1)}
+              icon={threatIcon(
+                type,
+                fresh,
+                t.reports ?? 1,
+                hasCourse ? (t.heading as number) : null,
+              )}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
             >
               <Popup>
@@ -457,6 +508,18 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                       Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
                     </p>
                   ) : null}
+                  {(() => {
+                    // Анти-фейк: наскільки цій позначці можна вірити, словами
+                    // й кольором. Одиночне непідтверджене повідомлення не має
+                    // виглядати як підтверджена ціль.
+                    const v = verifyThreat(t, roleOfSource);
+                    return (
+                      <p className="font-medium" style={{ color: VERIFICATION_COLOR[v.level] }}>
+                        {VERIFICATION_MARK[v.level]} {v.label}
+                        {v.independentSources > 1 ? ` · ${v.independentSources} незалежних` : ""}
+                      </p>
+                    );
+                  })()}
                   {t.confidence ? <p className="opacity-70">Впевненість: {t.confidence}</p> : null}
                   {seen ? (
                     <p className="opacity-70">

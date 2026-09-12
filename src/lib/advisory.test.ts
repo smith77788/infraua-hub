@@ -58,6 +58,28 @@ describe("verifyThreat", () => {
     );
     expect(v.level).toBe("single");
   });
+
+  it("агрегатор зі many звітами читається як підтверджений (neptun)", () => {
+    // neptun.in.ua — невідома роль, але зводить багато каналів (reports).
+    const v = verifyThreat(
+      { source: "neptun.in.ua", reports: 11, confidence: "medium" },
+      () => "unknown",
+    );
+    expect(v.level).toBe("corroborated");
+  });
+
+  it("висока впевненість джерела — підтверджено", () => {
+    const v = verifyThreat(
+      { source: "neptun.in.ua", reports: 1, confidence: "high" },
+      () => "unknown",
+    );
+    expect(v.level).toBe("corroborated");
+  });
+
+  it("непідтверджене одиночне повідомлення без сигналів — unverified", () => {
+    const v = verifyThreat({ source: "хтось", reports: 1 }, () => "unknown");
+    expect(v.level).toBe("unverified");
+  });
 });
 
 describe("skyState", () => {
