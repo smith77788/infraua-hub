@@ -44,7 +44,11 @@ def evaluate(
         t = tracks.get(tid)
         if not t or not hits:
             continue
-        conf = min(0.99, t.confidence + (0.08 if getattr(t, "in_zone", False) else 0.0))
+        # Ефективна впевненість рахується в одному місці — у треку, разом зі
+        # звіркою двох незалежних джерел тривог. Тут її лише читаємо, щоб не
+        # завести другу шкалу поруч із першою.
+        td = t.to_dict()
+        conf = td["confidence"]
         if conf < min_conf:
             continue
         # найпріоритетніший обʼєкт: критичні категорії раніше, потім за ETA
@@ -59,16 +63,21 @@ def evaluate(
             {
                 "id": f"{tid}:{best['name']}",
                 "track_id": tid,
-                "label": t.to_dict()["label"],
+                "label": td["label"],
                 "asset": best["name"],
                 "asset_category": best.get("category_label", best["category"]),
                 "eta_min": best["eta_min"],
                 "severity": sev,
                 "confidence": round(conf, 2),
                 "in_zone": bool(getattr(t, "in_zone", False)),
+                "agreement": td.get("agreement", "unknown"),
+                "agreement_label": td.get("agreement_label", ""),
+                "oblast": td.get("oblast"),
+                "freshness": td.get("freshness"),
+                "age_sec": td.get("age_sec"),
                 "lat": best["lat"],
                 "lon": best["lon"],
-                "reason": f"{t.to_dict()['label']} у коридорі на «{best['name']}», ETA ~{round(best['eta_min'])} хв",
+                "reason": f"{td['label']} у коридорі на «{best['name']}», ETA ~{round(best['eta_min'])} хв",
             }
         )
     out.sort(key=lambda a: (order.get(a["severity"], 3), a["eta_min"]))

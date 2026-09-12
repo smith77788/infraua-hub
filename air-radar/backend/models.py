@@ -37,6 +37,14 @@ class TacticalObject:
     count: int = 1
     ts: float = field(default_factory=time.time)
     ttl: int = DEFAULT_TTL_SEC
+    # Адміністративна привʼязка. `oblast_basis` розрізняє спостережене
+    # (джерело дало адміністративний ланцюг) і виведене (найближчий центр).
+    oblast: str | None = None
+    oblast_basis: str = "unknown"  # observed | inferred | unknown
+    # Контекст доповіді: одне повідомлення OSINT може нести кілька цілей.
+    report_id: str = ""
+    report_siblings: int = 0
+    route: str | None = None  # «Рівне → Гоща», коли доповідь дала ланцюг
 
     @property
     def label(self) -> str:

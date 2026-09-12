@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -36,12 +37,16 @@ async def _lifespan(app: FastAPI):  # noqa: ANN201
     log.info("Гео-база завантажена: %d назв", len(geo.index))
     _tasks.append(asyncio.create_task(broadcaster.motion_loop()))
     if settings.enable_bridge:
+        from .alerts_ubilling import run_oblast_alerts
         from .bridge_detoyshahed import run_bridge
 
         _tasks.append(
             asyncio.create_task(run_bridge(broadcaster, None, settings.bridge_poll_sec))
         )
-        log.info("Bridge detoyshahed увімкнено (кожні %d c)", settings.bridge_poll_sec)
+        # Друге НЕЗАЛЕЖНЕ джерело тривог — щоб «підтвердження» мало з чим
+        # звірятися. Окремий цикл: падіння одного джерела не тягне інше.
+        _tasks.append(asyncio.create_task(run_oblast_alerts(broadcaster)))
+        log.info("Bridge detoyshahed увімкнено (кожні %d c) + обласні тривоги", settings.bridge_poll_sec)
     if settings.telethon_ready:
         from .ingest_telethon import run_telethon
 
@@ -102,6 +107,68 @@ async def api_history(minutes: float = 60):
     return JSONResponse({"minutes": minutes, "paths": store.recent_paths(minutes)})
 
 
+@app.get("/api/regions")
+async def api_regions():
+    """Обласний зріз обстановки: де саме зараз важко."""
+    from . import rollup
+
+    return JSONResponse(rollup.compute(broadcaster))
+
+
+@app.get("/api/sources")
+async def api_sources():
+    """Реєстр джерел: хто говорить і чого це варте (походження в UI)."""
+    from . import sources
+
+    return JSONResponse(
+        {
+            "sources": sources.registry(),
+            "oblast_alerts": broadcaster.oblast_alerts,
+            "oblast_alerts_age_sec": (
+                round(time.time() - broadcaster.oblast_alerts_ts)
+                if broadcaster.oblast_alerts_ts
+                else None
+            ),
+        }
+    )
+
+
+@app.get("/api/dossier/{track_id}")
+async def api_dossier(track_id: str):
+    """Досьє цілі: стан, походження, історія й що їй загрожує попереду."""
+    t = broadcaster.tracks.tracks.get(track_id)
+    if not t:
+        return JSONResponse({"error": "не знайдено", "id": track_id}, status_code=404)
+    d = t.to_dict()
+    d["history"] = [{"lat": la, "lon": lo, "ts": ts} for la, lo, ts in t.history[-40:]]
+    d["threatened"] = broadcaster.threatened.get(track_id, [])
+    d["stored_track"] = store.track(track_id, limit=100)
+    return JSONResponse(d)
+
+
+@app.get("/api/sitrep")
+async def api_sitrep():
+    """Зведення обстановки одним обʼєктом — для експорту та передачі далі."""
+    from . import metrics, rollup
+
+    roll = rollup.compute(broadcaster)
+    return JSONResponse(
+        {
+            "generated_at": time.time(),
+            "summary": {
+                "tracks": broadcaster.object_count,
+                "zones": len(broadcaster.zones),
+                "alerts": len(broadcaster.alerts_feed),
+                "oblasts_with_alert": roll["oblasts_with_alert"],
+            },
+            "regions": roll["regions"],
+            "alerts": broadcaster.alerts_feed,
+            "tracks": [t.to_dict() for t in broadcaster.tracks.tracks.values()],
+            "metrics": metrics.compute(broadcaster),
+        }
+    )
+
+
 @app.get("/api/health")
 async def api_health():
     return {
@@ -111,6 +178,8 @@ async def api_health():
         "clients": len(broadcaster.clients),
         "geo_names": len(geo.index),
         "telethon": settings.telethon_ready,
+        "oblast_alert_source": bool(broadcaster.oblast_alerts),
+        "oblasts_with_alert": sum(1 for v in broadcaster.oblast_alerts.values() if v),
     }
 
 

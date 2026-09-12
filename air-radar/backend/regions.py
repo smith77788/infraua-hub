@@ -86,3 +86,100 @@ OBLAST_STEMS: list[tuple[list[str], str]] = [
     (["чернівецьк", "буковин"], "Чернівці"),
     (["чернігівськ", "чернігівщин"], "Чернігів"),
 ]
+
+
+# ── Області як одиниця зведення ──────────────────────────────────────────
+# Навіщо: джерело віддає у `display_name` адміністративний ланцюг
+# («Богодухів, Богодухівський район, Харківська область»), а незалежне
+# джерело тривог (ubilling) оперує тими самими назвами областей. Це дає
+# спільний ключ для зведення обстановки та звірки двох джерел.
+#
+# Ключі звірені з живою видачею обох джерел (12.09.2026): формат
+# «Харківська область», окремо «м. Київ» і «Севастополь».
+
+# Канонічна назва області → центр (для наближеного визначення області за
+# координатою, коли адміністративний ланцюг недоступний).
+OBLAST_CENTERS: dict[str, tuple[float, float]] = {
+    "Вінницька область": CITIES["Вінниця"],
+    "Волинська область": CITIES["Луцьк"],
+    "Дніпропетровська область": CITIES["Дніпро"],
+    "Донецька область": CITIES["Донецьк"],
+    "Житомирська область": CITIES["Житомир"],
+    "Закарпатська область": CITIES["Ужгород"],
+    "Запорізька область": CITIES["Запоріжжя"],
+    "Івано-Франківська область": CITIES["Івано-Франківськ"],
+    "Київська область": CITIES["Київ"],
+    "Кіровоградська область": CITIES["Кропивницький"],
+    "Луганська область": CITIES["Луганськ"],
+    "Львівська область": CITIES["Львів"],
+    "Миколаївська область": CITIES["Миколаїв"],
+    "Одеська область": CITIES["Одеса"],
+    "Полтавська область": CITIES["Полтава"],
+    "Рівненська область": CITIES["Рівне"],
+    "Сумська область": CITIES["Суми"],
+    "Тернопільська область": CITIES["Тернопіль"],
+    "Харківська область": CITIES["Харків"],
+    "Херсонська область": CITIES["Херсон"],
+    "Хмельницька область": CITIES["Хмельницький"],
+    "Черкаська область": CITIES["Черкаси"],
+    "Чернівецька область": CITIES["Чернівці"],
+    "Чернігівська область": CITIES["Чернігів"],
+    "м. Київ": CITIES["Київ"],
+}
+
+# Стем області → канонічна назва (для розбору вільних формулювань).
+_OBLAST_BY_STEM: dict[str, str] = {}
+for _stems, _city in OBLAST_STEMS:
+    for _name, _center in OBLAST_CENTERS.items():
+        if _center == CITIES.get(_city) and _name != "м. Київ":
+            for _s in _stems:
+                _OBLAST_BY_STEM[_s] = _name
+            break
+
+
+def canon_oblast(raw: str | None) -> str | None:
+    """Канонічна назва області з довільного написання, або None."""
+    if not raw:
+        return None
+    s = raw.strip()
+    if s in OBLAST_CENTERS:
+        return s
+    low = s.lower().replace("'", "ʼ")
+    if low.startswith("київ") and "область" not in low:
+        return "м. Київ"
+    for stem, name in _OBLAST_BY_STEM.items():
+        if low.startswith(stem):
+            return name
+    return None
+
+
+def oblast_of_display(display_name: str | None) -> str | None:
+    """Область із адміністративного ланцюга «місто, район, область».
+
+    Це СПОСТЕРЕЖЕНЕ значення: його дало джерело, ми його не виводили.
+    """
+    if not display_name:
+        return None
+    for part in (p.strip() for p in display_name.split(",")):
+        canon = canon_oblast(part)
+        if canon:
+            return canon
+    return None
+
+
+def nearest_oblast(lat: float, lon: float) -> str | None:
+    """Найближчий обласний центр — ВИВЕДЕНЕ наближення, не спостережене.
+
+    Використовується лише тоді, коли адміністративного ланцюга немає.
+    Біля меж областей може помилятися — тому позначається як виведене.
+    """
+    from .geocode import haversine_km
+
+    best, best_d = None, float("inf")
+    for name, (clat, clon) in OBLAST_CENTERS.items():
+        if name == "м. Київ":
+            continue
+        d = haversine_km((lat, lon), (clat, clon))
+        if d < best_d:
+            best, best_d = name, d
+    return best

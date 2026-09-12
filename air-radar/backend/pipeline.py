@@ -12,7 +12,7 @@ import time
 
 from .extractor import extract
 from .geocode import GeoDB
-from .models import TacticalObject
+from .models import DEFAULT_TTL_SEC, TacticalObject
 
 
 def _stable_id(channel: str, text: str, place: str) -> str:
@@ -48,6 +48,53 @@ def build_from_message(
         confidence=ex.confidence,
         count=ex.count,
         ts=ts or time.time(),
+    )
+
+
+def build_from_chain(
+    chain,
+    index: int,
+    source: str = "detoyshahed",
+    channel: str = "",
+    ts: float | None = None,
+    ttl: int | None = None,
+    ttype: str = "unknown",
+) -> TacticalObject:
+    """Будує обʼєкт із ланцюга точок однієї доповіді (`reports.Chain`).
+
+    Курс беремо з ланцюга (він виведений із двох і більше згаданих точок), а
+    не з припущення. Позиція — остання згадана точка. Впевненість — базова
+    за надійністю каналу (`sources`), а не однакова 0.9 для всіх.
+    """
+    from . import sources
+    from .regions import nearest_oblast, oblast_of_display
+
+    head = chain.head
+    oblast = oblast_of_display(head.display_name)
+    basis = "observed" if oblast else "unknown"
+    if not oblast:
+        oblast = nearest_oblast(head.lat, head.lon)
+        basis = "inferred" if oblast else "unknown"
+    return TacticalObject(
+        id=chain.stable_id(index),
+        type=ttype,
+        lat=head.lat,
+        lon=head.lon,
+        source=source,
+        channel=channel,
+        raw=chain.route_label or head.name,
+        heading=chain.heading,
+        destination=head.name,
+        waypoints=chain.waypoints,
+        confidence=sources.base_confidence(channel),
+        count=chain.count,
+        ts=ts or time.time(),
+        ttl=ttl if ttl is not None else DEFAULT_TTL_SEC,
+        oblast=oblast,
+        oblast_basis=basis,
+        report_id=chain.report_id,
+        report_siblings=chain.siblings,
+        route=chain.route_label,
     )
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from . import sources
 from .geocode import azimuth_deg, haversine_km, move_point
 from .models import TYPE_META, TacticalObject
 
@@ -77,6 +78,14 @@ class Track:
     # крос-перевірка з офіційними зонами тривог (незалежний авторитетний сигнал)
     in_zone: bool = False
     zone_region: str | None = None
+    # адміністративна привʼязка та контекст доповіді (див. bridge/reports)
+    oblast: str | None = None
+    oblast_basis: str = "unknown"
+    route: str | None = None
+    report_id: str = ""
+    report_siblings: int = 0
+    # звірка з незалежним джерелом тривог по області (alerts_ubilling)
+    oblast_alert: bool | None = None
 
     def _speed(self) -> float:
         if self.speed_kmh:
@@ -89,9 +98,16 @@ class Track:
         if [self.ex_lat, self.ex_lon] != (wp[-1] if wp else None):
             wp = wp + [[self.ex_lat, self.ex_lon]]
         vector = [wp[0], wp[-1]] if len(wp) >= 2 else None
-        # Офіційна зона тривоги — незалежне підтвердження: піднімає ефективну
-        # впевненість (базова лишається як є для метрик корроборації каналів).
-        eff_conf = min(0.99, self.confidence + (0.08 if self.in_zone else 0.0))
+        # Підтвердження тривогою — тепер від ДВОХ незалежних джерел: полігон
+        # монітора (in_zone) і обласний стан (oblast_alert). Збіг обох важить
+        # більше за одне; розбіжність не додає нічого й нічого не віднімає.
+        from .alerts_ubilling import AGREEMENT_LABEL, agreement, confidence_delta
+
+        agree = agreement(self.in_zone, self.oblast_alert)
+        eff_conf = min(0.99, self.confidence + confidence_delta(agree))
+        now = time.time()
+        age = max(0.0, now - self.last_obs_ts)
+        ttl = TTL_BY_TYPE.get(self.type, 1500)
         return {
             "id": self.id,
             "type": self.type,
@@ -117,6 +133,24 @@ class Track:
             "ts": self.last_obs_ts,
             "expires": self.last_obs_ts + TTL_BY_TYPE.get(self.type, 1500),
             "extrapolated": abs(self.ex_lat - self.lat) > 1e-6 or abs(self.ex_lon - self.lon) > 1e-6,
+            # ── свіжість: скільки минуло від РЕАЛЬНОГО спостереження ──────
+            "age_sec": round(age),
+            "freshness": "fresh" if age < 300 else "aging" if age < 900 else "stale",
+            "life_frac": round(max(0.0, 1.0 - age / ttl), 3),
+            "first_seen": self.first_ts,
+            # ── походження: хто сказав і чого це варте ───────────────────
+            "provenance": [sources.profile(c).to_dict() for c in sorted(self.sources)],
+            "operators": sorted(sources.independent_operators(self.sources)),
+            "operator_count": len(sources.independent_operators(self.sources)),
+            # ── адміністративна привʼязка й контекст доповіді ────────────
+            "oblast": self.oblast,
+            "oblast_basis": self.oblast_basis,
+            "oblast_alert": self.oblast_alert,
+            "agreement": agree,
+            "agreement_label": AGREEMENT_LABEL[agree],
+            "route": self.route,
+            "report_id": self.report_id,
+            "report_siblings": self.report_siblings,
         }
 
 
@@ -164,6 +198,11 @@ class TrackManager:
             history=[(o.lat, o.lon, o.ts)],
             ex_lat=o.lat,
             ex_lon=o.lon,
+            oblast=o.oblast,
+            oblast_basis=o.oblast_basis,
+            route=o.route,
+            report_id=o.report_id,
+            report_siblings=o.report_siblings,
         )
         self.tracks[t.id] = t
         return t
@@ -182,6 +221,12 @@ class TrackManager:
         t.sources.add(o.channel or o.source)
         if o.destination:
             t.destination = o.destination
+        if o.oblast:
+            t.oblast, t.oblast_basis = o.oblast, o.oblast_basis
+        if o.route:
+            t.route = o.route
+        if o.report_id:
+            t.report_id, t.report_siblings = o.report_id, o.report_siblings
         t.history.append((o.lat, o.lon, o.ts))
         if len(t.history) > 50:
             t.history = t.history[-50:]
@@ -197,9 +242,11 @@ class TrackManager:
             t.heading = round(azimuth_deg((prev[0], prev[1]), (o.lat, o.lon)), 1)
         elif o.heading is not None:
             t.heading = o.heading
-        # Корроборація: підтвердження НЕЗАЛЕЖНИМИ каналами важить більше, ніж
-        # повтори з того самого джерела. Незалежні джерела складніше підробити.
-        corroboration = 0.1 * (len(t.sources) - 1) + 0.02 * (t.obs_count - 1)
+        # Корроборація рахується за НЕЗАЛЕЖНИМИ ОПЕРАТОРАМИ, а не за назвами
+        # каналів: два канали одного власника — це одне спостереження, а не
+        # два підтвердження (див. sources.py). Повтори того самого джерела
+        # додають мало й із стелею.
+        corroboration = sources.corroboration_bonus(t.sources) + min(0.06, 0.02 * (t.obs_count - 1))
         t.confidence = min(0.99, max(t.confidence, o.confidence) + corroboration)
 
     def step(self, now: float | None = None) -> tuple[list[Track], list[str]]:

@@ -11,6 +11,7 @@ import time
 from collections import deque
 
 from .alerts_engine import evaluate as evaluate_alerts
+from .alerts_ubilling import agreement, confidence_delta
 from .assets import ASSETS, CATEGORY_LABEL
 from .correlation import correlate_tracks
 from .fusion import TrackManager
@@ -29,6 +30,9 @@ class Broadcaster:
         self.logs: deque[dict] = deque(maxlen=300)
         self.threatened: dict[str, list[dict]] = {}
         self.alerts_feed: list[dict] = []
+        # Стан тривог за НЕЗАЛЕЖНИМ джерелом (ubilling): область → чи тривога.
+        self.oblast_alerts: dict[str, bool] = {}
+        self.oblast_alerts_ts: float = 0.0
         self.clients: set = set()
         self.store = store
         self._lock = asyncio.Lock()
@@ -65,6 +69,8 @@ class Broadcaster:
             "assets": ASSET_LIST,
             "threatened": self.threatened,
             "alerts": self.alerts_feed,
+            "oblast_alerts": self.oblast_alerts,
+            "regions": self.regions(),
             "logs": list(self.logs)[-80:],
             "ts": time.time(),
         }
@@ -87,6 +93,19 @@ class Broadcaster:
         self.zones = zones
         await self._emit({"type": "zones", "zones": zones})
 
+    def regions(self) -> list[dict]:
+        from . import rollup
+
+        return rollup.compute(self)["regions"]
+
+    async def set_oblast_alerts(self, states: dict[str, bool]) -> None:
+        """Стан тривог від незалежного джерела + трансляція зведення."""
+        self.oblast_alerts = states
+        self.oblast_alerts_ts = time.time()
+        await self._emit(
+            {"type": "oblast_alerts", "oblast_alerts": states, "regions": self.regions()}
+        )
+
     async def log(self, entry: dict) -> None:
         entry.setdefault("ts", time.time())
         self.logs.append(entry)
@@ -106,6 +125,9 @@ class Broadcaster:
                         region = zone_containing(t.ex_lat, t.ex_lon, self.zones)
                         t.in_zone = region is not None
                         t.zone_region = region
+                # Звірка з НЕЗАЛЕЖНИМ джерелом тривог по області треку.
+                for t in self.tracks.tracks.values():
+                    t.oblast_alert = self.oblast_alerts.get(t.oblast) if t.oblast else None
                 # Кореляція «загроза → обʼєкт» по всіх рухомих треках.
                 self.threatened = correlate_tracks(list(self.tracks.tracks.values()))
                 new_alerts = evaluate_alerts(self.tracks.tracks, self.threatened)
@@ -113,7 +135,9 @@ class Broadcaster:
                 await self._emit({"type": "upsert", "object": t.to_dict()})
             for tid in expired:
                 await self.remove(tid)
-            await self._emit({"type": "threatened", "threatened": self.threatened})
+            await self._emit(
+                {"type": "threatened", "threatened": self.threatened, "regions": self.regions()}
+            )
             # Транслюємо стрічку алертів лише коли склад алертів змінився.
             if {a["id"] for a in new_alerts} != {a["id"] for a in self.alerts_feed}:
                 self.alerts_feed = new_alerts
