@@ -45,6 +45,7 @@ import MapLegend from "@/components/MapLegend";
 import OrientationCard, { hasSeenOrientation } from "@/components/OrientationCard";
 import SituationBar from "@/components/SituationBar";
 import StatusStrip from "@/components/StatusStrip";
+import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1181,6 +1182,8 @@ function Console() {
                   обʼєктів. Натисніть «Оновити» для повторної спроби.
                 </div>
               ) : null}
+
+              <PersonalThreatPanel threats={threats} weather={feeds.weather} />
 
               <TimelinePlayer onCursor={setPlayCursor} />
               <MapLayers

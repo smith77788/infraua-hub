@@ -20,7 +20,7 @@ import type { Threat, ThreatType } from "./air";
  * значення для оцінки часу, не точні ТТХ конкретного зразка — тому округлені й
  * консервативні. Використовуються лише для ETA-оцінки, не для ідентифікації.
  */
-const SPEED_KMH: Record<ThreatType, number> = {
+export const SPEED_KMH: Record<ThreatType, number> = {
   ballistic: 3000, // балістика — умовно, час до цілі малий у будь-якому разі
   missile: 800,
   cruise: 700,
