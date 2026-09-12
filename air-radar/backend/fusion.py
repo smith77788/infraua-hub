@@ -117,6 +117,9 @@ class Track:
             "lon": self.ex_lon,
             "heading": self.heading,
             "speed_kmh": round(self._speed()),
+            # Швидкість або ЗАМІРЯНА зі зміщення між фіксами, або взята як
+            # типова для типу. Інтерфейс має називати це різними словами.
+            "speed_basis": "measured" if self.speed_kmh else "typical",
             "destination": self.destination,
             "waypoints": wp,
             "vector": vector,
@@ -134,6 +137,10 @@ class Track:
             "expires": self.last_obs_ts + TTL_BY_TYPE.get(self.type, 1500),
             "extrapolated": abs(self.ex_lat - self.lat) > 1e-6 or abs(self.ex_lon - self.lon) > 1e-6,
             # ── свіжість: скільки минуло від РЕАЛЬНОГО спостереження ──────
+            # Остання РЕАЛЬНО спостережена точка — окремо від екстрапольованої
+            # позиції вище. Інтерфейс має показувати різницю, а не зливати їх.
+            "fix_lat": self.lat,
+            "fix_lon": self.lon,
             "age_sec": round(age),
             "freshness": "fresh" if age < 300 else "aging" if age < 900 else "stale",
             "life_frac": round(max(0.0, 1.0 - age / ttl), 3),
@@ -163,7 +170,17 @@ class TrackManager:
     def _plausible_speed(self, t: Track, o: TacticalObject) -> float:
         return max(t._speed(), TYPE_META.get(o.type, TYPE_META["unknown"])["speed_kmh"])
 
-    def observe(self, o: TacticalObject) -> Track:
+    def observe(self, o: TacticalObject, now: float | None = None) -> Track | None:
+        """Асоціює спостереження з треком. None — якщо воно прийшло вже мертвим.
+
+        Джерело тримає інцидент активним 2 години і віддає його в кожному
+        опитуванні. Без цієї перевірки двогодинної давнини запис щоразу
+        створював трек заново, той помирав на наступному motion-кроці — і
+        з'являвся знову за 20 секунд. Наживо це давало стрибки лічильника
+        між 25 і 60 «активними цілями» та рядки віком «1.5 год» у матриці.
+        """
+        if (now or time.time()) - o.ts > TTL_BY_TYPE.get(o.type, 1500):
+            return None
         best: Track | None = None
         best_d = float("inf")
         for t in self.tracks.values():

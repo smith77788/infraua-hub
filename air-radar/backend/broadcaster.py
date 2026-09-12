@@ -79,11 +79,15 @@ class Broadcaster:
         """Приймає сире спостереження, проганяє через фьюжн і транслює трек."""
         async with self._lock:
             track = self.tracks.observe(obj)
+        # У сховище пишемо навіть прострочене: історія й реплей мають бачити
+        # все, що джерело сказало. На карту потрапляє лише живе.
         if self.store:
             try:
                 self.store.record(obj)
             except Exception:  # noqa: BLE001
                 pass
+        if track is None:
+            return
         await self._emit({"type": "upsert", "object": track.to_dict()})
 
     async def remove(self, obj_id: str) -> None:

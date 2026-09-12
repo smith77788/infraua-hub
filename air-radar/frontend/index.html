@@ -2,18 +2,15 @@
 <html lang="uk">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0e14" />
     <title>TACTICAL AIR RADAR — COP</title>
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-      crossorigin=""
-    />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
-    />
+    <!-- Leaflet і шрифти лежать поруч із застосунком, а не на CDN: радар
+         обстановки не має залежати від доступності стороннього хоста. -->
+    <link rel="stylesheet" href="/vendor/leaflet.css" />
+    <!-- Жодного стороннього хоста: шрифти беремо системні (стеки в styles.css).
+         Радар не має ні залежати від доступності CDN, ні повідомляти третій
+         стороні, що цю сторінку хтось відкрив. -->
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -24,17 +21,23 @@
           <span class="metric">Цілі <b id="m-targets">0</b></span>
           <span class="metric alarm">Тривоги <b id="m-zones">0</b></span>
           <span class="metric alarm">Сповіщення <b id="m-alerts">0</b></span>
+          <span class="metric">Області в тривозі <b id="m-oblasts">—</b></span>
           <span class="metric">Швидкість потоку <b id="m-rate">0</b>/хв</span>
           <span class="metric">Гео-база <b id="m-geo">—</b></span>
         </div>
+        <div class="top-actions">
+          <button class="tbtn" id="btn-sound" title="Звук і сповіщення про критичні загрози">🔕 Звук</button>
+          <button class="tbtn" id="btn-sitrep" title="Зведення обстановки">⭳ SITREP</button>
+        </div>
       </header>
 
-      <aside class="panel left">
-        <div class="panel-head">
-          <span class="dot"></span> Матриця загроз
-          <span class="count" id="tm-count">0</span>
+      <aside class="panel left" id="panel-left">
+        <div class="panel-tabs">
+          <button class="ptab on" data-tab="targets">Цілі <span class="count" id="tm-count">0</span></button>
+          <button class="ptab" data-tab="regions">Області <span class="count" id="rg-count">0</span></button>
         </div>
-        <div class="panel-body" id="threat-matrix"></div>
+        <div class="panel-body" id="threat-matrix" data-pane="targets"></div>
+        <div class="panel-body" id="region-board" data-pane="regions" hidden></div>
       </aside>
 
       <main class="center">
@@ -46,6 +49,7 @@
         <div class="hud hud-count">
           <div class="n" id="hud-count">0</div>
           <div class="lbl">активних цілей</div>
+          <div class="sub" id="hud-fresh">—</div>
         </div>
         <div class="hud hud-filters" id="filters">
           <label class="fbtn on" data-layer="targets"><span class="sw"></span> Цілі</label>
@@ -53,8 +57,9 @@
           <label class="fbtn on" data-layer="corridors"><span class="sw"></span> Коридори загроз</label>
           <label class="fbtn on" data-layer="assets"><span class="sw"></span> Обʼєкти</label>
           <label class="fbtn on" data-layer="zones"><span class="sw"></span> Зони тривог</label>
-          <label class="fbtn on" data-layer="sat"><span class="sw"></span> Супутник</label>
+          <label class="fbtn" data-layer="sat"><span class="sw"></span> Супутник</label>
           <label class="fbtn" data-layer="graph"><span class="sw"></span> Граф звʼязків</label>
+          <label class="fbtn" data-layer="me"><span class="sw"></span> Я тут</label>
         </div>
         <div class="graph-overlay" id="graph-overlay" hidden>
           <div class="graph-head">
@@ -65,6 +70,13 @@
             </span>
           </div>
           <svg id="graph-svg" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div class="hud hud-me" id="me-hud" hidden>
+          <div class="risk-title">
+            <span>◉ Моя точка</span>
+            <button class="me-close" id="me-close" title="Прибрати">✕</button>
+          </div>
+          <div id="me-body"></div>
         </div>
         <div class="hud hud-risk" id="risk-hud" hidden>
           <div class="risk-title">Обʼєкти під загрозою</div>
@@ -90,20 +102,33 @@
         </div>
       </main>
 
-      <aside class="panel right">
+      <aside class="panel right" id="panel-right">
         <div class="panel-head">
           <span class="dot"></span> OSINT-потік · телеметрія
           <span class="count" id="log-count">0</span>
         </div>
         <div class="panel-body" id="log-stream"></div>
       </aside>
+
+      <!-- Досьє цілі: усе, що система знає і на чому це тримається -->
+      <section class="dossier" id="dossier" hidden aria-live="polite">
+        <div class="dsr-head">
+          <span class="dsr-title" id="dsr-title">Досьє цілі</span>
+          <button class="dsr-close" id="dsr-close" title="Закрити">✕</button>
+        </div>
+        <div class="dsr-body" id="dsr-body"></div>
+      </section>
+
+      <!-- Мобільна навігація: панелі стають шухлядами -->
+      <nav class="mobile-nav" id="mobile-nav">
+        <button class="mnav on" data-view="map">Карта</button>
+        <button class="mnav" data-view="left">Цілі</button>
+        <button class="mnav" data-view="regions">Області</button>
+        <button class="mnav" data-view="right">Потік</button>
+      </nav>
     </div>
 
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-      crossorigin=""
-    ></script>
+    <script src="/vendor/leaflet.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

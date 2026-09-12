@@ -72,3 +72,23 @@ def test_mercator_conversion_lands_in_ukraine():
 def test_zone_parsing_survives_missing_geometry():
     assert parse_zones(None) == []
     assert parse_zones({"alerts": [{"region_name": "X", "geometry": {}}]}) == []
+
+
+def test_observation_that_arrives_already_dead_creates_no_track():
+    """Двогодинної давнини запис не має щоразу воскресати як «активна ціль»."""
+    import time
+
+    from backend.fusion import TrackManager
+    from backend.models import TacticalObject
+
+    tm = TrackManager()
+    stale = TacticalObject(
+        id="x", type="unknown", lat=50.0, lon=30.0, source="s", ts=time.time() - 7200
+    )
+    assert tm.observe(stale) is None
+    assert tm.tracks == {}
+
+    live = TacticalObject(
+        id="y", type="unknown", lat=50.0, lon=30.0, source="s", ts=time.time() - 60
+    )
+    assert tm.observe(live) is not None
