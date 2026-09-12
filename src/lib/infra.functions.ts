@@ -19,7 +19,7 @@ import {
 } from "./air";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
-import { SEED_FACILITIES } from "./infra-seed";
+import { INFRA_DISABLED_NOTICE, infraLayersEnabled } from "./infra-gate";
 import {
   distanceKm,
   UA_BBOX,
@@ -28,10 +28,24 @@ import {
   type InfraEvent,
 } from "./infra-types";
 
+/**
+ * Опорний перелік ключових обʼєктів — динамічним імпортом, і тільки тут.
+ *
+ * Статичний імпорт затягнув би цей масив у клієнтський бандл: він дістається
+ * з модуля, який консоль імпортує заради серверних функцій, тож їхав би до
+ * кожного відвідувача незалежно від того, чи хтось його просив, і незалежно
+ * від вимикача. Динамічний імпорт усередині обробника лишає його на сервері й
+ * не завантажує взагалі, поки шари вимкнені.
+ */
+async function seedFacilities(): Promise<Facility[]> {
+  const { SEED_FACILITIES } = await import("./infra-seed");
+  return SEED_FACILITIES;
+}
+
 /** Додає опорні обʼєкти, яких немає серед live-даних (дедуп за категорією + близькістю). */
-function mergeWithSeed(live: Facility[]): Facility[] {
+function mergeWithSeed(live: Facility[], seed: Facility[]): Facility[] {
   const out = [...live];
-  for (const s of SEED_FACILITIES) {
+  for (const s of seed) {
     const dup = live.some((f) => f.category === s.category && distanceKm(f, s) < 5);
     if (!dup) out.push(s);
   }
@@ -213,7 +227,19 @@ interface FacilitiesPayload {
   fetchedAt: string;
   /** true, коли live-джерело недоступне і показано опорний (baseline) перелік. */
   degraded: boolean;
-  source: "live" | "baseline";
+  source: "live" | "baseline" | "disabled";
+  /**
+   * Шари вимкнені в цьому розгортанні — це не збій джерела.
+   *
+   * Проставляється завжди, обома значеннями. Клієнт розрізняє три стани:
+   * `true` — вимкнено, `false` — увімкнено, відсутнє — відповіді ще немає; і
+   * останнє він трактує як вимкнено. Якби увімкнений шлях лишав поле
+   * порожнім, він був би невідрізненним від «ще не відповіли» — тобто
+   * вимикач не вмикався б назад.
+   */
+  disabled: boolean;
+  /** Чому порожньо, коли `disabled`. */
+  notice?: string;
   /**
    * Категорії, що вперлися у власну стелю, — набір по них неповний.
    *
@@ -224,8 +250,27 @@ interface FacilitiesPayload {
   truncatedCategories: CategoryId[];
 }
 
+/**
+ * Порожній набір із названою причиною.
+ *
+ * Не виняток і не HTTP 403: консоль малює ту саму карту без шару обʼєктів, а
+ * відмова з помилкою зробила б із навмисного рішення аварію, яку хтось піде
+ * лагодити.
+ */
+const DISABLED_FACILITIES = (): FacilitiesPayload => ({
+  facilities: [],
+  fetchedAt: new Date().toISOString(),
+  degraded: false,
+  source: "disabled",
+  disabled: true,
+  notice: INFRA_DISABLED_NOTICE,
+  truncatedCategories: [],
+});
+
 export const getFacilities = createServerFn({ method: "GET" }).handler(
   async (): Promise<FacilitiesPayload> => {
+    if (!infraLayersEnabled()) return DISABLED_FACILITIES();
+
     const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
     if (cached) return cached;
 
@@ -254,18 +299,20 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(
       // порожньою, повертаємо опорний перелік ключових обʼєктів як baseline.
       if (facilities.length === 0) {
         return {
-          facilities: SEED_FACILITIES,
+          facilities: await seedFacilities(),
           fetchedAt: new Date().toISOString(),
           degraded: true,
+          disabled: false,
           source: "baseline" as const,
           truncatedCategories: [],
         } satisfies FacilitiesPayload;
       }
 
       const payload: FacilitiesPayload = {
-        facilities: mergeWithSeed(facilities),
+        facilities: mergeWithSeed(facilities, await seedFacilities()),
         fetchedAt: new Date().toISOString(),
         degraded: false,
+        disabled: false,
         source: "live",
         truncatedCategories,
       };
@@ -273,9 +320,10 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(
       return payload;
     } catch {
       return {
-        facilities: SEED_FACILITIES,
+        facilities: await seedFacilities(),
         fetchedAt: new Date().toISOString(),
         degraded: true,
+        disabled: false,
         source: "baseline" as const,
         truncatedCategories: [],
       } satisfies FacilitiesPayload;
@@ -1194,6 +1242,8 @@ export interface PowerLinesPayload {
    * прапорця відсутність фактів виглядала б як доведена відсутність звʼязків.
    */
   available: boolean;
+  /** Шари вимкнені в цьому розгортанні — це не «джерело недоступне». */
+  disabled?: boolean;
 }
 
 export const getPowerLines = createServerFn({ method: "GET" })
@@ -1203,6 +1253,17 @@ export const getPowerLines = createServerFn({ method: "GET" })
     return { have: have.filter((k): k is string => typeof k === "string") };
   })
   .handler(async ({ data }) => {
+    // tilesTotal 0 означає «покриття повне»: клієнт не проситиме ще.
+    if (!infraLayersEnabled()) {
+      return {
+        tiles: [],
+        retrievedAt: new Date().toISOString(),
+        tilesTotal: 0,
+        available: false,
+        disabled: true,
+      };
+    }
+
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);
     const fetched: PowerLineTile[] = [];
@@ -1268,6 +1329,7 @@ export interface SubstationTile {
 export interface SubstationTilesPayload {
   tiles: SubstationTile[];
   tilesTotal: number;
+  disabled?: boolean;
 }
 
 /** Стеля на тайл: запобіжник від патологічного запиту, а не робоче обмеження. */
@@ -1280,6 +1342,8 @@ export const getSubstationTiles = createServerFn({ method: "GET" })
     return { have: have.filter((k): k is string => typeof k === "string") };
   })
   .handler(async ({ data }): Promise<SubstationTilesPayload> => {
+    if (!infraLayersEnabled()) return { tiles: [], tilesTotal: 0, disabled: true };
+
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);
     const fetched: SubstationTile[] = [];
@@ -1341,6 +1405,7 @@ export interface FacilityTile {
 export interface FacilityTilesPayload {
   tiles: FacilityTile[];
   tilesTotal: number;
+  disabled?: boolean;
 }
 
 /** Стеля на тайл (усі категорії разом) — запобіжник, а не робоче обмеження. */
@@ -1353,6 +1418,8 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
     return { have: have.filter((k): k is string => typeof k === "string") };
   })
   .handler(async ({ data }): Promise<FacilityTilesPayload> => {
+    if (!infraLayersEnabled()) return { tiles: [], tilesTotal: 0, disabled: true };
+
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);
     const fetched: FacilityTile[] = [];

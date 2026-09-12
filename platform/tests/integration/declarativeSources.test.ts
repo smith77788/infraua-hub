@@ -9,6 +9,7 @@ import { AuditLog } from '../../core/audit/AuditLog';
 import { SourceRegistry } from '../../core/ingestion/declarative/SourceRegistry';
 import { DeclarativeConnector } from '../../core/ingestion/declarative/DeclarativeConnector';
 import { ManifestError, parseSourceManifest } from '../../core/ingestion/declarative/SourceManifest';
+import { SourceFetcher, parseFetchPolicy } from '../../core/ingestion/declarative/SourceFetcher';
 import { PERSONAL_DATA_COMPARTMENT } from '../../core/ingestion/EdrConnector';
 import { ClearanceLevel } from '../../core/security/Clearance';
 import { viewer } from '../../core/security/Marking';
@@ -17,6 +18,7 @@ import { Principal } from '../../core/security/ApiKeyAuth';
 const ROOT = path.join(__dirname, '..', '..');
 const CONFIG = path.join(ROOT, 'config');
 const FIXTURE = path.join(__dirname, '..', 'fixtures', 'wikidata-power-plants.json');
+const SETTLEMENTS = path.join(__dirname, '..', 'fixtures', 'wikidata-settlements.json');
 
 const principal = (clearance: ClearanceLevel, compartments: string[] = []): Principal => ({
   id: 'tester',
@@ -35,6 +37,10 @@ describe('declarative sources', () => {
   let connector: DeclarativeConnector;
 
   beforeEach(() => {
+    // Shipped feeds include critical-infrastructure ones, which a deployment
+    // has to turn on. On here so the mapping itself stays under test; the gate
+    // has its own tests below.
+    process.env.INFRA_LAYERS = 'on';
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'declarative-'));
     ontology = OntologyManifest.fromFile(path.join(CONFIG, 'ontology.json'));
     graph = new GraphStore(path.join(dir, 'graph.json'), ontology);
@@ -44,7 +50,10 @@ describe('declarative sources', () => {
     connector = new DeclarativeConnector(graph, vectors, audit);
   });
 
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    delete process.env.INFRA_LAYERS;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 
   const shipped = () => registry.loadDirectory(path.join(CONFIG, 'sources'));
   const payload = () => JSON.parse(fs.readFileSync(FIXTURE, 'utf-8'));
@@ -357,4 +366,224 @@ describe('declarative sources', () => {
       ).toThrow(/results\.bindings/);
     });
   });
+
+  describe('settlements, where the arithmetic is the whole point', () => {
+    const settlements = () => JSON.parse(fs.readFileSync(SETTLEMENTS, 'utf-8'));
+    const ingestSettlements = () =>
+      connector.ingest(registry.get('wikidata-settlements')!, settlements(), {
+        callerClearance: ClearanceLevel.SECRET,
+        callerCompartments: [],
+      });
+
+    beforeEach(() => shipped());
+
+    it('drops the agglomeration by name, and says why in the report', () => {
+      const result = ingestSettlements();
+      expect(result.excluded).toHaveLength(1);
+      expect(result.excluded[0].matched).toContain('Q4166179');
+      // The reason is the difference between an exclusion and a deletion.
+      expect(result.excluded[0].reason).toMatch(/агломерація/);
+      expect(graph.findByType('Location').some((n) => n.label === 'Великий Донецьк')).toBe(false);
+    });
+
+    it('counts a settlement once even when the source gives it two coordinates', () => {
+      // Феодосія appears twice in the real answer with coordinates that differ
+      // in the fourth decimal. Summing rows would count its people twice;
+      // identity comes from the Wikidata id, so the graph holds one node.
+      const rows = settlements().results.bindings as { placeLabel: { value: string } }[];
+      expect(rows.filter((r) => r.placeLabel.value === 'Феодосія')).toHaveLength(2);
+
+      ingestSettlements();
+      expect(graph.findByType('Location').filter((n) => n.label === 'Феодосія')).toHaveLength(1);
+    });
+
+    it('carries population as a number, not as the string the endpoint sent', () => {
+      ingestSettlements();
+      const kyiv = graph.findByType('Location').find((n) => n.label === 'Київ')!;
+      expect(kyiv.properties.population).toBe(2952301);
+      expect(kyiv.properties.lat).toBeCloseTo(50.45, 5);
+      expect(kyiv.properties.lon).toBeCloseTo(30.5236, 3);
+    });
+
+    it('sums to the people actually in the fixture, agglomeration excluded', () => {
+      ingestSettlements();
+      const total = graph
+        .findByType('Location')
+        .reduce((sum, n) => sum + (typeof n.properties.population === 'number' ? n.properties.population : 0), 0);
+      // Everything in the fixture except Великий Донецьк, and Феодосія once.
+      expect(total).toBe(2952301 + 1421125 + 52237 + 25030 + 66293 + 2995 + 2985);
+    });
+  });
+
+  describe('an exclusion', () => {
+    const withExclude = (rule: Record<string, unknown>) => ({
+      id: 'exclusion-test',
+      title: 'T',
+      description: 'A feed with one row it does not want.',
+      sector: 'test',
+      entities: [{ name: 'a', type: 'Location', id: { from: 'id' }, label: { from: 'name' } }],
+      edges: [],
+      exclude: [rule],
+    });
+
+    it('must say why, or it is a deletion', () => {
+      expect(() => parseSourceManifest(withExclude({ from: 'id', equals: 'x' }))).toThrow(/reason is required/);
+    });
+
+    it('matches a numeric id and its string form alike', () => {
+      const manifest = parseSourceManifest(withExclude({ from: 'id', equals: '7', reason: 'known bad row' }));
+      const result = connector.ingest(manifest, [{ id: 7, name: 'dropped' }, { id: 8, name: 'kept' }], {
+        callerClearance: ClearanceLevel.SECRET,
+        callerCompartments: [],
+      });
+      expect(result.excluded).toHaveLength(1);
+      expect(result.recordsIngested).toBe(1);
+    });
+  });
+
+  describe('a manifest that says where its records come from', () => {
+    const policy = () =>
+      parseFetchPolicy({ outbound_fetch: { allowed_hosts: ['query.wikidata.org'], timeout_ms: 1000 } });
+
+    const answering = (body: string, status = 200) => {
+      const calls: { url: string; init: Record<string, unknown> }[] = [];
+      const fake = async (url: string, init: Record<string, unknown>) => {
+        calls.push({ url, init });
+        return { ok: status >= 200 && status < 300, status, text: async () => body };
+      };
+      return { calls, fake };
+    };
+
+    beforeEach(() => shipped());
+
+    it('puts the query in the URL, so what was called is checkable afterwards', async () => {
+      const { calls, fake } = answering(fs.readFileSync(SETTLEMENTS, 'utf-8'));
+      const fetcher = new SourceFetcher(policy(), audit, fake);
+      const pulled = await fetcher.fetch(registry.get('wikidata-settlements')!, 'tester');
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain('query.wikidata.org');
+      expect(decodeURIComponent(calls[0].url)).toContain('wdt:P1082');
+      expect(pulled.status).toBe(200);
+
+      const entry = audit.all().find((e) => e.action === 'fetch_source')!;
+      expect((entry.details as { url: string }).url).toBe(pulled.url);
+    });
+
+    it('never contacts a host the deployment did not allow', async () => {
+      const { calls, fake } = answering('{}');
+      const empty = parseFetchPolicy({ outbound_fetch: { allowed_hosts: [] } });
+      const fetcher = new SourceFetcher(empty, audit, fake);
+
+      await expect(fetcher.fetch(registry.get('wikidata-settlements')!, 'tester')).rejects.toThrow(/allowlist/);
+      // Refused before the request, so nothing about the answer can change it.
+      expect(calls).toHaveLength(0);
+    });
+
+    it('defaults to allowing nothing', () => {
+      expect(parseFetchPolicy({}).allowedHosts).toEqual([]);
+    });
+
+    it('reports an upstream error as an upstream error', async () => {
+      const { fake } = answering('rate limited', 429);
+      const fetcher = new SourceFetcher(policy(), audit, fake);
+      await expect(fetcher.fetch(registry.get('wikidata-settlements')!, 'tester')).rejects.toThrow(/HTTP 429/);
+    });
+
+    it('refuses a body that is not JSON rather than ingesting nothing', async () => {
+      const { fake } = answering('<html>504</html>');
+      const fetcher = new SourceFetcher(policy(), audit, fake);
+      await expect(fetcher.fetch(registry.get('wikidata-settlements')!, 'tester')).rejects.toThrow(/did not answer with JSON/);
+    });
+
+    it('will not carry a credential, because a manifest is a reviewed document', () => {
+      const base = {
+        id: 'fetch-test',
+        title: 'T',
+        description: 'A feed that tries to authenticate itself.',
+        sector: 'test',
+        entities: [{ name: 'a', type: 'Location', id: { from: 'id' }, label: { from: 'name' } }],
+        edges: [],
+      };
+      expect(() =>
+        parseSourceManifest({ ...base, fetch: { url: 'https://example.org/x', headers: { Authorization: 'Bearer x' } } }),
+      ).toThrow(/not an identity/);
+      expect(() => parseSourceManifest({ ...base, fetch: { url: 'https://u:p@example.org/x' } })).toThrow(/credentials/);
+      expect(() => parseSourceManifest({ ...base, fetch: { url: 'http://example.org/x' } })).toThrow(/https/);
+    });
+
+    it('is rejected at registration when it names a host this deployment will not call', () => {
+      const guarded = new SourceRegistry(ontology, audit, policy());
+      expect(() =>
+        guarded.register(
+          {
+            id: 'elsewhere',
+            title: 'T',
+            description: 'A feed pointing somewhere the deployment does not allow.',
+            sector: 'test',
+            entities: [{ name: 'a', type: 'Location', id: { from: 'id' }, label: { from: 'name' } }],
+            edges: [],
+            fetch: { url: 'https://example.org/data.json' },
+          },
+          principal(ClearanceLevel.SECRET),
+        ),
+      ).toThrow(/allowlist/);
+    });
+  });
+
+
+  describe('feeds that write critical-infrastructure objects', () => {
+    it('are declared by the manifest, so a reviewer sees what it carries', () => {
+      shipped();
+      expect(registry.get('wikidata-power-plants')!.criticalInfrastructure).toBe(true);
+      expect(registry.get('wikidata-dams')!.criticalInfrastructure).toBe(true);
+      // Population is not infrastructure, and conflating them would take the
+      // consequence data down with the targets.
+      expect(registry.get('wikidata-settlements')!.criticalInfrastructure).toBeUndefined();
+    });
+
+    it('do not load at all where the deployment has not turned them on', () => {
+      delete process.env.INFRA_LAYERS;
+      const result = registry.loadDirectory(path.join(CONFIG, 'sources'));
+
+      expect(result.loaded).toEqual(['wikidata-settlements']);
+      expect(result.failed.map((f) => f.file).sort()).toEqual([
+        'wikidata-dams.json',
+        'wikidata-power-plants.json',
+      ]);
+      expect(result.failed[0].reason).toMatch(/does not ingest/);
+      // Not merely hidden: there is nothing to ingest through.
+      expect(registry.get('wikidata-power-plants')).toBeUndefined();
+    });
+
+    it('cannot be registered at runtime either, whatever the clearance', () => {
+      delete process.env.INFRA_LAYERS;
+      expect(() =>
+        registry.register(
+          {
+            id: 'substations',
+            title: 'T',
+            description: 'A feed of substations somebody wants to add anyway.',
+            sector: 'energy',
+            criticalInfrastructure: true,
+            entities: [{ name: 'a', type: 'Asset', id: { from: 'id' }, label: { from: 'name' } }],
+            edges: [],
+          },
+          principal(ClearanceLevel.TOP_SECRET),
+        ),
+      ).toThrow(/does not ingest/);
+    });
+
+    it('anything off by default: a deployment that says nothing writes nothing', () => {
+      delete process.env.INFRA_LAYERS;
+      expect(registry.loadDirectory(path.join(CONFIG, 'sources')).loaded).not.toContain(
+        'wikidata-power-plants',
+      );
+      process.env.INFRA_LAYERS = 'yes';
+      expect(registry.loadDirectory(path.join(CONFIG, 'sources')).loaded).not.toContain(
+        'wikidata-power-plants',
+      );
+    });
+  });
+
 });

@@ -1,0 +1,91 @@
+{
+  "id": "wikidata-settlements",
+  "title": "Населені пункти України з населенням (Wikidata)",
+  "description": "Населені пункти України з чисельністю населення (P1082) і координатами (P625). Підключено заради єдиної величини, якої платформі бракувало: наслідки відмови рахувалися в обʼєктах і мегаватах, але не в людях. Тип відбирається списком дозволених (місто України, місто обласного значення, смт, селище, село, хутір, населений пункт), а не обходом підкласів «населеного пункту»: під той обхід підпадають область, район, територіальна громада і сільрада — усі з населенням і однією точкою на карті. Просумувати їх разом із містами, що в них входять, означало б завищити населення країни вдвічі й зробити кожну похідну оцінку неправдою. Населення береться як MAX(P1082) на обʼєкт: Wikidata тримає ряд переписів, і найсвіжіший — той, що найбільший за номером року, а не за значенням, тож тут узято максимум значень свідомо, і це названо межею, а не точністю.",
+  "sector": "population",
+  "recordsAt": "results.bindings",
+  "defaultClearance": "PUBLIC",
+  "compartments": [],
+  "version": 1,
+  "fetch": {
+    "url": "https://query.wikidata.org/sparql",
+    "method": "GET",
+    "query": {
+      "query": "SELECT ?place ?placeLabel ?coord (MAX(?pop) AS ?population) WHERE {\n  ?place wdt:P17 wd:Q212 ;\n         wdt:P1082 ?pop ;\n         wdt:P625 ?coord ;\n         wdt:P31 ?type .\n  VALUES ?type {\n    wd:Q12131624 wd:Q5123999 wd:Q515 wd:Q7930989\n    wd:Q4100864 wd:Q2989457 wd:Q121366249 wd:Q2514025\n    wd:Q21672098 wd:Q532 wd:Q41501164 wd:Q2023000 wd:Q486972\n  }\n  SERVICE wikibase:label { bd:serviceParam wikibase:language \"uk,en\". }\n}\nGROUP BY ?place ?placeLabel ?coord\nORDER BY DESC(?population)",
+      "format": "json"
+    },
+    "headers": {
+      "Accept": "application/sparql-results+json"
+    }
+  },
+  "exclude": [
+    {
+      "from": "place.value",
+      "equals": "http://www.wikidata.org/entity/Q4166179",
+      "reason": "«Великий Донецьк» — агломерація, записана в Wikidata як звичайний населений пункт (P31 = населений пункт, без жодної ознаки агломерації). Її 1 560 000 людей уже враховані в містах, що входять до неї, тож у сумі вони рахуються двічі. Відрізнити її за даними запису неможливо — лише за назвою"
+    }
+  ],
+  "text": [
+    {
+      "from": "placeLabel.value"
+    },
+    {
+      "from": "population.value"
+    }
+  ],
+  "entities": [
+    {
+      "name": "settlement",
+      "type": "Location",
+      "id": {
+        "from": "place.value",
+        "transform": [
+          "last_path_segment"
+        ],
+        "prefix": "place:wikidata:"
+      },
+      "label": {
+        "from": "placeLabel.value"
+      },
+      "properties": [
+        {
+          "name": "category",
+          "const": "settlement"
+        },
+        {
+          "name": "country",
+          "const": "UA"
+        },
+        {
+          "name": "population",
+          "from": "population.value",
+          "transform": [
+            "number"
+          ]
+        },
+        {
+          "name": "lat",
+          "from": "coord.value",
+          "transform": [
+            "wkt_lat"
+          ]
+        },
+        {
+          "name": "lon",
+          "from": "coord.value",
+          "transform": [
+            "wkt_lon"
+          ]
+        },
+        {
+          "name": "wikidata_id",
+          "from": "place.value",
+          "transform": [
+            "last_path_segment"
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": []
+}

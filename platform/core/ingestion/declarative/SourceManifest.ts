@@ -112,6 +112,112 @@ export interface EdgeMapping {
   validTo?: FieldMapping;
 }
 
+/**
+ * A record this feed is known to carry and known not to want.
+ *
+ * Every real register has a handful of rows that are wrong in a way no mapping
+ * can express. Wikidata publishes the Donetsk agglomeration as an ordinary
+ * settlement - same type, same shape, 1.56 million people already counted in
+ * the cities inside it - and nothing in the record distinguishes it from a
+ * city. The choice is between silently accepting the double count and dropping
+ * it by name.
+ *
+ * Dropping it by name is the honest one, on one condition: the reason is
+ * required and travels with the record in the ingest report. An exclusion
+ * without a stated reason is indistinguishable from data somebody found
+ * inconvenient.
+ */
+export interface ExclusionRule {
+  /** Dotted path into the record, as everywhere else. */
+  from: string;
+  /** Compared as text, so a numeric id and its string form both match. */
+  equals: string;
+  /** Why this record is not wanted. Required. */
+  reason: string;
+}
+
+/**
+ * Where a feed's records come from, so the whole feed is one document.
+ *
+ * Without this a manifest describes half a source: the mapping is reviewable
+ * and versioned, and the query that produced the records lives in somebody's
+ * shell history. Two people then disagree about what "the settlements feed"
+ * means and both are right about their half.
+ *
+ * The constraints are not decoration. A manifest that can name any URL makes
+ * the server issue requests on behalf of whoever wrote it, so:
+ *
+ * - **https only, and no userinfo in the URL.** Credentials in a reviewed
+ *   document end up in version control, which is the one place they must not be.
+ * - **No authorization-bearing headers.** Same reason, and it draws the line
+ *   plainly: a manifest describes a mapping, not an identity. Feeds that need a
+ *   key stay hand-written connectors until there is a secret store to name.
+ * - **Host allowlist**, and it lives in the deployment's own policy, never in
+ *   the manifest. A document that names the hosts it may reach is a document
+ *   that grants itself the right.
+ */
+export interface FetchSpec {
+  url: string;
+  method: 'GET' | 'POST';
+  /** Appended as query parameters, so a long SPARQL query stays readable. */
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  /** Sent as-is for POST. */
+  body?: string;
+}
+
+/** Headers a manifest may not set, because each one carries an identity. */
+const FORBIDDEN_HEADERS = ['authorization', 'proxy-authorization', 'cookie', 'x-api-key', 'api-key'];
+
+function parseFetch(raw: unknown): FetchSpec {
+  if (typeof raw !== 'object' || raw === null) throw new ManifestError('fetch must be an object');
+  const spec = raw as Record<string, unknown>;
+
+  if (typeof spec.url !== 'string' || !spec.url) throw new ManifestError('fetch.url is required');
+  let parsed: URL;
+  try {
+    parsed = new URL(spec.url);
+  } catch {
+    throw new ManifestError(`fetch.url "${spec.url}" is not a URL`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new ManifestError('fetch.url must be https — a feed read over plaintext can be rewritten in transit');
+  }
+  if (parsed.username || parsed.password) {
+    throw new ManifestError('fetch.url must not carry credentials — a manifest is a reviewed document, not a secret store');
+  }
+
+  const method = spec.method === undefined ? 'GET' : String(spec.method).toUpperCase();
+  if (method !== 'GET' && method !== 'POST') throw new ManifestError('fetch.method must be GET or POST');
+
+  const query: Record<string, string> = {};
+  if (spec.query !== undefined) {
+    if (typeof spec.query !== 'object' || spec.query === null) throw new ManifestError('fetch.query must be an object');
+    for (const [key, value] of Object.entries(spec.query as Record<string, unknown>)) {
+      query[key] = String(value);
+    }
+  }
+
+  const headers: Record<string, string> = {};
+  if (spec.headers !== undefined) {
+    if (typeof spec.headers !== 'object' || spec.headers === null) throw new ManifestError('fetch.headers must be an object');
+    for (const [key, value] of Object.entries(spec.headers as Record<string, unknown>)) {
+      if (FORBIDDEN_HEADERS.includes(key.toLowerCase())) {
+        throw new ManifestError(`fetch.headers may not set "${key}" — a manifest describes a mapping, not an identity`);
+      }
+      headers[key] = String(value);
+    }
+  }
+
+  return {
+    url: spec.url,
+    method,
+    ...(Object.keys(query).length > 0 ? { query } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    ...(typeof spec.body === 'string' && spec.body ? { body: spec.body } : {}),
+  };
+}
+
 export interface SourceManifest {
   id: string;
   title: string;
@@ -129,6 +235,19 @@ export interface SourceManifest {
   compartments: string[];
   entities: EntityMapping[];
   edges: EdgeMapping[];
+  /**
+   * This feed writes Ukrainian critical-infrastructure objects.
+   *
+   * Declared by the manifest and acted on by the deployment: a feed says what
+   * it carries, and whether that is acceptable here is not the feed author's
+   * call. Registration refuses such a manifest unless the deployment has
+   * turned these layers on (`core/ingestion/InfraLayers.ts`).
+   */
+  criticalInfrastructure?: boolean;
+  /** Records dropped by name, each with the reason it is dropped. */
+  exclude?: ExclusionRule[];
+  /** How the platform pulls this feed itself, when it can. */
+  fetch?: FetchSpec;
   /** Bumped by whoever edits the manifest; recorded with everything it writes. */
   version: number;
 }
@@ -281,6 +400,24 @@ export function parseSourceManifest(raw: unknown, ontology?: OntologyManifest): 
     };
   });
 
+  const fetchSpec = manifest.fetch === undefined ? undefined : parseFetch(manifest.fetch);
+
+  const excludeRaw = manifest.exclude;
+  if (excludeRaw !== undefined && !Array.isArray(excludeRaw)) throw new ManifestError('exclude must be an array');
+  const exclude = (excludeRaw as unknown[] | undefined)?.map((entry, index) => {
+    const rule = entry as Record<string, unknown>;
+    const where = `exclude[${index}]`;
+    if (typeof rule.from !== 'string' || !rule.from) throw new ManifestError(`${where}.from is required`);
+    if (rule.equals === undefined || rule.equals === null || String(rule.equals) === '') {
+      throw new ManifestError(`${where}.equals is required`);
+    }
+    if (typeof rule.reason !== 'string' || !rule.reason.trim()) {
+      // The whole difference between an exclusion and a quiet deletion.
+      throw new ManifestError(`${where}.reason is required — an exclusion without a stated reason is a deletion`);
+    }
+    return { from: rule.from, equals: String(rule.equals), reason: rule.reason.trim() };
+  });
+
   const textRaw = manifest.text;
   if (textRaw !== undefined && !Array.isArray(textRaw)) throw new ManifestError('text must be an array of fields');
   const text = (textRaw as unknown[] | undefined)?.map((entry, index) => parseField(entry, `text[${index}]`));
@@ -296,6 +433,9 @@ export function parseSourceManifest(raw: unknown, ontology?: OntologyManifest): 
     compartments: normalizeCompartments(manifest.compartments),
     entities,
     edges,
+    ...(manifest.criticalInfrastructure === true ? { criticalInfrastructure: true } : {}),
+    ...(exclude && exclude.length > 0 ? { exclude } : {}),
+    ...(fetchSpec ? { fetch: fetchSpec } : {}),
     version: typeof manifest.version === 'number' && manifest.version > 0 ? manifest.version : 1,
   };
 }

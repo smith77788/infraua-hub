@@ -1,0 +1,203 @@
+{
+  "head": {
+    "vars": [
+      "place",
+      "placeLabel",
+      "coord",
+      "population"
+    ]
+  },
+  "results": {
+    "bindings": [
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q1899"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Київ"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(30.523611111 50.45)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "2952301"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q4166179"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Великий Донецьк"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(37.80417 48.00889)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "1560000"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q42308"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Харків"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(36.231111111 49.9925)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "1421125"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q760617"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Енергодар"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(34.655833333 47.498888888)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "52237"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q70231"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Славутич"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(30.756944444 51.520555555)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "25030"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q158491"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Феодосія"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(35.378768 45.04609)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "66293"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q158491"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Феодосія"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(35.379166666 45.048888888)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "66293"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q4539028"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Ярунь"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(27.466111111 50.543333333)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "2995"
+        }
+      },
+      {
+        "place": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q4246308"
+        },
+        "placeLabel": {
+          "xml:lang": "uk",
+          "type": "literal",
+          "value": "Кулиничі"
+        },
+        "coord": {
+          "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+          "type": "literal",
+          "value": "Point(36.383333333 49.98)"
+        },
+        "population": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
+          "type": "literal",
+          "value": "2985"
+        }
+      }
+    ]
+  }
+}

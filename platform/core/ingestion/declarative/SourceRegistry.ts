@@ -5,6 +5,8 @@ import { AuditLog } from '../../audit/AuditLog';
 import { ClearanceLevel, clearanceAtLeast } from '../../security/Clearance';
 import { Principal } from '../../security/ApiKeyAuth';
 import { ManifestError, SourceManifest, parseSourceManifest } from './SourceManifest';
+import { FetchPolicy } from './SourceFetcher';
+import { INFRA_DISABLED_REASON, infraLayersEnabled } from '../InfraLayers';
 
 /**
  * The feeds this deployment knows how to ingest.
@@ -27,7 +29,38 @@ export class SourceRegistry {
   constructor(
     private readonly ontology: OntologyManifest | undefined,
     private readonly audit: AuditLog,
+    /**
+     * Checked here so a feed that names an unreachable host fails in front of
+     * its author, next to the ontology check and for the same reason.
+     */
+    private readonly fetchPolicy?: FetchPolicy,
   ) {}
+
+  /**
+   * Rejects a feed that writes critical-infrastructure objects where the
+   * deployment does not accept them.
+   *
+   * Refused at registration rather than per ingest: a manifest that loads but
+   * can never run is a feed that looks connected in `/sources` and quietly
+   * is not, which is the state hardest to notice.
+   */
+  private checkInfraLayers(manifest: SourceManifest): void {
+    if (manifest.criticalInfrastructure && !infraLayersEnabled()) {
+      throw new ManifestError(INFRA_DISABLED_REASON);
+    }
+  }
+
+  /** Rejects a manifest whose `fetch` names a host this deployment will not call. */
+  private checkFetchHost(manifest: SourceManifest): void {
+    if (!manifest.fetch || !this.fetchPolicy) return;
+    const host = new URL(manifest.fetch.url).hostname.toLowerCase();
+    if (!this.fetchPolicy.allowedHosts.includes(host)) {
+      throw new ManifestError(
+        `fetch.url names "${host}", which is not in this deployment's outbound allowlist ` +
+          `(config/security_policies.json → outbound_fetch.allowed_hosts)`,
+      );
+    }
+  }
 
   /**
    * Loads every manifest in a directory.
@@ -45,6 +78,8 @@ export class SourceRegistry {
       if (!file.endsWith('.json')) continue;
       try {
         const manifest = parseSourceManifest(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8')), this.ontology);
+        this.checkFetchHost(manifest);
+        this.checkInfraLayers(manifest);
         this.manifests.set(manifest.id, manifest);
         loaded.push(manifest.id);
       } catch (err) {
@@ -76,6 +111,8 @@ export class SourceRegistry {
     }
 
     const manifest = parseSourceManifest(raw, this.ontology);
+    this.checkFetchHost(manifest);
+    this.checkInfraLayers(manifest);
 
     const beyond = manifest.compartments.filter((c) => !principal.compartments.includes(c));
     if (beyond.length > 0) {
@@ -99,6 +136,7 @@ export class SourceRegistry {
       edges: manifest.edges.map((e) => `${e.from}-[${e.relation}]->${e.to}`),
       clearance: manifest.defaultClearance,
       compartments: manifest.compartments,
+      fetchesFrom: manifest.fetch ? new URL(manifest.fetch.url).host : null,
     });
 
     return { manifest, replaced };

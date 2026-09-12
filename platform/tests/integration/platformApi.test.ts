@@ -71,6 +71,10 @@ beforeAll(async () => {
   // test uses its own tiny budget via a separate limiter unit test.
   process.env.PLATFORM_RATE_BURST = '500';
   process.env.PLATFORM_RATE_PER_MINUTE = '6000';
+  // The infrastructure layers are off in production and on here: these tests
+  // exercise the ingestion code, and the gate is a deployment decision. That
+  // the gate itself refuses when off is proved separately, below.
+  process.env.INFRA_LAYERS = 'on';
 
   // Imported after the env is set: the module reads all of it at load time.
   const { app } = (await import('../../api/server')) as { app: Express };
@@ -89,6 +93,7 @@ afterAll(async () => {
   delete process.env.PLATFORM_API_KEYS;
   delete process.env.PLATFORM_RATE_BURST;
   delete process.env.PLATFORM_RATE_PER_MINUTE;
+  delete process.env.INFRA_LAYERS;
 });
 
 describe('platform API: authentication', () => {
@@ -508,6 +513,37 @@ describe('platform API: cases', () => {
   it('requires a key on every case route', async () => {
     expect((await call('GET', '/api/platform/cases')).status).toBe(401);
     expect((await call('POST', '/api/platform/cases', { body: { title: 'x' } })).status).toBe(401);
+  });
+});
+
+describe('platform API: the critical-infrastructure gate', () => {
+  it('refuses the picture where the deployment has not turned these layers on', async () => {
+    // Read per request, not at boot, so turning it off takes effect without a
+    // restart - and so this test can prove it against the running server.
+    delete process.env.INFRA_LAYERS;
+    try {
+      const res = await call('POST', '/api/platform/ingest/infraua', {
+        key: KEYS.secret,
+        body: { payload: { facilities: [], events: [], dependencies: [] } },
+      });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/does not ingest/);
+    } finally {
+      process.env.INFRA_LAYERS = 'on';
+    }
+  });
+
+  it('says which way it is set, so an operator can check rather than guess', async () => {
+    const on = await call('GET', '/api/platform/health', {});
+    expect(on.body.critical_infrastructure_layers).toBe('on');
+
+    delete process.env.INFRA_LAYERS;
+    try {
+      const off = await call('GET', '/api/platform/health', {});
+      expect(off.body.critical_infrastructure_layers).toBe('off');
+    } finally {
+      process.env.INFRA_LAYERS = 'on';
+    }
   });
 });
 

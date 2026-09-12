@@ -44,6 +44,7 @@ import OperatorPanel from "@/components/OperatorPanel";
 import SourceHealth from "@/components/SourceHealth";
 import HudClock from "@/components/HudClock";
 import MapLayers, { type LayerToggle } from "@/components/MapLayers";
+import { INFRA_DISABLED_NOTICE, infraLayersOff } from "@/lib/infra-gate";
 import MapLegend from "@/components/MapLegend";
 import SituationBar from "@/components/SituationBar";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -77,7 +78,6 @@ import {
   pushToPlatform,
   pushableDependencies,
 } from "@/lib/platform.functions";
-import { SEED_FACILITIES } from "@/lib/infra-seed";
 import { analyzeNetwork, assignRegions } from "@/lib/infra-analytics";
 import {
   buildGraph,
@@ -144,15 +144,15 @@ function Console() {
     queryKey: ["facilities"],
     queryFn: () => facilitiesFn(),
     staleTime: 30 * 60 * 1000,
-    // Опорний набір показуємо миттєво, поки вантажиться live з OpenStreetMap
-    // (Overpass буває повільним), щоб карта не була порожньою під час старту.
-    placeholderData: {
-      facilities: SEED_FACILITIES,
-      fetchedAt: "",
-      degraded: true,
-      source: "baseline" as const,
-      truncatedCategories: [],
-    },
+    /*
+     * Опорного набору тут більше немає, і це не втрата зручності.
+     *
+     * Він був статичним імпортом переліку ключових обʼєктів країни, тобто
+     * їхав у клієнтському бандлі до кожного відвідувача — незалежно від
+     * того, чи хтось його запитував, і незалежно від будь-якого вимикача.
+     * Тепер він живе лише на сервері й лише за увімкненим вимикачем
+     * (`src/lib/infra-gate.ts`).
+     */
   });
   /*
    * Покриття накопичується тут, а не на сервері.
@@ -343,6 +343,22 @@ function Console() {
   const [eventKind, setEventKind] = useState<keyof typeof EVENT_KINDS | null>(null);
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
+
+  /*
+   * Вимикач шарів інфраструктури. Рішення ухвалює сервер (`infra-gate.ts`),
+   * клієнт лише дізнається про нього з відповіді: так порожній набір не
+   * читається як «джерело лежить», і ніхто не йде лагодити те, що вимкнули
+   * навмисно.
+   */
+  /*
+   * Поки відповіді немає — вважаємо вимкненим, а не увімкненим.
+   *
+   * Сторінка збирається на сервері до того, як запит устигне відповісти, тож
+   * зворотне усталене значення давало б кадр, у якому вся обстановка шарів
+   * інфраструктури вже намальована (нехай і порожня), і лише потім зникала.
+   * Помилятися тут треба в бік «не показувати».
+   */
+  const infraDisabled = infraLayersOff(facilitiesQuery.data);
 
   const allFacilities = useMemo(() => {
     const base = facilitiesQuery.data?.facilities ?? [];
@@ -568,38 +584,44 @@ function Console() {
   const sources = useMemo<SourceStatus[]>(() => {
     const unknownAge = ageOf(null, 1, 1);
     return [
-      statusOf({
-        id: "facilities",
-        label: "Обʼєкти (OSM)",
-        count: allFacilities.length,
-        age: facilitiesAge,
-        ...(facilitiesQuery.data?.degraded ? { degraded: true } : {}),
-        ...(truncated.length > 0 ? { truncated: true } : {}),
-      }),
-      statusOf({
-        id: "facility-tiles",
-        label: "Обʼєкти по ділянках (тайли)",
-        count: [...facTiles.values()].reduce((n, t) => n + t.length, 0),
-        age: unknownAge,
-        ...(sourceUnavailable(facEmpty) ? { down: true } : {}),
-        ...(facTilesQuery.data
-          ? { coverage: { loaded: facTiles.size, total: facTilesQuery.data.tilesTotal } }
-          : {}),
-      }),
-      statusOf({
-        id: "power-lines",
-        label: "ЛЕП 110 кВ+ (OSM)",
-        count: powerLines.length,
-        age: ageOf(
-          powerLinesQuery.data?.retrievedAt,
-          FRESHNESS_THRESHOLDS.facilities.aging,
-          FRESHNESS_THRESHOLDS.facilities.stale,
-        ),
-        ...(sourceUnavailable(powerEmpty) ? { down: true } : {}),
-        ...(powerLinesQuery.data
-          ? { coverage: { loaded: powerTiles.size, total: powerLinesQuery.data.tilesTotal } }
-          : {}),
-      }),
+      // Три джерела обʼєктів інфраструктури зникають зі зведення разом із
+      // самими даними: рядок «Обʼєкти — 0» читався б як несправність.
+      ...(infraDisabled
+        ? []
+        : [
+            statusOf({
+              id: "facilities",
+              label: "Обʼєкти (OSM)",
+              count: allFacilities.length,
+              age: facilitiesAge,
+              ...(facilitiesQuery.data?.degraded ? { degraded: true } : {}),
+              ...(truncated.length > 0 ? { truncated: true } : {}),
+            }),
+            statusOf({
+              id: "facility-tiles",
+              label: "Обʼєкти по ділянках (тайли)",
+              count: [...facTiles.values()].reduce((n, t) => n + t.length, 0),
+              age: unknownAge,
+              ...(sourceUnavailable(facEmpty) ? { down: true } : {}),
+              ...(facTilesQuery.data
+                ? { coverage: { loaded: facTiles.size, total: facTilesQuery.data.tilesTotal } }
+                : {}),
+            }),
+            statusOf({
+              id: "power-lines",
+              label: "ЛЕП 110 кВ+ (OSM)",
+              count: powerLines.length,
+              age: ageOf(
+                powerLinesQuery.data?.retrievedAt,
+                FRESHNESS_THRESHOLDS.facilities.aging,
+                FRESHNESS_THRESHOLDS.facilities.stale,
+              ),
+              ...(sourceUnavailable(powerEmpty) ? { down: true } : {}),
+              ...(powerLinesQuery.data
+                ? { coverage: { loaded: powerTiles.size, total: powerLinesQuery.data.tilesTotal } }
+                : {}),
+            }),
+          ]),
       statusOf({
         id: "events",
         label: "Події (NASA, USGS)",
@@ -621,6 +643,7 @@ function Console() {
       statusOf({ id: "zones", label: "Полігони тривог", count: zones.length, age: unknownAge }),
     ];
   }, [
+    infraDisabled,
     allFacilities.length,
     facilitiesAge,
     facilitiesQuery.data,
@@ -766,16 +789,18 @@ function Console() {
             >
               <MapIcon className="size-3" /> <span className="hidden sm:inline">Карта</span>
             </button>
-            <button
-              onClick={() => setView("analytics")}
-              className={`flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
-                view === "analytics" ? "bg-card text-foreground" : "text-muted-foreground"
-              }`}
-            >
-              <BarChart3 className="size-3" /> <span className="hidden sm:inline">Аналітика</span>
-            </button>
+            {infraDisabled ? null : (
+              <button
+                onClick={() => setView("analytics")}
+                className={`flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                  view === "analytics" ? "bg-card text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                <BarChart3 className="size-3" /> <span className="hidden sm:inline">Аналітика</span>
+              </button>
+            )}
           </div>
-          {view === "map" ? (
+          {view === "map" && !infraDisabled ? (
             <Button
               size="sm"
               variant={showTable ? "secondary" : "outline"}
@@ -860,7 +885,7 @@ function Console() {
         </div>
       ) : null}
 
-      {view === "analytics" ? (
+      {view === "analytics" && !infraDisabled ? (
         <ClientOnly
           fallback={
             <div className="flex flex-1 items-center justify-center bg-background">
@@ -900,56 +925,74 @@ function Console() {
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           {/* Filters */}
           <aside className="order-2 shrink-0 space-y-4 overflow-y-auto border-border p-4 lg:order-1 lg:w-72 lg:border-r">
-            <div>
-              <label className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                <Search className="size-3" /> Пошук обʼєкта
-              </label>
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="назва або оператор"
-                className="h-9 font-mono text-xs"
-              />
-            </div>
-
-            <div>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                Шари даних
-              </p>
-              <div className="space-y-1">
-                {ALL_CATEGORIES.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => toggle(c)}
-                    className={`flex w-full items-center justify-between rounded border px-2.5 py-1.5 text-left transition-colors ${
-                      active.has(c)
-                        ? "border-border bg-card"
-                        : "border-transparent bg-transparent opacity-45"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span
-                        className="size-2.5 rounded-full"
-                        style={{ background: CATEGORIES[c].color }}
-                      />
-                      <span className="text-xs">{CATEGORIES[c].label}</span>
-                    </span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {counts.get(c) ?? 0}
-                    </span>
-                  </button>
-                ))}
+            {infraDisabled ? (
+              <div className="rounded border border-border bg-card p-2.5">
+                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                  Шари інфраструктури
+                </p>
+                <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                  {facilitiesQuery.data?.notice ?? INFRA_DISABLED_NOTICE} Карта показує обстановку:
+                  тривоги, лінію фронту, пожежі, події та погоду.
+                </p>
               </div>
-            </div>
+            ) : (
+              <div>
+                <label className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  <Search className="size-3" /> Пошук обʼєкта
+                </label>
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="назва або оператор"
+                  className="h-9 font-mono text-xs"
+                />
+              </div>
+            )}
 
-            <button
-              onClick={() => setShowLinks((v) => !v)}
-              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors ${
-                showLinks ? "border-primary/60 text-primary" : "border-border text-muted-foreground"
-              }`}
-            >
-              <Waypoints className="size-3.5" /> Звʼязки живлення
-            </button>
+            {infraDisabled ? null : (
+              <>
+                <div>
+                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                    Шари даних
+                  </p>
+                  <div className="space-y-1">
+                    {ALL_CATEGORIES.map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => toggle(c)}
+                        className={`flex w-full items-center justify-between rounded border px-2.5 py-1.5 text-left transition-colors ${
+                          active.has(c)
+                            ? "border-border bg-card"
+                            : "border-transparent bg-transparent opacity-45"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="size-2.5 rounded-full"
+                            style={{ background: CATEGORIES[c].color }}
+                          />
+                          <span className="text-xs">{CATEGORIES[c].label}</span>
+                        </span>
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {counts.get(c) ?? 0}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setShowLinks((v) => !v)}
+                  className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors ${
+                    showLinks
+                      ? "border-primary/60 text-primary"
+                      : "border-border text-muted-foreground"
+                  }`}
+                >
+                  <Waypoints className="size-3.5" /> Звʼязки живлення
+                </button>
+              </>
+            )}
 
             <button
               onClick={() => setShowFrontline((v) => !v)}
@@ -981,20 +1024,24 @@ function Console() {
               ) : null}
             </button>
 
-            <button
-              onClick={() => setShowGraph((v) => !v)}
-              disabled={threatGraph.nodes.length === 0}
-              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
-                showGraph ? "border-red-500/60 text-red-300" : "border-border text-muted-foreground"
-              }`}
-            >
-              <Share2 className="size-3.5" /> Граф загроз «ціль → обʼєкт»
-              {threatGraph.nodes.length > 0 ? (
-                <span className="ml-auto font-mono text-[10px] opacity-70">
-                  {threatGraph.nodes.length}
-                </span>
-              ) : null}
-            </button>
+            {infraDisabled ? null : (
+              <button
+                onClick={() => setShowGraph((v) => !v)}
+                disabled={threatGraph.nodes.length === 0}
+                className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
+                  showGraph
+                    ? "border-red-500/60 text-red-300"
+                    : "border-border text-muted-foreground"
+                }`}
+              >
+                <Share2 className="size-3.5" /> Граф загроз «ціль → обʼєкт»
+                {threatGraph.nodes.length > 0 ? (
+                  <span className="ml-auto font-mono text-[10px] opacity-70">
+                    {threatGraph.nodes.length}
+                  </span>
+                ) : null}
+              </button>
+            )}
 
             <div>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -1017,7 +1064,7 @@ function Console() {
               </div>
             </div>
 
-            {palanterQuery.data?.configured ? (
+            {palanterQuery.data?.configured && !infraDisabled ? (
               <div className="rounded border border-border bg-card p-2.5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                   Аналітична платформа
@@ -1158,10 +1205,13 @@ function Console() {
                 </div>
               ) : null}
 
-              {facilitiesQuery.isPlaceholderData ? (
+              {infraDisabled ? (
+                <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto w-fit rounded border border-border bg-background/95 px-3 py-2 text-center font-mono text-[10px] text-muted-foreground">
+                  {facilitiesQuery.data?.notice ?? INFRA_DISABLED_NOTICE}
+                </div>
+              ) : facilitiesQuery.isFetching && allFacilities.length === 0 ? (
                 <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
-                  <Loader2 className="size-3 animate-spin" /> Опорний набір показано; вантажимо
-                  повні дані з OpenStreetMap…
+                  <Loader2 className="size-3 animate-spin" /> Вантажимо дані з OpenStreetMap…
                 </div>
               ) : facilitiesQuery.data?.source === "baseline" ? (
                 <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
@@ -1174,12 +1224,19 @@ function Console() {
               <MapLayers
                 layers={
                   [
-                    {
-                      key: "links",
-                      label: "Звʼязки живлення",
-                      active: showLinks,
-                      color: "#22d3ee",
-                    },
+                    // Шари, що малюють обʼєкти інфраструктури та звʼязки між
+                    // ними, зникають разом із даними: перемикач, який нічого
+                    // не вмикає, — обіцянка, якої консоль не виконає.
+                    ...(infraDisabled
+                      ? []
+                      : [
+                          {
+                            key: "links",
+                            label: "Звʼязки живлення",
+                            active: showLinks,
+                            color: "#22d3ee",
+                          },
+                        ]),
                     {
                       key: "frontline",
                       label: "Лінія фронту",
@@ -1194,13 +1251,17 @@ function Console() {
                       disabled: fires.length === 0,
                       color: "#ff7a1a",
                     },
-                    {
-                      key: "graph",
-                      label: "Граф загроз",
-                      active: showGraph,
-                      disabled: threatGraph.nodes.length === 0,
-                      color: "#ff4d4d",
-                    },
+                    ...(infraDisabled
+                      ? []
+                      : [
+                          {
+                            key: "graph",
+                            label: "Граф загроз",
+                            active: showGraph,
+                            disabled: threatGraph.nodes.length === 0,
+                            color: "#ff4d4d",
+                          },
+                        ]),
                   ] satisfies LayerToggle[]
                 }
                 onToggle={(key) => {
@@ -1210,7 +1271,7 @@ function Console() {
                   else if (key === "graph") setShowGraph((v) => !v);
                 }}
               />
-              <MapLegend />
+              <MapLegend showInfra={!infraDisabled} />
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
@@ -1266,7 +1327,7 @@ function Console() {
             пошук. Два зрізи одних даних, що суперечать одне одному на сусідніх
             панелях, гірші за один.
           */}
-            {showTable ? (
+            {showTable && !infraDisabled ? (
               <EntityTable
                 facilities={visible}
                 analytics={analysis.perFacility}

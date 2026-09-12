@@ -20,6 +20,8 @@ import { EdrConnector, PERSONAL_DATA_COMPARTMENT, parseEdrBytes } from '../core/
 import { SourceRegistry } from '../core/ingestion/declarative/SourceRegistry';
 import { DeclarativeConnector } from '../core/ingestion/declarative/DeclarativeConnector';
 import { ManifestError } from '../core/ingestion/declarative/SourceManifest';
+import { SourceFetcher, fetchPolicyFromFile } from '../core/ingestion/declarative/SourceFetcher';
+import { INFRA_DISABLED_REASON, infraLayersEnabled } from '../core/ingestion/InfraLayers';
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
@@ -120,7 +122,9 @@ const infraUA = new InfraUAConnector(graph, vectors, audit);
 const prozorro = new ProzorroConnector(graph, vectors, audit);
 const prozorroClient = new ProzorroClient(process.env.PROZORRO_API_URL);
 const edr = new EdrConnector(graph, vectors, audit);
-const sources = new SourceRegistry(ontology, audit);
+const fetchPolicy = fetchPolicyFromFile(path.join(CONFIG_ROOT, 'security_policies.json'));
+const sources = new SourceRegistry(ontology, audit, fetchPolicy);
+const fetcher = new SourceFetcher(fetchPolicy, audit);
 const declarative = new DeclarativeConnector(graph, vectors, audit);
 const loadedSources = sources.loadDirectory(path.join(CONFIG_ROOT, 'sources'));
 const narrativeAdapter = process.env.ANTHROPIC_API_KEY
@@ -183,6 +187,8 @@ app.get('/api/platform/health', (_req, res) => {
   res.json({
     status: 'ok',
     declarative_sources: loadedSources.loaded.length,
+    outbound_allowed_hosts: fetchPolicy.allowedHosts,
+    critical_infrastructure_layers: infraLayersEnabled() ? 'on' : 'off',
     // A manifest that failed to load is reported rather than swallowed: a feed
     // that silently stopped existing looks exactly like a feed with no data.
     declarative_sources_failed: loadedSources.failed,
@@ -459,6 +465,11 @@ app.post('/api/platform/documents/structured', (req, res) => {
  * explicitly in the request.
  */
 app.post('/api/platform/ingest/infraua', (req, res) => {
+  // The console can be pointed anywhere; whether this graph accepts a picture
+  // of Ukrainian critical infrastructure is this deployment's call, not the
+  // caller's.
+  if (!infraLayersEnabled()) return res.status(403).json({ error: INFRA_DISABLED_REASON });
+
   const { payload, source, sector, clearance } = req.body ?? {};
   if (!payload || typeof payload !== 'object') {
     return res.status(400).json({ error: 'payload is required' });
@@ -893,7 +904,10 @@ app.post('/api/platform/actions/pending/:pendingId/withdraw', (req, res) => {
  * rather than per-row when data arrives.
  */
 app.get('/api/platform/sources', (_req, res) => {
-  res.json({ sources: sources.list(), failedToLoad: loadedSources.failed });
+  res.json({
+    sources: sources.list().map((manifest) => ({ ...manifest, pullable: fetcher.check(manifest) })),
+    failedToLoad: loadedSources.failed,
+  });
 });
 
 app.post('/api/platform/sources', (req, res) => {
@@ -932,6 +946,46 @@ app.post('/api/platform/ingest/source/:id', (req, res) => {
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Pulls a feed the manifest describes, then ingests what came back.
+ *
+ * The alternative is what this replaces: somebody runs a query in a shell,
+ * saves the answer, and posts it. That works and it means the query lives in
+ * one person's history - so what "the settlements feed" means depends on who
+ * ran it last, and nobody can tell from the repository what the numbers were
+ * built from.
+ *
+ * Which hosts may be called is the deployment's decision, in
+ * `config/security_policies.json`, never the manifest's: a document that names
+ * the hosts it may reach grants itself the right, and the review that would
+ * catch that is the same review that just approved the mapping.
+ */
+app.post('/api/platform/ingest/source/:id/pull', async (req, res) => {
+  const manifest = sources.get(String(req.params.id));
+  if (!manifest) return res.status(404).json({ error: `No source manifest "${req.params.id}".` });
+
+  const allowed = fetcher.check(manifest);
+  if (!allowed.allowed) return res.status(400).json({ error: allowed.reason });
+
+  try {
+    const pulled = await fetcher.fetch(manifest, req.principal!.id);
+    const result = declarative.ingest(manifest, pulled.payload, {
+      callerClearance: req.callerClearance!,
+      callerCompartments: req.principal!.compartments,
+    });
+    documents.appendMany(result.documents);
+    res.status(201).json({
+      ...result,
+      documents: result.documents.length,
+      fetched: { url: pulled.url, status: pulled.status, bytes: pulled.bytes, durationMs: pulled.durationMs },
+      snapshot: recordSnapshot(req, `source:${manifest.id}`, manifest.id, pulled.payload, result.recordsRead),
+      alerts: sweepAfterIngest(req),
+    });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -1487,4 +1541,5 @@ export {
   snapshots,
   sources,
   declarative,
+  fetcher,
 };

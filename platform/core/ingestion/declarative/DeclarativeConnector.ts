@@ -4,7 +4,7 @@ import { AuditLog } from '../../audit/AuditLog';
 import { ClearanceLevel } from '../../security/Clearance';
 import { unionCompartments } from '../../security/Marking';
 import { PERSONAL_DATA_COMPARTMENT } from '../EdrConnector';
-import { EntityMapping, FieldMapping, PropertyMapping, SourceManifest } from './SourceManifest';
+import { EntityMapping, ExclusionRule, FieldMapping, PropertyMapping, SourceManifest } from './SourceManifest';
 import { applyTransforms, readPath } from './transforms';
 
 /**
@@ -26,6 +26,8 @@ export interface DeclarativeIngestResult {
   edgesCreated: number;
   /** Records dropped, with the reason — never silently skipped. */
   skipped: { record: number; reason: string }[];
+  /** Records the manifest drops by name, with the reason it gives. */
+  excluded: { record: number; matched: string; reason: string }[];
   rejected: { edge: string; reason: string }[];
   documents: IndexedDocument[];
 }
@@ -50,6 +52,16 @@ function resolve(record: unknown, mapping: FieldMapping): string | number | bool
   }
   const transformed = applyTransforms(mapping.transform, raw);
   return transformed === null && mapping.fallback !== undefined ? mapping.fallback : transformed;
+}
+
+/** The first rule that matches this record, if the manifest names any. */
+function excludedBy(record: unknown, rules: ExclusionRule[] | undefined): ExclusionRule | null {
+  if (!rules || rules.length === 0) return null;
+  for (const rule of rules) {
+    const value = readPath(record, rule.from);
+    if (value !== undefined && value !== null && String(value) === rule.equals) return rule;
+  }
+  return null;
 }
 
 function collectProperties(record: unknown, mappings: PropertyMapping[] = []): Record<string, unknown> {
@@ -118,6 +130,7 @@ export class DeclarativeConnector {
       nodesCreated: 0,
       edgesCreated: 0,
       skipped: [],
+      excluded: [],
       rejected: [],
       documents: [],
     };
@@ -126,6 +139,15 @@ export class DeclarativeConnector {
 
     this.graph.runBatch(() => {
       records.forEach((record, index) => {
+        const dropped = excludedBy(record, manifest.exclude);
+        if (dropped) {
+          // Reported, not swallowed: an exclusion the report does not mention
+          // is a deletion, and the next person to read the numbers has no way
+          // to know a row was ever there.
+          result.excluded.push({ record: index, matched: dropped.equals, reason: dropped.reason });
+          return;
+        }
+
         const documentId = `${manifest.id}#${index}`;
         const idsByName = new Map<string, string>();
         let personalHere = false;
@@ -221,6 +243,7 @@ export class DeclarativeConnector {
       nodesCreated: result.nodesCreated,
       edgesCreated: result.edgesCreated,
       skipped: result.skipped.length,
+      excluded: result.excluded.length,
       rejected: result.rejected.length,
     });
 

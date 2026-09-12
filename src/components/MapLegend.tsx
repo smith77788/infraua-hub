@@ -35,7 +35,12 @@ function Swatch({ color, shape = "tri" }: { color: string; shape?: "tri" | "dot"
   );
 }
 
-export default function MapLegend() {
+/**
+ * `showInfra` прибирає з легенди позначки обʼєктів інфраструктури разом із
+ * самими обʼєктами: легенда, що пояснює позначку, якої на карті не буває, —
+ * це опис іншої карти.
+ */
+export default function MapLegend({ showInfra = true }: { showInfra?: boolean }) {
   const [open, setOpen] = useState(false);
 
   if (!open) {
@@ -91,13 +96,17 @@ export default function MapLegend() {
         <div className="flex items-center gap-2">
           <Swatch color="#ff4d4d" shape="line" /> Зони повітряної тривоги
         </div>
-        <div className="flex items-center gap-2">
-          <span className="inline-block size-2.5 rounded-full ring-2 ring-red-500" /> Обʼєкт під
-          загрозою
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="inline-block size-2.5 rounded-full bg-cyan-400" /> Кластер обʼєктів
-        </div>
+        {showInfra ? (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="inline-block size-2.5 rounded-full ring-2 ring-red-500" /> Обʼєкт під
+              загрозою
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block size-2.5 rounded-full bg-cyan-400" /> Кластер обʼєктів
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );

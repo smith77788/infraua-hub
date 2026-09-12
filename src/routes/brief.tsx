@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
+import { INFRA_DISABLED_NOTICE, infraLayersOff } from "@/lib/infra-gate";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 
@@ -41,6 +42,29 @@ function Brief() {
   const threatsQuery = useQuery({ queryKey: ["threats"], queryFn: () => threatsFn() });
   const threats = threatsQuery.data?.threats ?? [];
 
+  /*
+   * Вимикач шарів інфраструктури (`src/lib/infra-gate.ts`). На папері це
+   * важить найбільше: брифінг — єдине місце, що друкує впорядкований перелік
+   * обʼєктів за наслідками їхньої втрати, і саме він найлегше переживає
+   * консоль, з якої його роздрукували.
+   */
+  /*
+   * Поки відповіді немає — вважаємо вимкненим, а не увімкненим.
+   *
+   * Сторінка збирається на сервері до того, як запит устигне відповісти, тож
+   * зворотне усталене значення давало б кадр, у якому вся обстановка шарів
+   * інфраструктури вже намальована (нехай і порожня), і лише потім зникала.
+   * Помилятися тут треба в бік «не показувати».
+   */
+  const infraDisabled = infraLayersOff(facilitiesQuery.data);
+
+  /*
+   * Нумерація розділів рахується, а не проставляється вручну: інакше
+   * вимкнення двох розділів лишає документ із пунктами 1, 2, 5.
+   */
+  let sectionNo = 0;
+  const nextSection = () => (sectionNo += 1);
+
   const facilities = useMemo(() => facilitiesQuery.data?.facilities ?? [], [facilitiesQuery.data]);
   const events = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
@@ -60,6 +84,9 @@ function Brief() {
     queryKey: ["brief-power-lines"],
     queryFn: () => powerLinesFn({ data: { have: [] } }),
     staleTime: 10 * 60 * 1000,
+    // Сервер і так відмовить, але питати те, чого свідомо не віддають, —
+    // зайвий запит на кожне відкриття сторінки.
+    enabled: !infraDisabled,
   });
   const observed = useMemo(() => {
     const lines = (powerLinesQuery.data?.tiles ?? []).flatMap((tile) => tile.lines);
@@ -127,7 +154,9 @@ function Brief() {
         <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-primary">
           INFRAUA · ситуаційний брифінг
         </p>
-        <h1 className="mt-1 text-2xl font-bold">Критична інфраструктура України</h1>
+        <h1 className="mt-1 text-2xl font-bold">
+          {infraDisabled ? "Ситуаційний брифінг" : "Критична інфраструктура України"}
+        </h1>
         <p className="mt-1 font-mono text-xs text-muted-foreground">
           Сформовано {generatedAt ? generatedAt.toLocaleString("uk-UA") : "…"}
           {loading ? " · завантаження…" : ""}
@@ -137,13 +166,20 @@ function Brief() {
       {/* Резюме */}
       <section className="mt-5">
         <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          1. Загальна обстановка
+          {nextSection()}. Загальна обстановка
         </h2>
         <p className="mt-2 text-sm leading-relaxed">
-          Статус: <b>{summary.label}</b>. Під моніторингом <b>{facilities.length}</b> обʼєктів у{" "}
-          {analysis.sectors.length} секторах, зафіксовано <b>{summary.atRisk}</b> обʼєктів у зоні
-          активних подій
-          {summary.lifeAtRisk ? ` (зокрема ${summary.lifeAtRisk} обʼєктів життєзабезпечення)` : ""}.
+          {infraDisabled ? null : (
+            <>
+              Статус: <b>{summary.label}</b>. Під моніторингом <b>{facilities.length}</b> обʼєктів у{" "}
+              {analysis.sectors.length} секторах, зафіксовано <b>{summary.atRisk}</b> обʼєктів у
+              зоні активних подій
+              {summary.lifeAtRisk
+                ? ` (зокрема ${summary.lifeAtRisk} обʼєктів життєзабезпечення)`
+                : ""}
+              .{" "}
+            </>
+          )}
           Повітряні тривоги активні у <b>{activeAlarms.length}</b> регіонах, зафіксовано{" "}
           <b>{threats.length}</b> активних повітряних цілей (OSINT). Усього подій за 30 днів:{" "}
           <b>{summary.eventCount}</b>.
@@ -154,43 +190,45 @@ function Brief() {
         На що спирається документ. На папері не лишається підказок інтерфейсу,
         тож застереження має стояти поруч із висновками, а не деінде.
       */}
-      <section className="mt-5 rounded border border-border p-3">
-        <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          На чому це ґрунтується
-        </h2>
-        <p className="mt-2 text-sm leading-relaxed">
-          {groundedness.observed > 0 ? (
-            <>
-              Із <b>{groundedness.total}</b> звʼязків живлення <b>{groundedness.observed}</b> (
-              {Math.round(groundedness.observedShare * 100)}%) — це реальні лінії 110 кВ+ з
-              OpenStreetMap. Решта <b>{groundedness.inferred}</b> виведені за правилом «найближчий
-              сусід».
-            </>
-          ) : (
-            <>
-              Усі <b>{groundedness.total}</b> звʼязків живлення виведені за правилом «найближчий
-              сусід». Спостережених ліній у цьому зрізі немає.
-            </>
-          )}{" "}
-          Виведений звʼязок — це припущення, а не топологія: реальна лінія може йти повз найближчу
-          підстанцію, а живлення часто резервоване з двох боків. Оцінки критичності нижче порахованi
-          на цьому графі, тож у частині, що спирається на виведені звʼязки, вони успадковують саме
-          цю невизначеність.
-        </p>
-        <p className="mt-2 font-mono text-[11px] text-muted-foreground">
-          Дані: OpenStreetMap (обʼєкти й лінії), NASA EONET і GDACS (події), USGS (сейсміка),
-          відкриті джерела тривог. Обʼєкти оновлено{" "}
-          {facilitiesQuery.data?.fetchedAt
-            ? new Date(facilitiesQuery.data.fetchedAt).toLocaleString("uk-UA")
-            : "—"}
-          .
-        </p>
-      </section>
+      {infraDisabled ? null : (
+        <section className="mt-5 rounded border border-border p-3">
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+            На чому це ґрунтується
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed">
+            {groundedness.observed > 0 ? (
+              <>
+                Із <b>{groundedness.total}</b> звʼязків живлення <b>{groundedness.observed}</b> (
+                {Math.round(groundedness.observedShare * 100)}%) — це реальні лінії 110 кВ+ з
+                OpenStreetMap. Решта <b>{groundedness.inferred}</b> виведені за правилом «найближчий
+                сусід».
+              </>
+            ) : (
+              <>
+                Усі <b>{groundedness.total}</b> звʼязків живлення виведені за правилом «найближчий
+                сусід». Спостережених ліній у цьому зрізі немає.
+              </>
+            )}{" "}
+            Виведений звʼязок — це припущення, а не топологія: реальна лінія може йти повз найближчу
+            підстанцію, а живлення часто резервоване з двох боків. Оцінки критичності нижче
+            порахованi на цьому графі, тож у частині, що спирається на виведені звʼязки, вони
+            успадковують саме цю невизначеність.
+          </p>
+          <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+            Дані: OpenStreetMap (обʼєкти й лінії), NASA EONET і GDACS (події), USGS (сейсміка),
+            відкриті джерела тривог. Обʼєкти оновлено{" "}
+            {facilitiesQuery.data?.fetchedAt
+              ? new Date(facilitiesQuery.data.fetchedAt).toLocaleString("uk-UA")
+              : "—"}
+            .
+          </p>
+        </section>
+      )}
 
       {/* Тривоги */}
       <section className="mt-5">
         <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          2. Повітряні тривоги
+          {nextSection()}. Повітряні тривоги
         </h2>
         {activeAlarms.length === 0 ? (
           <p className="mt-2 text-sm">Активних тривог немає.</p>
@@ -206,86 +244,93 @@ function Brief() {
         )}
       </section>
 
-      {/* Сектори */}
-      <section className="mt-5">
-        <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          3. Готовність секторів
-        </h2>
-        <table className="mt-2 w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-left font-mono text-[10px] uppercase text-muted-foreground">
-              <th className="py-1 font-normal">Сектор</th>
-              <th className="py-1 text-right font-normal">Обʼєктів</th>
-              <th className="py-1 text-right font-normal">Під загрозою</th>
-              <th className="py-1 text-right font-normal">Готовність</th>
-            </tr>
-          </thead>
-          <tbody>
-            {analysis.sectors.map((s) => (
-              <tr key={s.tier} className="border-b border-border/40">
-                <td className="py-1">{s.label}</td>
-                <td className="py-1 text-right font-mono">{s.total}</td>
-                <td className="py-1 text-right font-mono">{Math.max(s.atRisk, s.underAlarm)}</td>
-                <td className="py-1 text-right font-mono font-semibold">{s.readiness}%</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      {/* Сектори й рейтинг критичності */}
+      {infraDisabled ? null : (
+        <>
+          <section className="mt-5">
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              {nextSection()}. Готовність секторів
+            </h2>
+            <table className="mt-2 w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left font-mono text-[10px] uppercase text-muted-foreground">
+                  <th className="py-1 font-normal">Сектор</th>
+                  <th className="py-1 text-right font-normal">Обʼєктів</th>
+                  <th className="py-1 text-right font-normal">Під загрозою</th>
+                  <th className="py-1 text-right font-normal">Готовність</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.sectors.map((s) => (
+                  <tr key={s.tier} className="border-b border-border/40">
+                    <td className="py-1">{s.label}</td>
+                    <td className="py-1 text-right font-mono">{s.total}</td>
+                    <td className="py-1 text-right font-mono">
+                      {Math.max(s.atRisk, s.underAlarm)}
+                    </td>
+                    <td className="py-1 text-right font-mono font-semibold">{s.readiness}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
 
-      {/* Критичні обʼєкти */}
-      <section className="mt-5">
-        <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          4. Обʼєкти найвищої критичності
-        </h2>
-        <table className="mt-2 w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-left font-mono text-[10px] uppercase text-muted-foreground">
-              <th className="py-1 font-normal">#</th>
-              <th className="py-1 font-normal">Обʼєкт</th>
-              <th className="py-1 font-normal">Сектор</th>
-              <th className="py-1 text-right font-normal">Залежних</th>
-              <th className="py-1 text-right font-normal">Індекс</th>
-              <th className="py-1 font-normal">Чому</th>
-            </tr>
-          </thead>
-          <tbody>
-            {top.map(({ facility, a }, i) => (
-              <tr key={facility.id} className="border-b border-border/40">
-                <td className="py-1 font-mono text-muted-foreground">{i + 1}</td>
-                <td className="py-1">
-                  {facility.name}
-                  {a.atRisk ? " ⚠" : ""}
-                  {a.underAlarm ? " 🚨" : ""}
-                </td>
-                <td className="py-1 text-muted-foreground">
-                  {CATEGORIES[facility.category].label}
-                </td>
-                <td className="py-1 text-right font-mono">{a.dependents}</td>
-                <td className="py-1 text-right font-mono font-semibold">{a.score}</td>
-                {/*
+          {/* Критичні обʼєкти */}
+          <section className="mt-5">
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              {nextSection()}. Обʼєкти найвищої критичності
+            </h2>
+            <table className="mt-2 w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left font-mono text-[10px] uppercase text-muted-foreground">
+                  <th className="py-1 font-normal">#</th>
+                  <th className="py-1 font-normal">Обʼєкт</th>
+                  <th className="py-1 font-normal">Сектор</th>
+                  <th className="py-1 text-right font-normal">Залежних</th>
+                  <th className="py-1 text-right font-normal">Індекс</th>
+                  <th className="py-1 font-normal">Чому</th>
+                </tr>
+              </thead>
+              <tbody>
+                {top.map(({ facility, a }, i) => (
+                  <tr key={facility.id} className="border-b border-border/40">
+                    <td className="py-1 font-mono text-muted-foreground">{i + 1}</td>
+                    <td className="py-1">
+                      {facility.name}
+                      {a.atRisk ? " ⚠" : ""}
+                      {a.underAlarm ? " 🚨" : ""}
+                    </td>
+                    <td className="py-1 text-muted-foreground">
+                      {CATEGORIES[facility.category].label}
+                    </td>
+                    <td className="py-1 text-right font-mono">{a.dependents}</td>
+                    <td className="py-1 text-right font-mono font-semibold">{a.score}</td>
+                    {/*
                   Оцінка без розбору на папері не оскаржується взагалі: у
                   читача немає способу спитати, з чого вона складається.
                 */}
-                <td className="py-1 text-[11px] text-muted-foreground">
-                  {a.signals.map((x) => x.label).join(", ") || "—"}
-                  {a.signals.some((x) => !x.grounded) ? " *" : ""}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+                    <td className="py-1 text-[11px] text-muted-foreground">
+                      {a.signals.map((x) => x.label).join(", ") || "—"}
+                      {a.signals.some((x) => !x.grounded) ? " *" : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
 
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-        * Серед сигналів обʼєкта є такі, що спираються на виведені звʼязки: якщо прибрати припущення
-        про живлення, вони зникають. Це твердження про нашу модель мережі, а не про саму мережу.
-      </p>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            * Серед сигналів обʼєкта є такі, що спираються на виведені звʼязки: якщо прибрати
+            припущення про живлення, вони зникають. Це твердження про нашу модель мережі, а не про
+            саму мережу.
+          </p>
+        </>
+      )}
 
       {/* Події */}
       <section className="mt-5">
         <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          5. Останні події
+          {nextSection()}. Останні події
         </h2>
         {recent.length === 0 ? (
           <p className="mt-2 text-sm">Подій не зафіксовано.</p>
@@ -306,8 +351,10 @@ function Brief() {
       </section>
 
       <footer className="mt-6 border-t border-border pt-3 font-mono text-[10px] leading-relaxed text-muted-foreground">
-        Джерела: OpenStreetMap (обʼєкти), NASA EONET та GDACS (події), USGS (сейсміка), відкриті
-        дані повітряних тривог. Показники розрахункові й призначені для ситуаційної обізнаності.
+        Джерела: {infraDisabled ? "" : "OpenStreetMap (обʼєкти), "}NASA EONET та GDACS (події), USGS
+        (сейсміка), відкриті дані повітряних тривог. Показники розрахункові й призначені для
+        ситуаційної обізнаності.
+        {infraDisabled ? ` ${facilitiesQuery.data?.notice ?? INFRA_DISABLED_NOTICE}` : ""}
       </footer>
     </div>
   );
