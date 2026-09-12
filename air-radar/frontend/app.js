@@ -87,6 +87,10 @@ let oblastFilter = null; // фільтр матриці загроз за обл
 
 // ── Свіжість: спостережене проти виведеного ────────────────────────────
 const FRESH_LABEL = { fresh: "щойно", aging: "згасає", stale: "застаріле" };
+/* Рівень верифікації показується словом і кольором. Непідтверджене
+   одиночне повідомлення має виглядати непідтвердженим — інакше радар
+   поширює чутку з тією ж вагою, що й підтверджену ціль. */
+const VER_MARK = { official: "★", corroborated: "✔", single: "?", unverified: "!" };
 
 function targetIcon(o) {
   const glyph = TYPE_GLYPH[o.type] || TYPE_GLYPH.unknown;
@@ -135,7 +139,9 @@ function rowHtml(o) {
     </div>
     <div class="main">
       <div class="name">${esc(o.label)}${o.count > 1 ? " ×" + o.count : ""}${o.route ? " · " + esc(o.route) : o.destination ? " → " + esc(o.destination) : ""}</div>
-      <div class="sub">${esc(o.oblast || o.channel || o.source)} · ${compass(o.heading)}${o.heading != null ? " " + Math.round(o.heading) + "°" : ""}${o.operator_count > 1 ? ` · ✔${o.operator_count} незалежних` : ""}${o.agreement === "both" ? " · ◎◎" : o.in_zone ? " · ◎" : ""}</div>
+      <div class="sub">
+        <span class="ver v-${(o.verification || {}).level || "single"}" title="${esc((o.verification || {}).label || "")}">${VER_MARK[(o.verification || {}).level] || "?"}</span>
+        ${esc(o.oblast || o.channel || o.source)} · ${compass(o.heading)}${o.heading != null ? " " + Math.round(o.heading) + "°" : ""}${o.agreement === "both" ? " · ◎◎" : o.in_zone ? " · ◎" : ""}</div>
       <div class="conf-bar"><i style="width:${conf}%;background:${o.color}"></i></div>
     </div>
     <div class="metrics">
@@ -387,6 +393,13 @@ function renderDossier(o) {
       <ul class="story">${confidenceStory(o).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
     </div>
     <div class="dsr-sec">
+      <div class="dsr-h">Верифікація</div>
+      <div class="ver-big v-${(o.verification || {}).level || "single"}">
+        ${VER_MARK[(o.verification || {}).level] || "?"} ${esc((o.verification || {}).label || "невідомо")}
+      </div>
+      <ul class="story">${((o.verification || {}).reasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+    </div>
+    <div class="dsr-sec">
       <div class="dsr-h">Походження</div>
       ${(o.provenance || []).map((p) => `<div class="prov">
         <span class="pch">@${esc(p.channel)}</span>
@@ -415,7 +428,30 @@ document.addEventListener("click", (e) => {
 });
 
 // ── «Я тут»: що з цього стосується особисто мене ───────────────────────
-const me = { point: store.get("radar.me", null), pickMode: false, rings: null };
+const me = {
+  point: store.get("radar.me", null),
+  window: store.get("radar.window", ""), // сторона, куди виходять вікна
+  pickMode: false,
+  advice: null,
+  wind: null,
+  timer: null,
+};
+const SIDE_LABEL = { N: "Пн", NE: "ПнСх", E: "Сх", SE: "ПдСх", S: "Пд", SW: "ПдЗх", W: "Зх", NW: "ПнЗх" };
+
+/* Порада рахується на сервері: там і треки, і геометрія коридору, і вітер.
+   Клієнт не має другої копії цієї логіки — інакше вони розійдуться. */
+async function refreshAdvice() {
+  if (!me.point) return;
+  const [lat, lon] = me.point;
+  try {
+    const q = `lat=${lat}&lon=${lon}${me.window ? "&window=" + me.window : ""}`;
+    me.advice = await fetch(`/api/advisory?${q}`).then((r) => r.json());
+  } catch { me.advice = null; }
+  if (!me.wind) {
+    try { me.wind = await fetch(`/api/wind?lat=${lat}&lon=${lon}`).then((r) => r.json()); } catch { me.wind = null; }
+  }
+  meAssess();
+}
 
 function meLayerRender() {
   layerGroups.me.clearLayers();
@@ -434,53 +470,85 @@ function meAssess() {
   const body = document.getElementById("me-body");
   if (!me.point) { hud.hidden = true; return; }
   hud.hidden = false;
+
+  const adv = me.advice;
+  const inbound = (adv && adv.inbound) || [];
+  const sky = adv && adv.sky;
+  const minutes = adv && adv.minutes_until_nearest;
+
+  // Найближчі за прямою відстанню — рахуємо локально, щоб перелік був
+  // живим між запитами поради (позиції рухаються motion-кроком).
   const near = [];
   for (const [, e] of objects) {
     const o = e.data;
-    const d = haversine(me.point, [o.lat, o.lon]);
-    let inbound = null;
-    if (o.heading != null) {
-      const { cross, along } = crossTrackKm([o.lat, o.lon], o.heading, me.point);
-      const ang = Math.abs((((bearing([o.lat, o.lon], me.point) - o.heading + 180) % 360) + 360) % 360 - 180);
-      if (ang <= 90 && cross <= 30) inbound = { cross, eta: (along / (o.speed_kmh || 200)) * 60 };
-    }
-    near.push({ o, d, brg: bearing(me.point, [o.lat, o.lon]), inbound });
+    near.push({ o, d: haversine(me.point, [o.lat, o.lon]), brg: bearing(me.point, [o.lat, o.lon]) });
   }
-  near.sort((a, b) => (a.inbound && !b.inbound ? -1 : !a.inbound && b.inbound ? 1 : a.d - b.d));
-  const top = near.slice(0, 5);
-  const inboundCount = near.filter((n) => n.inbound).length;
-  const closest = near.length ? near.reduce((a, b) => (a.d <= b.d ? a : b)) : null;
+  near.sort((a, b) => a.d - b.d);
+
+  const verdictClass = minutes != null && minutes <= 15 ? "danger"
+    : inbound.length ? "warn"
+    : sky && sky.clear ? "calm" : "warn";
+  const verdictText = minutes != null
+    ? `У вас ~${minutes} хв до найближчої цілі`
+    : inbound.length
+      ? `${targets(inbound.length)} у вашому напрямку`
+      : sky
+        ? sky.verdict
+        : "оцінка…";
+
+  const win = inbound.find((i) => i.window && i.window.known);
+  const wind = me.wind && me.wind.available ? me.wind : null;
+
   body.innerHTML = `
-    <div class="me-verdict ${inboundCount ? "danger" : closest && closest.d < 50 ? "warn" : "calm"}">
-      ${inboundCount
-        ? `${targets(inboundCount)} у напрямку моєї точки`
-        : closest
-          ? `Найближча ціль — ${Math.round(closest.d)} км`
-          : "Активних цілей у видачі немає"}
+    <div class="me-verdict ${verdictClass}">${esc(verdictText)}</div>
+    ${sky ? `<div class="me-sky ${sky.clear ? "ok" : ""}">${esc(sky.verdict)}${sky.last_seen_sec != null ? ` · востаннє бачили ${fmtAge(sky.last_seen_sec)} тому` : ""}</div>` : ""}
+    ${win ? `<div class="me-window ${win.window.exposed ? "danger" : "calm"}">${esc(win.window.advice)}</div>` : ""}
+    <div class="me-side">
+      <span>Вікна виходять на:</span>
+      <select id="me-window-sel">
+        <option value="">— не вказано —</option>
+        ${Object.keys(SIDE_LABEL).map((k) => `<option value="${k}"${me.window === k ? " selected" : ""}>${SIDE_LABEL[k]}</option>`).join("")}
+      </select>
     </div>
-    ${top.map((n) => `<div class="me-row" data-tid="${esc(n.o.id)}">
-      <span class="mecol" style="color:${n.o.color}">${n.inbound ? "➤" : "•"}</span>
-      <span class="melbl">${esc(n.o.label)}</span>
-      <span class="medir">${compass(n.brg)} ${Math.round(n.d)} км</span>
-      ${n.inbound ? `<span class="meeta">${Math.round(n.inbound.eta)}'</span>` : ""}
-    </div>`).join("") || '<div class="muted">—</div>'}
-    <div class="me-note">Відстань і напрямок рахуються від вашої точки до поточної позиції цілі. «➤» — ціль іде в межах 30 км від вас.</div>`;
+    ${near.slice(0, 5).map((n) => {
+      const inb = inbound.find((i) => i.id === n.o.id);
+      const v = (n.o.verification || {}).level || "single";
+      return `<div class="me-row" data-tid="${esc(n.o.id)}">
+        <span class="mecol" style="color:${n.o.color}">${inb ? "➤" : "•"}</span>
+        <span class="ver v-${v}" title="${esc((n.o.verification || {}).label || "")}">${VER_MARK[v] || "?"}</span>
+        <span class="melbl">${esc(n.o.label)}</span>
+        <span class="medir">${compass(n.brg)} ${Math.round(n.d)} км</span>
+        ${inb ? `<span class="meeta">${inb.eta_min}'</span>` : ""}
+      </div>`;
+    }).join("") || '<div class="muted">—</div>'}
+    ${wind ? `<div class="me-wind">💨 Вітер ${wind.speed_ms.toFixed(1)} м/с · знос уламків на ${esc(wind.debris.drift_to_label)} ≈ ${wind.debris.drift_m} м
+      <div class="me-note">${esc(wind.debris.basis)}</div></div>` : ""}
+    <div class="me-note">${sky ? esc(sky.caveat) : "Відстань і напрямок — від вашої точки до поточної позиції цілі."}</div>`;
+
   body.querySelectorAll(".me-row").forEach((el) => {
     el.onclick = () => openDossier(el.dataset.tid);
   });
+  const sel = document.getElementById("me-window-sel");
+  if (sel) sel.onchange = () => {
+    me.window = sel.value;
+    store.set("radar.window", me.window);
+    refreshAdvice();
+  };
 }
 
 function setMePoint(lat, lon) {
   me.point = [lat, lon];
+  me.wind = null; // вітер прив'язаний до точки
   store.set("radar.me", me.point);
   meLayerRender();
-  meAssess();
+  refreshAdvice();
+  if (!me.timer) me.timer = setInterval(refreshAdvice, 30000);
   const btn = document.querySelector('.fbtn[data-layer="me"]');
   if (btn) btn.classList.add("on");
 }
 
 function enableMe() {
-  if (me.point) { meLayerRender(); meAssess(); map.flyTo(me.point, Math.max(map.getZoom(), 8), { duration: 0.6 }); return; }
+  if (me.point) { meLayerRender(); refreshAdvice(); map.flyTo(me.point, Math.max(map.getZoom(), 8), { duration: 0.6 }); return; }
   if (navigator.geolocation) {
     document.getElementById("me-hud").hidden = false;
     document.getElementById("me-body").innerHTML = '<div class="muted">визначення розташування… або клацніть по карті</div>';
@@ -503,7 +571,8 @@ map.on("click", (e) => {
   setMePoint(e.latlng.lat, e.latlng.lng);
 });
 document.getElementById("me-close").onclick = () => {
-  me.point = null; me.pickMode = false;
+  me.point = null; me.pickMode = false; me.advice = null; me.wind = null;
+  if (me.timer) { clearInterval(me.timer); me.timer = null; }
   store.set("radar.me", null);
   layerGroups.me.clearLayers();
   document.getElementById("me-hud").hidden = true;
@@ -1006,5 +1075,6 @@ if (me.point) {
   const btn = document.querySelector('.fbtn[data-layer="me"]');
   if (btn) btn.classList.add("on");
   meLayerRender();
-  meAssess();
+  refreshAdvice();
+  me.timer = setInterval(refreshAdvice, 30000);
 }

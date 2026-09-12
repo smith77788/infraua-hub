@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import sources
+from .advisory import verify as _verify
 from .geocode import azimuth_deg, haversine_km, move_point
 from .models import TYPE_META, TacticalObject
 
@@ -149,6 +150,9 @@ class Track:
             "provenance": [sources.profile(c).to_dict() for c in sorted(self.sources)],
             "operators": sorted(sources.independent_operators(self.sources)),
             "operator_count": len(sources.independent_operators(self.sources)),
+            # Рівень верифікації словами: «підтверджено незалежними джерелами»
+            # чи «одне джерело, без підтвердження» — і чому саме так.
+            "verification": _verify(self),
             # ── адміністративна привʼязка й контекст доповіді ────────────
             "oblast": self.oblast,
             "oblast_basis": self.oblast_basis,

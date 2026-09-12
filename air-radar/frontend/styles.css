@@ -397,3 +397,26 @@ body {
   #app { grid-template-columns: 300px 1fr 300px; }
   .dossier { right: 300px; width: 300px; }
 }
+
+/* ── Верифікація (анти-фейк): рівень видно без відкриття досьє ─────── */
+.ver { font-family: var(--mono); font-weight: 700; margin-right: 4px; }
+.v-official { color: var(--green); }
+.v-corroborated { color: var(--cyan); }
+.v-single { color: var(--yellow); }
+.v-unverified { color: var(--red); }
+.ver-big { font-family: var(--mono); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.ver-big.v-official { color: var(--green); }
+.ver-big.v-corroborated { color: var(--cyan); }
+.ver-big.v-single { color: var(--yellow); }
+.ver-big.v-unverified { color: var(--red); }
+
+/* ── Порада для власної точки ─────────────────────────────────────── */
+.me-sky { font-size: 10.5px; color: var(--yellow); padding: 4px 0; border-top: 1px solid var(--border-soft); }
+.me-sky.ok { color: var(--green); }
+.me-window { font-size: 11px; font-weight: 600; padding: 6px; margin: 5px 0; border-radius: 4px; line-height: 1.35; }
+.me-window.danger { color: var(--red); background: rgba(255,77,77,.1); border: 1px solid rgba(255,77,77,.35); }
+.me-window.calm { color: var(--green); background: rgba(0,255,102,.06); border: 1px solid rgba(0,255,102,.2); }
+.me-side { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); padding: 5px 0; }
+.me-side select { font-family: var(--mono); font-size: 10px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; margin-left: auto; }
+.me-wind { font-size: 10.5px; color: var(--cyan); padding: 6px 0 2px; border-top: 1px solid var(--border-soft); margin-top: 5px; }
+.me-wind .me-note { border-top: none; padding-top: 2px; }

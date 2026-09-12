@@ -169,6 +169,67 @@ async def api_sitrep():
     )
 
 
+@app.get("/api/advisory")
+async def api_advisory(lat: float, lon: float, radius: float = 150.0, window: str = ""):
+    """Що обстановка означає для конкретної точки: небо, вікна, найближче.
+
+    Радіус за замовчуванням 150 км — приблизно 50 хв підльоту для «шахеда»
+    і кілька хвилин для крилатої ракети; це вікно на ухвалення рішення,
+    а не безпечна відстань.
+    """
+    from . import advisory
+    from .geocode import azimuth_deg, haversine_km
+
+    tracks = list(broadcaster.tracks.tracks.values())
+    sky = advisory.sky_clear(tracks, lat, lon, radius)
+    inbound = []
+    for t in tracks:
+        d = haversine_km((lat, lon), (t.ex_lat, t.ex_lon))
+        if d > radius or t.heading is None:
+            continue
+        brg = azimuth_deg((t.ex_lat, t.ex_lon), (lat, lon))
+        if advisory.angle_diff(brg, t.heading) > 60:
+            continue  # летить не в наш бік
+        td = t.to_dict()
+        item = {
+            "id": t.id,
+            "label": td["label"],
+            "distance_km": round(d, 1),
+            "bearing_from_me": round(azimuth_deg((lat, lon), (t.ex_lat, t.ex_lon))),
+            "eta_min": round(d / max(1, td["speed_kmh"]) * 60),
+            "verification": td["verification"],
+            "freshness": td["freshness"],
+        }
+        if window:
+            item["window"] = advisory.window_exposure(brg, window)
+        inbound.append(item)
+    inbound.sort(key=lambda x: x["eta_min"])
+    return JSONResponse(
+        {
+            "sky": sky,
+            "inbound": inbound,
+            "minutes_until_nearest": inbound[0]["eta_min"] if inbound else None,
+        }
+    )
+
+
+@app.get("/api/wind")
+async def api_wind(lat: float, lon: float):
+    """Приземний вітер у точці (open-meteo, keyless) + оцінка зносу уламків."""
+    from . import advisory, weather
+
+    w = await weather.current_wind(lat, lon)
+    if not w:
+        return JSONResponse({"available": False, "reason": "джерело погоди недоступне"})
+    return JSONResponse(
+        {
+            "available": True,
+            **w,
+            "debris": advisory.debris_drift(w["direction_deg"], w["speed_ms"]),
+        }
+    )
+
+
 @app.get("/api/health")
 async def api_health():
     return {
