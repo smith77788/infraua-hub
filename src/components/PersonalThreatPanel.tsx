@@ -1,5 +1,5 @@
-import { Crosshair, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Bell, BellOff, Crosshair, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Threat } from "@/lib/air";
 import type { WeatherNow } from "@/lib/air";
@@ -10,6 +10,7 @@ import {
   windowExposure,
   type WindowSide,
 } from "@/lib/advisory";
+import { newInboundIds, notify, playBeep, vibrate } from "@/lib/alarm";
 
 /*
  * «Я тут» — обстановка для точки користувача.
@@ -25,6 +26,7 @@ import {
 
 const LS_POINT = "infraua.me.point.v1";
 const LS_WINDOW = "infraua.me.window.v1";
+const LS_SOUND = "infraua.me.sound.v1";
 
 // Запасний вибір, коли геолокація закрита. Обласні центри — публічно відомі
 // координати, не персональні дані.
@@ -94,12 +96,16 @@ export default function PersonalThreatPanel({
   const [side, setSide] = useState<WindowSide | "">("");
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState(false);
+  const [sound, setSound] = useState(false);
+  const audioRef = useRef<AudioContext | null>(null);
+  const prevInboundRef = useRef<string[]>([]);
 
   useEffect(() => {
     setPoint(loadPoint());
     try {
       const w = localStorage.getItem(LS_WINDOW);
       if (w) setSide(w as WindowSide);
+      setSound(localStorage.getItem(LS_SOUND) === "1");
     } catch {
       /* приватний режим */
     }
@@ -161,6 +167,60 @@ export default function PersonalThreatPanel({
   const debris =
     weather && !weather.degraded ? debrisDrift(weather.windDir, weather.windKmh) : null;
 
+  // Тривога на НОВУ вхідну ціль. Працює й коли панель згорнута: вночі саме це
+  // має розбудити. Порівнюємо набір вхідних із попереднім — сигналимо лише на
+  // появу, а не на кожен перерахунок (інакше сирена не змовкала б).
+  const inboundIds = useMemo(
+    () => (assessment ? assessment.nearest.filter((n) => n.inbound).map((n) => n.threat.id) : []),
+    [assessment],
+  );
+  useEffect(() => {
+    const fresh = newInboundIds(prevInboundRef.current, inboundIds);
+    prevInboundRef.current = inboundIds;
+    if (!sound || fresh.length === 0 || !assessment) return;
+    try {
+      if (!audioRef.current) audioRef.current = new AudioContext();
+      if (audioRef.current.state === "suspended") void audioRef.current.resume();
+      playBeep(audioRef.current);
+    } catch {
+      /* браузер без WebAudio */
+    }
+    vibrate();
+    const mins = assessment.minutesToNearest;
+    notify(
+      "⚠ Ціль у вашому напрямку",
+      mins != null ? `Найближча за ~${mins} хв` : "Перевірте обстановку",
+      "infraua-inbound",
+    );
+  }, [inboundIds, sound, assessment]);
+
+  function toggleSound() {
+    const next = !sound;
+    setSound(next);
+    try {
+      localStorage.setItem(LS_SOUND, next ? "1" : "0");
+    } catch {
+      /* приватний режим */
+    }
+    if (next) {
+      // Дозвіл і «розблокування» звуку треба брати у відповідь на дотик.
+      try {
+        if (!audioRef.current) audioRef.current = new AudioContext();
+        void audioRef.current.resume();
+        playBeep(audioRef.current);
+      } catch {
+        /* без WebAudio */
+      }
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+          void Notification.requestPermission();
+        }
+      } catch {
+        /* без Notifications */
+      }
+    }
+  }
+
   if (!open) {
     return (
       <button
@@ -188,6 +248,15 @@ export default function PersonalThreatPanel({
         <span className="flex-1 font-mono text-[10px] uppercase tracking-[0.14em] text-cyan-300">
           Моя точка
         </span>
+        <button
+          type="button"
+          onClick={toggleSound}
+          className={sound ? "text-emerald-400" : "text-muted-foreground hover:text-foreground"}
+          aria-label={sound ? "Вимкнути звук тривоги" : "Увімкнути звук тривоги"}
+          title="Звук, вібрація та сповіщення на нову вхідну ціль"
+        >
+          {sound ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
+        </button>
         <button
           type="button"
           onClick={() => setOpen(false)}
