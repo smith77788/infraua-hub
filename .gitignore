@@ -35,3 +35,7 @@ dist-ssr
 air-radar/backend/data/
 platform/dist
 platform/workspace
+
+# Проєкт на bun (bun.lock). npm-lock від локального `npm install` не комітимо:
+# другий конкурентний lockfile збиває bun-збірку і синхронізацію Lovable.
+package-lock.json
