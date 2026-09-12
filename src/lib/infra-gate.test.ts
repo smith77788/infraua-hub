@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { INFRA_LAYERS_FLAG, infraLayersEnabled, infraLayersOff } from "./infra-gate";
+import { INFRA_LAYERS_FLAG, infraLayersOff, infraLayersPermitted } from "./infra-gate";
 
 afterEach(() => {
   delete process.env[INFRA_LAYERS_FLAG];
@@ -10,16 +10,16 @@ describe("вимикач шарів критичної інфраструкту�
     // Головна властивість: розгортання, яке про вимикач не знає, нічого не
     // віддає. Протилежне усталене значення означало б, що шари публікує той,
     // хто про них не думав.
-    expect(infraLayersEnabled()).toBe(false);
+    expect(infraLayersPermitted()).toBe(false);
   });
 
   it("вмикається рівно одним значенням, а не будь-чим правдоподібним", () => {
     for (const value of ["yes", "true", "1", "ON", "on ", ""]) {
       process.env[INFRA_LAYERS_FLAG] = value;
-      expect(infraLayersEnabled()).toBe(false);
+      expect(infraLayersPermitted()).toBe(false);
     }
     process.env[INFRA_LAYERS_FLAG] = "on";
-    expect(infraLayersEnabled()).toBe(true);
+    expect(infraLayersPermitted()).toBe(true);
   });
 });
 

@@ -3,13 +3,22 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import {
+  isOwner,
   miniAppKeyboard,
+  type BotCommand,
   parseCommand,
+  parseLayersArg,
   renderHelp,
+  renderLayers,
+  renderNoPlatform,
+  renderNotOwner,
+  renderPurgeDone,
+  renderPurgePreview,
   renderStart,
   renderStatus,
   renderUnknown,
   secretMatches,
+  senderId,
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 
@@ -176,6 +185,64 @@ async function situationBrief(request: Request) {
   return { alarmRegions: alarms, eventsLastDay, sources, consoleUrl: consoleUrl(request) };
 }
 
+/**
+ * Адміністративні команди бота.
+ *
+ * Живуть тут, а не в `lib/telegram.ts`, бо потребують мережі: вимикач і граф
+ * лежать на платформі. Чиста частина (розбір, тексти, перевірка власника) —
+ * там і покрита тестами; тут лише звʼязок.
+ *
+ * Вимикач мусить жити на платформі, а не в змінній оточення консолі, з простої
+ * причини: Worker не може переписати власне оточення, тож команда з чату
+ * змінити змінну не здатна. Платформа має диск, і саме тому ручка там.
+ */
+async function adminCommand(parsed: BotCommand, ownerOk: boolean): Promise<string | null> {
+  if (parsed.command !== "layers" && parsed.command !== "purge") return null;
+  if (!ownerOk) return renderNotOwner();
+
+  const { isPlatformConfigured, platformFetch } = await import("./lib/platform-client");
+  if (!isPlatformConfigured()) return renderNoPlatform();
+
+  if (parsed.command === "layers") {
+    const wanted = parseLayersArg(parsed.args);
+    if (wanted === "invalid")
+      return "Не зрозумів. <code>/layers on</code> або <code>/layers off</code>";
+
+    if (wanted === null) {
+      const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
+      if (!res.ok) return `Платформа не відповіла: ${res.status}`;
+      return renderLayers(res.body as never);
+    }
+
+    const res = await platformFetch("/api/platform/settings/infra-layers", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: wanted, reason: `Telegram: ${parsed.chatId}` }),
+    });
+    if (!res.ok) return `Платформа відхилила зміну: ${res.status}`;
+    // Кеш консолі тримає відповідь до півхвилини; скидаємо, щоб оберт ручки
+    // було видно одразу, а не «десь за хвилину».
+    const { forgetInfraLayersCache } = await import("./lib/infra-gate");
+    forgetInfraLayersCache();
+    return renderLayers(res.body as never);
+  }
+
+  const confirm = parsed.args.trim().toLowerCase();
+  const res = await platformFetch("/api/platform/purge/infrastructure", {
+    method: "POST",
+    body: JSON.stringify(confirm === "yes" || confirm === "так" ? { confirm: true } : {}),
+  });
+  if (!res.ok) return `Платформа відхилила: ${res.status}`;
+  const body = res.body as {
+    dryRun?: boolean;
+    wouldRetract?: string[];
+    sourcesInGraph?: string[];
+    retracted?: { source: string; nodesRemoved: number; edgesRemoved: number }[];
+  };
+  return body.dryRun
+    ? renderPurgePreview(body.wouldRetract ?? [], body.sourcesInGraph ?? [])
+    : renderPurgeDone(body.retracted ?? []);
+}
+
 async function telegramWebhook(request: Request): Promise<Response> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
@@ -201,6 +268,16 @@ async function telegramWebhook(request: Request): Promise<Response> {
   if (!parsed) return new Response("ok", { status: 200 });
 
   const url = consoleUrl(request);
+  // Власник перевіряється за тим, ХТО надіслав, а не за чатом: chatId у групі
+  // спільний, і звірка з ним відкрила б команди кожному в тій групі.
+  const ownerOk = isOwner(senderId(update), process.env["TELEGRAM_OWNER_ID"]);
+
+  const admin = await adminCommand(parsed, ownerOk);
+  if (admin !== null) {
+    await telegramSend(token, parsed.chatId, admin, undefined);
+    return new Response("ok", { status: 200 });
+  }
+
   let text: string;
   switch (parsed.command) {
     case "start":

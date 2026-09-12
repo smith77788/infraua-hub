@@ -34,26 +34,26 @@ describe('declarative sources', () => {
   let vectors: VectorIndex;
   let audit: AuditLog;
   let registry: SourceRegistry;
+  let infraAllowed = true;
   let connector: DeclarativeConnector;
 
   beforeEach(() => {
     // Shipped feeds include critical-infrastructure ones, which a deployment
     // has to turn on. On here so the mapping itself stays under test; the gate
     // has its own tests below.
-    process.env.INFRA_LAYERS = 'on';
+    infraAllowed = true;
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'declarative-'));
     ontology = OntologyManifest.fromFile(path.join(CONFIG, 'ontology.json'));
     graph = new GraphStore(path.join(dir, 'graph.json'), ontology);
     vectors = new VectorIndex();
     audit = new AuditLog(path.join(dir, 'audit.log'));
-    registry = new SourceRegistry(ontology, audit);
+    // Четвертий аргумент — предикат вимикача. Тут відкритий, бо перевіряється
+    // відображення; сам вимикач має власні тести нижче.
+    registry = new SourceRegistry(ontology, audit, undefined, () => infraAllowed);
     connector = new DeclarativeConnector(graph, vectors, audit);
   });
 
-  afterEach(() => {
-    delete process.env.INFRA_LAYERS;
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const shipped = () => registry.loadDirectory(path.join(CONFIG, 'sources'));
   const payload = () => JSON.parse(fs.readFileSync(FIXTURE, 'utf-8'));
@@ -542,22 +542,31 @@ describe('declarative sources', () => {
       expect(registry.get('wikidata-settlements')!.criticalInfrastructure).toBeUndefined();
     });
 
-    it('do not load at all where the deployment has not turned them on', () => {
-      delete process.env.INFRA_LAYERS;
-      const result = registry.loadDirectory(path.join(CONFIG, 'sources'));
+    it('disappear from the catalogue the moment the switch closes, without a restart', () => {
+      shipped();
+      expect(registry.list().map((m) => m.id)).toContain('wikidata-power-plants');
 
-      expect(result.loaded).toEqual(['wikidata-settlements']);
-      expect(result.failed.map((f) => f.file).sort()).toEqual([
-        'wikidata-dams.json',
-        'wikidata-power-plants.json',
-      ]);
-      expect(result.failed[0].reason).toMatch(/does not ingest/);
-      // Not merely hidden: there is nothing to ingest through.
+      // The switch is turned at runtime, from a phone. A registry that decided
+      // this at load time would need a restart per turn of the handle.
+      infraAllowed = false;
+      expect(registry.list().map((m) => m.id)).toEqual(['wikidata-settlements']);
       expect(registry.get('wikidata-power-plants')).toBeUndefined();
+      expect(registry.hiddenCount()).toBe(2);
+
+      infraAllowed = true;
+      expect(registry.get('wikidata-power-plants')).toBeDefined();
     });
 
-    it('cannot be registered at runtime either, whatever the clearance', () => {
-      delete process.env.INFRA_LAYERS;
+    it('stay findable for the purge, which must reach what the switch hid', () => {
+      shipped();
+      infraAllowed = false;
+      // Otherwise turning the switch off would hide the very batches somebody
+      // is trying to remove from the graph.
+      expect(registry.all().map((m) => m.id)).toContain('wikidata-power-plants');
+    });
+
+    it('cannot be registered while the switch is closed, whatever the clearance', () => {
+      infraAllowed = false;
       expect(() =>
         registry.register(
           {
@@ -572,17 +581,6 @@ describe('declarative sources', () => {
           principal(ClearanceLevel.TOP_SECRET),
         ),
       ).toThrow(/does not ingest/);
-    });
-
-    it('anything off by default: a deployment that says nothing writes nothing', () => {
-      delete process.env.INFRA_LAYERS;
-      expect(registry.loadDirectory(path.join(CONFIG, 'sources')).loaded).not.toContain(
-        'wikidata-power-plants',
-      );
-      process.env.INFRA_LAYERS = 'yes';
-      expect(registry.loadDirectory(path.join(CONFIG, 'sources')).loaded).not.toContain(
-        'wikidata-power-plants',
-      );
     });
   });
 

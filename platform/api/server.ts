@@ -21,7 +21,7 @@ import { SourceRegistry } from '../core/ingestion/declarative/SourceRegistry';
 import { DeclarativeConnector } from '../core/ingestion/declarative/DeclarativeConnector';
 import { ManifestError } from '../core/ingestion/declarative/SourceManifest';
 import { SourceFetcher, fetchPolicyFromFile } from '../core/ingestion/declarative/SourceFetcher';
-import { INFRA_DISABLED_REASON, infraLayersEnabled } from '../core/ingestion/InfraLayers';
+import { INFRA_DISABLED_REASON, INFRA_LAYERS_FLAG, InfraLayersStore } from '../core/ingestion/InfraLayers';
 import { parseCsv } from '../core/ingestion/csv';
 import { InvestigatorAgent } from '../agents/analyst/InvestigatorAgent';
 import { ClearanceLevel, clearanceAtLeast, parseClearance } from '../core/security/Clearance';
@@ -123,7 +123,17 @@ const prozorro = new ProzorroConnector(graph, vectors, audit);
 const prozorroClient = new ProzorroClient(process.env.PROZORRO_API_URL);
 const edr = new EdrConnector(graph, vectors, audit);
 const fetchPolicy = fetchPolicyFromFile(path.join(CONFIG_ROOT, 'security_policies.json'));
-const sources = new SourceRegistry(ontology, audit, fetchPolicy);
+/**
+ * Імена партій, під якими обʼєкти інфраструктури потрапляли в граф історично.
+ *
+ * Консоль надсилає під `infraua-console`; `infraua` — усталене ім\'я маршруту
+ * прийому. Список доповнюється маніфестами, що оголосили себе носіями
+ * критичної інфраструктури, і тим, що назве викликач.
+ */
+const INFRASTRUCTURE_SOURCES = ['infraua', 'infraua-console'];
+
+const infraLayers = new InfraLayersStore(DATA_ROOT, audit);
+const sources = new SourceRegistry(ontology, audit, fetchPolicy, () => infraLayers.enabled());
 const fetcher = new SourceFetcher(fetchPolicy, audit);
 const declarative = new DeclarativeConnector(graph, vectors, audit);
 const loadedSources = sources.loadDirectory(path.join(CONFIG_ROOT, 'sources'));
@@ -188,7 +198,8 @@ app.get('/api/platform/health', (_req, res) => {
     status: 'ok',
     declarative_sources: loadedSources.loaded.length,
     outbound_allowed_hosts: fetchPolicy.allowedHosts,
-    critical_infrastructure_layers: infraLayersEnabled() ? 'on' : 'off',
+    critical_infrastructure_layers: infraLayers.explain(),
+    declarative_sources_hidden: sources.hiddenCount(),
     // A manifest that failed to load is reported rather than swallowed: a feed
     // that silently stopped existing looks exactly like a feed with no data.
     declarative_sources_failed: loadedSources.failed,
@@ -468,7 +479,7 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
   // The console can be pointed anywhere; whether this graph accepts a picture
   // of Ukrainian critical infrastructure is this deployment's call, not the
   // caller's.
-  if (!infraLayersEnabled()) return res.status(403).json({ error: INFRA_DISABLED_REASON });
+  if (!infraLayers.enabled()) return res.status(403).json({ error: INFRA_DISABLED_REASON });
 
   const { payload, source, sector, clearance } = req.body ?? {};
   if (!payload || typeof payload !== 'object') {
@@ -1091,6 +1102,106 @@ app.post('/api/platform/retract', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+/**
+ * Стан вимикача шарів критичної інфраструктури й керування ним.
+ *
+ * Окремий маршрут, а не поле в конфігу: це оперативна ручка, яку крутять на
+ * ходу — з телефона, з бота, — і кожен оберт лягає в ланцюг аудиту разом із
+ * тим, хто крутив і чому.
+ *
+ * Читання відкрите для будь-якого ключа: «чи показуємо зараз» — не таємниця, і
+ * консоль має це питати на кожному запиті. Зміна вимагає SECRET, як і
+ * відкликання партії: обидві дії міняють те, що система віддає назовні.
+ */
+app.get('/api/platform/settings/infra-layers', (_req, res) => {
+  res.json(infraLayers.explain());
+});
+
+app.put('/api/platform/settings/infra-layers', (req, res) => {
+  const { enabled, reason } = req.body ?? {};
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be true or false' });
+  }
+  if (!clearanceAtLeast(req.callerClearance!, ClearanceLevel.SECRET)) {
+    return res.status(403).json({ error: 'changing the infrastructure switch requires SECRET clearance' });
+  }
+
+  infraLayers.set(enabled, req.principal!.id, typeof reason === 'string' ? reason : undefined);
+  const now = infraLayers.explain();
+  // Увімкнути можна лише те, що дозволило розгортання. Кажемо про це прямо:
+  // ручка в положенні «увімк» при закритому дозволі виглядала б як поломка.
+  res.json({
+    ...now,
+    ...(enabled && !now.permitted
+      ? {
+          warning:
+            `The switch is on but this deployment does not permit these layers ` +
+            `(set ${INFRA_LAYERS_FLAG}=on in its environment). Nothing is served until it does.`,
+        }
+      : {}),
+  });
+});
+
+/**
+ * Прибирає з графа те, що вже в ньому лежить від фідів інфраструктури.
+ *
+ * Вимикач закриває запис — він не чіпає того, що записали до нього. Це різні
+ * дії, і змішувати їх не можна: «більше не приймаємо» і «того, що прийняли,
+ * більше немає» — різні обіцянки, і друга незворотна.
+ *
+ * Тому спершу відповідає, **що саме** буде прибрано, і прибирає лише коли
+ * попросили явно (`confirm: true`). Перелік джерел береться з самого графа, а
+ * не з припущення про те, як їх назвали: партію могли завантажити під будь-яким
+ * іменем, і зашитий список тихо лишив би її на місці.
+ */
+app.post('/api/platform/purge/infrastructure', (req, res) => {
+  const { confirm, sources: extra } = req.body ?? {};
+  if (!clearanceAtLeast(req.callerClearance!, ClearanceLevel.SECRET)) {
+    return res.status(403).json({ error: 'purging requires SECRET clearance' });
+  }
+
+  const known = new Set<string>(INFRASTRUCTURE_SOURCES);
+  for (const manifest of sources.all()) {
+    if (manifest.criticalInfrastructure) known.add(manifest.id);
+  }
+  if (Array.isArray(extra)) {
+    for (const name of extra) if (typeof name === 'string' && name.trim()) known.add(name.trim());
+  }
+
+  // Перетин із тим, що справді є в графі: звіт про відкликання джерела, якого
+  // не було, читається як зроблена робота.
+  const present = new Set(
+    graph
+      .toJSON(ClearanceLevel.TOP_SECRET)
+      .nodes.flatMap((node) => node.source_doc_ids.map((id) => id.split('#')[0]!)),
+  );
+  const targets = [...known].filter((name) => present.has(name)).sort();
+
+  if (confirm !== true) {
+    return res.json({
+      dryRun: true,
+      wouldRetract: targets,
+      sourcesInGraph: [...present].sort(),
+      hint: 'repeat with {"confirm": true} to retract these',
+    });
+  }
+
+  const retracted = targets.map((name) => {
+    const result = graph.retractSource(name);
+    const documentsRemoved = documents.removeBySource(name);
+    vectors.removeBySource(name);
+    return { source: name, nodesRemoved: result.nodesRemoved.length, edgesRemoved: result.edgesRemoved, documentsRemoved };
+  });
+
+  audit.append(req.principal!.id, 'purge_infrastructure', {
+    sources: targets,
+    nodesRemoved: retracted.reduce((n, r) => n + r.nodesRemoved, 0),
+    edgesRemoved: retracted.reduce((n, r) => n + r.edgesRemoved, 0),
+  });
+
+  res.json({ dryRun: false, retracted });
 });
 
 app.post('/api/platform/investigate', async (req, res) => {

@@ -146,6 +146,11 @@ export function renderHelp(consoleUrl: string): string {
     "/start — про систему",
     "/help — цей текст",
     "",
+    "<b>Для власника</b>",
+    "/layers — стан шарів критичної інфраструктури",
+    "/layers on · /layers off — перемкнути",
+    "/purge — прибрати з графа вже завантажені обʼєкти інфраструктури",
+    "",
     `Повна картина — у консолі: <a href="${consoleUrl}">${escapeHtml(consoleUrl)}</a>`,
   ].join("\n");
 }
@@ -169,4 +174,141 @@ export function miniAppKeyboard(
 ): { inline_keyboard: { text: string; web_app: { url: string } }[][] } | undefined {
   if (chatType !== "private") return undefined;
   return { inline_keyboard: [[{ text: "Відкрити консоль", web_app: { url } }]] };
+}
+
+/**
+ * Власник розгортання — єдиний, хто може крутити вимикачі з чату.
+ *
+ * Ідентифікатор живе у змінній оточення `TELEGRAM_OWNER_ID`, а не в коді.
+ * Двічі навмисно: це персональні дані, яким не місце в публічному репозиторії,
+ * і це елемент контролю доступу — змінити його має бути можна, не випускаючи
+ * нову збірку.
+ *
+ * Поки змінна не задана, адміністративних команд **не існує ні для кого** —
+ * не «для всіх». Усталене значення відкритого доступу в елементі контролю
+ * доступу — це не зручність, а дірка.
+ */
+export function isOwner(userId: number | undefined, configured: string | undefined): boolean {
+  if (!configured || !configured.trim()) return false;
+  if (typeof userId !== "number" || !Number.isFinite(userId)) return false;
+  return configured.trim() === String(userId);
+}
+
+/** Хто надіслав команду. Потрібне окремо від `chatId`: у групі вони різні. */
+export function senderId(update: unknown): number | undefined {
+  if (typeof update !== "object" || update === null) return undefined;
+  const id = (update as TelegramUpdate).message?.from?.id;
+  return typeof id === "number" ? id : undefined;
+}
+
+/**
+ * Відповідь тому, хто не власник.
+ *
+ * Не «команди не існує»: вона існує, і вдавати протилежне означає, що власник,
+ * який помилився акаунтом, шукатиме поломку там, де її немає.
+ */
+export function renderNotOwner(): string {
+  return "Ця команда доступна лише власнику розгортання.";
+}
+
+export interface LayersState {
+  /** Чи віддаються шари зараз — обидві половини разом. */
+  enabled: boolean;
+  /** Чи дозволило розгортання (змінна оточення). */
+  permitted: boolean;
+  /** Положення ручки оператора. */
+  switchedOn: boolean;
+  changedBy?: string | null;
+  changedAt?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * Стан вимикача людською мовою.
+ *
+ * Дві половини показуються нарізно, бо «вимкнено» має два різні наслідки:
+ * закриту ручку крутить ця ж команда, а закритий дозвіл — лише дашборд.
+ * Одне слово «вимкнено» відправило б власника крутити не те.
+ */
+export function renderLayers(state: LayersState): string {
+  const lines: string[] = [
+    state.enabled
+      ? "🔴 <b>Шари критичної інфраструктури: УВІМКНЕНО</b>"
+      : "🟢 <b>Шари критичної інфраструктури: вимкнено</b>",
+    "",
+    `Дозвіл розгортання: ${state.permitted ? "є" : "<b>немає</b>"}`,
+    `Ручка оператора: ${state.switchedOn ? "увімк" : "вимк"}`,
+  ];
+
+  if (state.switchedOn && !state.permitted) {
+    lines.push("");
+    lines.push(
+      "Ручка увімкнена, але розгортання цього не дозволяє — нічого не віддається. " +
+        "Щоб дозволити, задайте <code>INFRA_LAYERS=on</code> у змінних консолі та платформи.",
+    );
+  }
+
+  if (state.changedAt) {
+    lines.push("");
+    lines.push(
+      `Останній оберт: ${escapeHtml(state.changedAt)}` +
+        (state.reason ? ` — ${escapeHtml(state.reason)}` : ""),
+    );
+  }
+
+  lines.push("");
+  lines.push("<code>/layers on</code> · <code>/layers off</code>");
+  return lines.join("\n");
+}
+
+/** Розбір аргументу `/layers`. `null` — аргументу не було, показуємо стан. */
+export function parseLayersArg(args: string): boolean | null | "invalid" {
+  const value = args.trim().toLowerCase();
+  if (!value) return null;
+  if (value === "on" || value === "увімк" || value === "1") return true;
+  if (value === "off" || value === "вимк" || value === "0") return false;
+  return "invalid";
+}
+
+export function renderPurgePreview(wouldRetract: string[], sourcesInGraph: string[]): string {
+  if (wouldRetract.length === 0) {
+    return [
+      "У графі немає партій інфраструктури — прибирати нічого.",
+      "",
+      sourcesInGraph.length > 0
+        ? `Джерела в графі: ${sourcesInGraph.map(escapeHtml).join(", ")}`
+        : "Граф порожній.",
+    ].join("\n");
+  }
+  return [
+    "<b>Буде прибрано з графа</b>",
+    "",
+    ...wouldRetract.map((s) => `• <code>${escapeHtml(s)}</code>`),
+    "",
+    "Це незворотно. Підтвердити: <code>/purge yes</code>",
+  ].join("\n");
+}
+
+export function renderPurgeDone(
+  retracted: { source: string; nodesRemoved: number; edgesRemoved: number }[],
+): string {
+  if (retracted.length === 0) return "Прибирати не було чого.";
+  const nodes = retracted.reduce((n, r) => n + r.nodesRemoved, 0);
+  const edges = retracted.reduce((n, r) => n + r.edgesRemoved, 0);
+  return [
+    "<b>Прибрано з графа</b>",
+    "",
+    ...retracted.map((r) => `• <code>${escapeHtml(r.source)}</code> — ${r.nodesRemoved} вузлів`),
+    "",
+    `Разом: ${nodes} вузлів, ${edges} звʼязків.`,
+  ].join("\n");
+}
+
+/** Коли платформа не налаштована — адмінкоманди спираються саме на неї. */
+export function renderNoPlatform(): string {
+  return [
+    "Платформа не налаштована, а вимикач і граф живуть саме там.",
+    "",
+    "Задайте <code>PLATFORM_API_URL</code> і <code>PLATFORM_API_KEY</code> у змінних консолі.",
+  ].join("\n");
 }

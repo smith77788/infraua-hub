@@ -3,7 +3,7 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import type { Express } from 'express';
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 
 /**
  * Exercises the platform over real HTTP, which is the only place several
@@ -30,7 +30,7 @@ let baseUrl: string;
 let dataDir: string;
 
 async function call(
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PUT',
   route: string,
   options: { key?: string; body?: unknown; purpose?: string } = {},
 ): Promise<{ status: number; body: any; headers: Headers }> {
@@ -72,9 +72,12 @@ beforeAll(async () => {
   process.env.PLATFORM_RATE_BURST = '500';
   process.env.PLATFORM_RATE_PER_MINUTE = '6000';
   // The infrastructure layers are off in production and on here: these tests
-  // exercise the ingestion code, and the gate is a deployment decision. That
-  // the gate itself refuses when off is proved separately, below.
+  // exercise the ingestion code, and the switch is an operational decision.
+  // Both halves have to say yes - the deployment's permission and the stored
+  // switch - so the tests set both. That each half alone closes the gate is
+  // proved separately, below.
   process.env.INFRA_LAYERS = 'on';
+  fs.writeFileSync(path.join(dataDir, 'infra-layers.json'), JSON.stringify({ enabled: true }));
 
   // Imported after the env is set: the module reads all of it at load time.
   const { app } = (await import('../../api/server')) as { app: Express };
@@ -516,34 +519,143 @@ describe('platform API: cases', () => {
   });
 });
 
-describe('platform API: the critical-infrastructure gate', () => {
-  it('refuses the picture where the deployment has not turned these layers on', async () => {
-    // Read per request, not at boot, so turning it off takes effect without a
-    // restart - and so this test can prove it against the running server.
-    delete process.env.INFRA_LAYERS;
-    try {
-      const res = await call('POST', '/api/platform/ingest/infraua', {
-        key: KEYS.secret,
-        body: { payload: { facilities: [], events: [], dependencies: [] } },
-      });
-      expect(res.status).toBe(403);
-      expect(res.body.error).toMatch(/does not ingest/);
-    } finally {
-      process.env.INFRA_LAYERS = 'on';
-    }
+describe('platform API: the critical-infrastructure switch', () => {
+  const read = () => call('GET', '/api/platform/settings/infra-layers', { key: KEYS.internal });
+  const set = (enabled: boolean, key = KEYS.secret, reason?: string) =>
+    call('PUT', '/api/platform/settings/infra-layers', { key, body: { enabled, ...(reason ? { reason } : {}) } });
+
+  afterEach(async () => {
+    process.env.INFRA_LAYERS = 'on';
+    await set(true);
   });
 
-  it('says which way it is set, so an operator can check rather than guess', async () => {
-    const on = await call('GET', '/api/platform/health', {});
-    expect(on.body.critical_infrastructure_layers).toBe('on');
+  it('needs both halves: the deployment\'s permission and the operator\'s switch', async () => {
+    expect((await read()).body.enabled).toBe(true);
 
+    // The handle alone.
+    await set(false);
+    expect((await read()).body).toMatchObject({ enabled: false, permitted: true, switchedOn: false });
+
+    // The permission alone.
+    await set(true);
     delete process.env.INFRA_LAYERS;
-    try {
-      const off = await call('GET', '/api/platform/health', {});
-      expect(off.body.critical_infrastructure_layers).toBe('off');
-    } finally {
-      process.env.INFRA_LAYERS = 'on';
-    }
+    expect((await read()).body).toMatchObject({ enabled: false, permitted: false, switchedOn: true });
+  });
+
+  it('says the switch is on but the deployment does not permit it, rather than lying', async () => {
+    delete process.env.INFRA_LAYERS;
+    const res = await set(true);
+    // A handle that reads "on" while nothing is served looks like a fault.
+    expect(res.body.warning).toMatch(/does not permit/);
+    expect(res.body.enabled).toBe(false);
+  });
+
+  it('refuses the picture whenever either half is closed', async () => {
+    await set(false);
+    const res = await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: { payload: { facilities: [], events: [], dependencies: [] } },
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/does not ingest/);
+  });
+
+  it('hides infrastructure feeds from the catalogue while it is off, and back when on', async () => {
+    await set(false);
+    const off = await call('GET', '/api/platform/sources', { key: KEYS.secret });
+    expect(off.body.sources.map((s: any) => s.id)).not.toContain('wikidata-power-plants');
+
+    await set(true);
+    const on = await call('GET', '/api/platform/sources', { key: KEYS.secret });
+    expect(on.body.sources.map((s: any) => s.id)).toContain('wikidata-power-plants');
+  });
+
+  it('is a privileged change, and every turn lands in the audit chain', async () => {
+    expect((await set(false, KEYS.internal)).status).toBe(403);
+
+    await set(false, KEYS.secret, 'прибрано з продакшну');
+    const log = await call('GET', '/api/platform/audit', { key: KEYS.secret });
+    const entry = log.body.entries.find((e: any) => e.action === 'infra_layers_off');
+    expect(entry).toBeDefined();
+    expect(entry.details.reason).toBe('прибрано з продакшну');
+  });
+
+  it('survives a restart, because a switch that forgets is not a switch', async () => {
+    await set(false, KEYS.secret, 'перевірка стійкості');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dataDir, 'infra-layers.json'), 'utf-8'));
+    expect(onDisk.enabled).toBe(false);
+    expect(onDisk.reason).toBe('перевірка стійкості');
+    // Хто крутив — записано, але ключ у файл не потрапляє.
+    expect(typeof onDisk.changedBy).toBe('string');
+    expect(onDisk.changedBy).not.toContain('test-');
+  });
+});
+
+describe('platform API: purging what the switch cannot reach', () => {
+  it('says what it would remove before removing anything', async () => {
+    const res = await call('POST', '/api/platform/purge/infrastructure', {
+      key: KEYS.secret,
+      body: {},
+    });
+    // A destructive action whose first answer is the action itself gives the
+    // operator no moment to notice they named the wrong thing.
+    expect(res.body.dryRun).toBe(true);
+    expect(Array.isArray(res.body.wouldRetract)).toBe(true);
+    expect(Array.isArray(res.body.sourcesInGraph)).toBe(true);
+  });
+
+  it('reaches a batch the switch is currently hiding', async () => {
+    await call('PUT', '/api/platform/settings/infra-layers', {
+      key: KEYS.secret,
+      body: { enabled: true },
+    });
+    await call('POST', '/api/platform/ingest/infraua', {
+      key: KEYS.secret,
+      body: {
+        source: 'purge-me',
+        payload: {
+          facilities: [{ id: 'p-1', name: 'Підстанція для чистки', category: 'substation', lat: 50, lon: 30 }],
+          events: [],
+          dependencies: [],
+        },
+      },
+    });
+
+    // Turning the switch off must not hide the batch from the cleanup: that
+    // would leave data nobody can find and everybody believes is gone.
+    await call('PUT', '/api/platform/settings/infra-layers', {
+      key: KEYS.secret,
+      body: { enabled: false },
+    });
+
+    const dry = await call('POST', '/api/platform/purge/infrastructure', {
+      key: KEYS.secret,
+      body: { sources: ['purge-me'] },
+    });
+    expect(dry.body.wouldRetract).toContain('purge-me');
+
+    const done = await call('POST', '/api/platform/purge/infrastructure', {
+      key: KEYS.secret,
+      body: { sources: ['purge-me'], confirm: true },
+    });
+    const removed = done.body.retracted.find((r: any) => r.source === 'purge-me');
+    expect(removed.nodesRemoved).toBeGreaterThan(0);
+
+    const after = await call('GET', '/api/platform/graph', { key: KEYS.secret });
+    expect(after.body.nodes.some((n: any) => n.label === 'Підстанція для чистки')).toBe(false);
+
+    await call('PUT', '/api/platform/settings/infra-layers', {
+      key: KEYS.secret,
+      body: { enabled: true },
+    });
+  });
+
+  it('is privileged, like every other change to what the graph holds', async () => {
+    const res = await call('POST', '/api/platform/purge/infrastructure', {
+      key: KEYS.internal,
+      body: { confirm: true },
+    });
+    expect(res.status).toBe(403);
   });
 });
 

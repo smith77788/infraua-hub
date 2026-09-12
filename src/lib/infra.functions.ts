@@ -269,7 +269,7 @@ const DISABLED_FACILITIES = (): FacilitiesPayload => ({
 
 export const getFacilities = createServerFn({ method: "GET" }).handler(
   async (): Promise<FacilitiesPayload> => {
-    if (!infraLayersEnabled()) return DISABLED_FACILITIES();
+    if (!(await infraLayersEnabled())) return DISABLED_FACILITIES();
 
     const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
     if (cached) return cached;
@@ -1342,7 +1342,7 @@ export const getSubstationTiles = createServerFn({ method: "GET" })
     return { have: have.filter((k): k is string => typeof k === "string") };
   })
   .handler(async ({ data }): Promise<SubstationTilesPayload> => {
-    if (!infraLayersEnabled()) return { tiles: [], tilesTotal: 0, disabled: true };
+    if (!(await infraLayersEnabled())) return { tiles: [], tilesTotal: 0, disabled: true };
 
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);
@@ -1418,7 +1418,7 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
     return { have: have.filter((k): k is string => typeof k === "string") };
   })
   .handler(async ({ data }): Promise<FacilityTilesPayload> => {
-    if (!infraLayersEnabled()) return { tiles: [], tilesTotal: 0, disabled: true };
+    if (!(await infraLayersEnabled())) return { tiles: [], tilesTotal: 0, disabled: true };
 
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);

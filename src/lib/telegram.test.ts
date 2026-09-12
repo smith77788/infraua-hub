@@ -2,13 +2,18 @@ import { describe, expect, it } from "bun:test";
 
 import {
   escapeHtml,
+  isOwner,
+  miniAppKeyboard,
   parseCommand,
+  parseLayersArg,
   renderHelp,
+  renderLayers,
+  renderPurgePreview,
   renderStart,
   renderStatus,
-  miniAppKeyboard,
   renderUnknown,
   secretMatches,
+  senderId,
 } from "./telegram";
 
 const CONSOLE = "https://infraua-hub-production.up.railway.app";
@@ -172,5 +177,89 @@ describe("parseCommand — тип чату", () => {
 
   it("без типу вважає чат приватним", () => {
     expect(parseCommand(update("/status"))?.chatType).toBe("private");
+  });
+});
+
+describe("власник розгортання", () => {
+  it("не існує, поки його не задали — і тоді команд немає ні в кого", () => {
+    // Усталене значення відкритого доступу в елементі контролю доступу — це не
+    // зручність, а дірка. Порожня змінна не має означати «дозволено всім».
+    expect(isOwner(12345, undefined)).toBe(false);
+    expect(isOwner(12345, "")).toBe(false);
+    expect(isOwner(12345, "   ")).toBe(false);
+  });
+
+  it("це точний збіг ідентифікатора, а не схожість", () => {
+    expect(isOwner(12345, "12345")).toBe(true);
+    expect(isOwner(12345, " 12345 ")).toBe(true);
+    // Ті, що виглядають схоже: префікс, суфікс, інший акаунт.
+    expect(isOwner(1234, "12345")).toBe(false);
+    expect(isOwner(123456, "12345")).toBe(false);
+    expect(isOwner(54321, "12345")).toBe(false);
+  });
+
+  it("не пускає, коли відправника в оновленні немає", () => {
+    // Пости в каналі приходять без `from`. Без цієї перевірки `undefined`
+    // порівнювався б із рядком і міг би збігтися випадково.
+    expect(isOwner(undefined, "12345")).toBe(false);
+  });
+
+  it("береться з того, ХТО написав, а не з чату", () => {
+    // У групі chatId спільний: звірка з ним відкрила б команди всім у групі.
+    const update = {
+      message: { chat: { id: -100200, type: "group" }, from: { id: 777 }, text: "/layers" },
+    };
+    expect(senderId(update)).toBe(777);
+    expect(isOwner(senderId(update), "-100200")).toBe(false);
+    expect(isOwner(senderId(update), "777")).toBe(true);
+  });
+});
+
+describe("аргумент /layers", () => {
+  it("без аргументу — це запит стану, а не зміна", () => {
+    expect(parseLayersArg("")).toBe(null);
+    expect(parseLayersArg("   ")).toBe(null);
+  });
+
+  it("розуміє обидві мови й не вгадує решту", () => {
+    expect(parseLayersArg("on")).toBe(true);
+    expect(parseLayersArg(" OFF ")).toBe(false);
+    expect(parseLayersArg("увімк")).toBe(true);
+    expect(parseLayersArg("вимк")).toBe(false);
+    // Вгадування тут коштувало б вмикання шарів замість вимикання.
+    expect(parseLayersArg("enable")).toBe("invalid");
+    expect(parseLayersArg("да")).toBe("invalid");
+  });
+});
+
+describe("що бот показує про вимикач", () => {
+  it("розрізняє дві половини, бо крутяться вони в різних місцях", () => {
+    const text = renderLayers({ enabled: false, permitted: false, switchedOn: true });
+    // Ручка увімкнена, а дозволу немає: одне слово «вимкнено» відправило б
+    // власника крутити не те.
+    expect(text).toContain("Ручка оператора: увімк");
+    expect(text).toContain("Дозвіл розгортання: <b>немає</b>");
+    expect(text).toContain("INFRA_LAYERS=on");
+  });
+
+  it("каже «увімкнено» лише коли обидві половини відкриті", () => {
+    expect(renderLayers({ enabled: true, permitted: true, switchedOn: true })).toContain(
+      "УВІМКНЕНО",
+    );
+    expect(renderLayers({ enabled: false, permitted: true, switchedOn: false })).toContain(
+      "вимкнено",
+    );
+  });
+
+  it("прибирання спершу показує, що прибере", () => {
+    const preview = renderPurgePreview(["infraua-console"], ["infraua-console", "prozorro"]);
+    expect(preview).toContain("infraua-console");
+    expect(preview).toContain("/purge yes");
+    // Незворотність названа, а не мається на увазі.
+    expect(preview).toContain("незворотно");
+  });
+
+  it("порожній граф не виглядає як зроблена робота", () => {
+    expect(renderPurgePreview([], ["prozorro"])).toContain("прибирати нічого");
   });
 });

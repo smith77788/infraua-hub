@@ -6,7 +6,7 @@ import { ClearanceLevel, clearanceAtLeast } from '../../security/Clearance';
 import { Principal } from '../../security/ApiKeyAuth';
 import { ManifestError, SourceManifest, parseSourceManifest } from './SourceManifest';
 import { FetchPolicy } from './SourceFetcher';
-import { INFRA_DISABLED_REASON, infraLayersEnabled } from '../InfraLayers';
+import { INFRA_DISABLED_REASON } from '../InfraLayers';
 
 /**
  * The feeds this deployment knows how to ingest.
@@ -34,20 +34,19 @@ export class SourceRegistry {
      * its author, next to the ontology check and for the same reason.
      */
     private readonly fetchPolicy?: FetchPolicy,
+    /**
+     * Чи віддавати зараз фіди, що несуть обʼєкти критичної інфраструктури.
+     *
+     * Предикат, а не значення: перемикач крутять на ходу, і реєстр, який
+     * запамʼятав відповідь при старті, вимагав би рестарту на кожен оберт
+     * ручки. Усталене — «ні».
+     */
+    private readonly infraAllowed: () => boolean = () => false,
   ) {}
 
-  /**
-   * Rejects a feed that writes critical-infrastructure objects where the
-   * deployment does not accept them.
-   *
-   * Refused at registration rather than per ingest: a manifest that loads but
-   * can never run is a feed that looks connected in `/sources` and quietly
-   * is not, which is the state hardest to notice.
-   */
-  private checkInfraLayers(manifest: SourceManifest): void {
-    if (manifest.criticalInfrastructure && !infraLayersEnabled()) {
-      throw new ManifestError(INFRA_DISABLED_REASON);
-    }
+  /** Чи прихований цей маніфест поточним станом вимикача. */
+  private hidden(manifest: SourceManifest): boolean {
+    return manifest.criticalInfrastructure === true && !this.infraAllowed();
   }
 
   /** Rejects a manifest whose `fetch` names a host this deployment will not call. */
@@ -79,7 +78,6 @@ export class SourceRegistry {
       try {
         const manifest = parseSourceManifest(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8')), this.ontology);
         this.checkFetchHost(manifest);
-        this.checkInfraLayers(manifest);
         this.manifests.set(manifest.id, manifest);
         loaded.push(manifest.id);
       } catch (err) {
@@ -89,12 +87,40 @@ export class SourceRegistry {
     return { loaded, failed };
   }
 
+  /**
+   * Фіди, доступні зараз.
+   *
+   * Ті, що несуть критичну інфраструктуру, зникають зі списку разом із правом
+   * у них писати — і зникають *тут*, а не при завантаженні, щоб обертання
+   * ручки не вимагало рестарту.
+   */
   list(): SourceManifest[] {
+    return Array.from(this.manifests.values())
+      .filter((manifest) => !this.hidden(manifest))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /** Прихований фід не знаходиться: маршрут прийому відповість 404, як і має. */
+  get(id: string): SourceManifest | undefined {
+    const manifest = this.manifests.get(id);
+    if (!manifest || this.hidden(manifest)) return undefined;
+    return manifest;
+  }
+
+  /**
+   * Усі маніфести, разом із прихованими.
+   *
+   * Потрібно рівно там, де прихованість не має значення або навіть шкодить:
+   * прибирання вже записаного мусить знати імена фідів, які саме зараз
+   * вимкнені, — інакше вимикач ховав би від чистки те, що сам і закрив.
+   */
+  all(): SourceManifest[] {
     return Array.from(this.manifests.values()).sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  get(id: string): SourceManifest | undefined {
-    return this.manifests.get(id);
+  /** Скільки фідів зараз приховано вимикачем — для маршруту здоровʼя. */
+  hiddenCount(): number {
+    return Array.from(this.manifests.values()).filter((m) => this.hidden(m)).length;
   }
 
   /**
@@ -112,7 +138,10 @@ export class SourceRegistry {
 
     const manifest = parseSourceManifest(raw, this.ontology);
     this.checkFetchHost(manifest);
-    this.checkInfraLayers(manifest);
+    // Зареєструвати фід інфраструктури, поки вимикач закритий, не можна: інакше
+    // він мовчки чекав би в реєстрі й поїхав би при першому ж оберті ручки, а
+    // той, хто його додавав, вважав би, що додав нічого.
+    if (this.hidden(manifest)) throw new ManifestError(INFRA_DISABLED_REASON);
 
     const beyond = manifest.compartments.filter((c) => !principal.compartments.includes(c));
     if (beyond.length > 0) {

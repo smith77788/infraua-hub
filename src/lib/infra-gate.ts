@@ -39,8 +39,62 @@ export const INFRA_LAYERS_FLAG = "INFRA_LAYERS";
  * обчислене при завантаженні модуля, означало б різну поведінку в різних
  * ізолятах після зміни змінної оточення.
  */
-export function infraLayersEnabled(): boolean {
+/** Дозвіл розгортання: без нього шарів немає ніколи. */
+export function infraLayersPermitted(): boolean {
   return process.env[INFRA_LAYERS_FLAG] === "on";
+}
+
+/**
+ * Скільки триматися за відповідь платформи, мс.
+ *
+ * Вимикач крутять руками, не автоматом, тож півхвилини затримки прийнятні, а
+ * запит до Railway на кожен показ карти — ні.
+ */
+const CACHE_MS = 30_000;
+
+let cached: { value: boolean; at: number } | null = null;
+
+/**
+ * Чи віддавати обʼєкти інфраструктури просто зараз.
+ *
+ * Дозвіл читається з оточення, положення ручки — з платформи, бо консоль живе
+ * на Workers і власного диска не має: змінну оточення бот змінити не може, а
+ * стан має переживати рестарт і бути спільним для обох половин системи.
+ *
+ * **Недоступна платформа означає «вимкнено».** Це свідомий обмін: збій звʼязку
+ * ховає шари, замість того щоб лишити їх увімкненими тоді, коли ніхто не може
+ * їх вимкнути. Вимикач, який заклинює в положенні «увімкнено», гірший за його
+ * відсутність.
+ *
+ * Якщо платформа взагалі не налаштована, лишається сам дозвіл: розгортання без
+ * платформи — штатний стан, і воно керується змінною оточення, як і раніше.
+ */
+export async function infraLayersEnabled(): Promise<boolean> {
+  if (!infraLayersPermitted()) return false;
+
+  const { isPlatformConfigured, platformFetch } = await import("./platform-client");
+  if (!isPlatformConfigured()) return true;
+
+  const now = Date.now();
+  if (cached && now - cached.at < CACHE_MS) return cached.value;
+
+  try {
+    const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
+    const body = res.body as { switchedOn?: boolean } | null;
+    // `switchedOn`, а не `enabled`: платформа рахує «enabled» з урахуванням
+    // **свого** дозволу, а він тут ні до чого — консоль має власний.
+    const value = res.ok && body?.switchedOn === true;
+    cached = { value, at: now };
+    return value;
+  } catch {
+    cached = { value: false, at: now };
+    return false;
+  }
+}
+
+/** Тільки для тестів і для негайного застосування після оберту ручки. */
+export function forgetInfraLayersCache(): void {
+  cached = null;
 }
 
 /**
