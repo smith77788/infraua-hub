@@ -515,11 +515,84 @@ async function telegramWebhook(request: Request): Promise<Response> {
   return new Response("ok", { status: 200 });
 }
 
+/**
+ * Реєстрація вебхука Telegram і його стан — за секретом, який знає лише власник.
+ *
+ * Це відповідь на «бот мовчить». Вебхук ніде не реєструвався автоматично, тож
+ * якщо Telegram його загубив (або адреса змінилася при редеплої), оновлення
+ * просто не доходять. Відкриваєш цей маршрут із секретом — він реєструє вебхук
+ * на ЦЕЙ самий домен і повертає, що про бота думає сам Telegram: скільки
+ * оновлень висить у черзі й яка була остання помилка доставки.
+ *
+ * Захист — той самий `TELEGRAM_WEBHOOK_SECRET`, що вже боронить сам вебхук:
+ * його знає той, хто налаштовував бота. Ціль реєстрації завжди ЦЕЙ хост, узятий
+ * із запиту, — маршрут не можна намовити перенаправити бота кудись інде.
+ */
+async function telegramSetup(request: Request): Promise<Response> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
+
+  const provided = new URL(request.url).searchParams.get("secret");
+  if (!secretMatches(secret, provided)) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  if (!token) {
+    return json({ ok: false, reason: "TELEGRAM_BOT_TOKEN не заданий у змінних оточення" }, 503);
+  }
+
+  const hookUrl = `${consoleUrl(request)}/api/telegram/webhook`;
+  const set = await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: hookUrl,
+      secret_token: secret,
+      // Натискання кнопок приходять окремим типом — без цього бот їх не бачить.
+      allowed_updates: ["message", "callback_query"],
+      // Черга старих оновлень за добу мовчання нікому не потрібна.
+      drop_pending_updates: true,
+    }),
+  });
+  const setBody = (await set.json().catch(() => null)) as { description?: string } | null;
+
+  const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json()).catch(() => null);
+  const result = (info as { result?: Record<string, unknown> } | null)?.result ?? {};
+
+  return json({
+    ok: set.ok,
+    registeredTo: hookUrl,
+    setWebhook: setBody?.description ?? (set.ok ? "ok" : `HTTP ${set.status}`),
+    telegram: {
+      // Саме ці два поля відповідають на «чому мовчав».
+      url: result["url"],
+      pendingUpdates: result["pending_update_count"],
+      lastError: result["last_error_message"] ?? null,
+      lastErrorAt: result["last_error_date"] ?? null,
+    },
+  });
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body, null, 2), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     // Перехоплюється до маршрутизатора: службова відповідь не має залежати
     // від того, чи зібрався застосунок.
     const pathname = new URL(request.url).pathname;
+
+    if (pathname === "/api/telegram/setup") {
+      try {
+        return await telegramSetup(request);
+      } catch (error) {
+        console.error(error);
+        return json({ ok: false, reason: "internal error" }, 500);
+      }
+    }
 
     if (pathname === "/api/telegram/webhook") {
       try {
