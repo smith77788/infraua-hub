@@ -1,11 +1,18 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  ADMIN_ACTIONS,
+  adminKeyboard,
+  callbackToast,
   escapeHtml,
+  isAdminAction,
   isOwner,
   miniAppKeyboard,
+  parseCallback,
   parseCommand,
   parseLayersArg,
+  purgeKeyboard,
+  renderAdminPanel,
   renderHelp,
   renderLayers,
   renderPurgePreview,
@@ -259,7 +266,112 @@ describe("що бот показує про вимикач", () => {
     expect(preview).toContain("незворотно");
   });
 
+  it("у панелі з кнопками не пропонує ще й набрати команду", () => {
+    // Два способи зробити одне поруч — читач гадає, чи вони однакові.
+    const withButtons = renderPurgePreview(["infraua-console"], ["infraua-console"], true);
+    expect(withButtons).not.toContain("/purge yes");
+    expect(withButtons).toContain("незворотно");
+  });
+
   it("порожній граф не виглядає як зроблена робота", () => {
     expect(renderPurgePreview([], ["prozorro"])).toContain("прибирати нічого");
+  });
+});
+
+describe("натискання кнопок адмін-панелі", () => {
+  const press = (data: string, fromId = 777) => ({
+    callback_query: {
+      id: "cb-1",
+      from: { id: fromId },
+      message: { message_id: 42, chat: { id: 999 } },
+      data,
+    },
+  });
+
+  it("розбирається з окремого типу оновлення, не з повідомлення", () => {
+    const parsed = parseCallback(press("l:on"))!;
+    expect(parsed.callbackId).toBe("cb-1");
+    expect(parsed.userId).toBe(777);
+    expect(parsed.chatId).toBe(999);
+    expect(parsed.messageId).toBe(42);
+    // Звичайне повідомлення не є натисканням.
+    expect(parseCallback({ message: { chat: { id: 1 }, text: "/admin" } })).toBe(null);
+  });
+
+  it("дає `from` натискача, а не автора повідомлення з кнопками", () => {
+    // Панель можна переслати в інший чат — тиснути буде інший акаунт. Право
+    // дає той, хто натиснув, а не той, кому колись показали.
+    const parsed = parseCallback(press("l:off", 12345))!;
+    expect(isOwner(parsed.userId, "777")).toBe(false);
+    expect(isOwner(parsed.userId, "12345")).toBe(true);
+  });
+
+  it("не приймає коду, якого не показувала", () => {
+    // `callback_data` приходить від клієнта, тож це вхід ззовні, а не наш
+    // власний рядок, яким його легко вважати.
+    expect(isAdminAction("l:on")).toBe(true);
+    expect(isAdminAction("p:go")).toBe(true);
+    expect(isAdminAction("l:maybe")).toBe(false);
+    expect(isAdminAction("../../etc")).toBe(false);
+    expect(isAdminAction("")).toBe(false);
+  });
+
+  it("кожен код влазить у стелю Telegram на 64 байти", () => {
+    for (const value of Object.values(ADMIN_ACTIONS)) {
+      // За цією межею кнопка просто не працює, і мовчки.
+      expect(new TextEncoder().encode(value).length).toBeLessThanOrEqual(64);
+    }
+  });
+});
+
+describe("кнопки під станом", () => {
+  const state = (switchedOn: boolean, permitted = true) => ({
+    enabled: switchedOn && permitted,
+    permitted,
+    switchedOn,
+  });
+
+  it("називають дію, а не поточне положення", () => {
+    // «Шари: увімк» на кнопці половина прочитає як стан, половина — як дію, і
+    // ціна помилки в один бік значно вища.
+    const off = adminKeyboard(state(false)).inline_keyboard.flat();
+    expect(off[0]!.text).toContain("Увімкнути");
+    expect(off[0]!.callback_data).toBe(ADMIN_ACTIONS.layersOn);
+
+    const on = adminKeyboard(state(true)).inline_keyboard.flat();
+    expect(on[0]!.text).toContain("Вимкнути");
+    expect(on[0]!.callback_data).toBe(ADMIN_ACTIONS.layersOff);
+  });
+
+  it("попереджають, коли вмикати нема чого — дозволу немає", () => {
+    const buttons = adminKeyboard(state(false, false)).inline_keyboard.flat();
+    // Інакше: натиснув, нічого не змінилося, виглядає як поломка.
+    expect(buttons[0]!.text).toContain("дозволу немає");
+  });
+
+  it("незворотну дію не роблять одним дотиком", () => {
+    const first = adminKeyboard(state(true)).inline_keyboard.flat();
+    expect(first.some((b) => b.callback_data === ADMIN_ACTIONS.purgeConfirm)).toBe(false);
+    expect(first.some((b) => b.callback_data === ADMIN_ACTIONS.purgePreview)).toBe(true);
+
+    // Підтвердження зʼявляється лише на другому кроці, і поруч є вихід.
+    const second = purgeKeyboard().inline_keyboard.flat();
+    expect(second.some((b) => b.callback_data === ADMIN_ACTIONS.purgeConfirm)).toBe(true);
+    expect(second.some((b) => b.callback_data === ADMIN_ACTIONS.refresh)).toBe(true);
+  });
+
+  it("панель показує обидві половини вимикача", () => {
+    const text = renderAdminPanel(state(true, false));
+    expect(text).toContain("Адмін-панель");
+    expect(text).toContain("Ручка оператора: увімк");
+    expect(text).toContain("Дозвіл розгортання: <b>немає</b>");
+    // Підказка про текстові команди в панелі з кнопками зайва.
+    expect(text).not.toContain("/layers on");
+  });
+
+  it("спливний напис каже правду, коли ручка увімкнена без дозволу", () => {
+    const toast = callbackToast(ADMIN_ACTIONS.layersOn, state(true, false));
+    expect(toast).toContain("дозволу розгортання немає");
+    expect(callbackToast(ADMIN_ACTIONS.layersOn, state(true, true))).toBe("Шари увімкнено");
   });
 });

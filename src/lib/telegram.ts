@@ -147,8 +147,8 @@ export function renderHelp(consoleUrl: string): string {
     "/help — цей текст",
     "",
     "<b>Для власника</b>",
-    "/layers — стан шарів критичної інфраструктури",
-    "/layers on · /layers off — перемкнути",
+    "/admin — панель із кнопками",
+    "/layers on · /layers off — перемкнути без кнопок",
     "/purge — прибрати з графа вже завантажені обʼєкти інфраструктури",
     "",
     `Повна картина — у консолі: <a href="${consoleUrl}">${escapeHtml(consoleUrl)}</a>`,
@@ -270,7 +270,16 @@ export function parseLayersArg(args: string): boolean | null | "invalid" {
   return "invalid";
 }
 
-export function renderPurgePreview(wouldRetract: string[], sourcesInGraph: string[]): string {
+/**
+ * `withButtons` прибирає підказку про текстову команду: у панелі з кнопками
+ * «Підтвердити: /purge yes» поруч із кнопкою «Так, прибрати» — це два різні
+ * способи зробити одне, і читач гадає, чи вони роблять те саме.
+ */
+export function renderPurgePreview(
+  wouldRetract: string[],
+  sourcesInGraph: string[],
+  withButtons = false,
+): string {
   if (wouldRetract.length === 0) {
     return [
       "У графі немає партій інфраструктури — прибирати нічого.",
@@ -285,7 +294,7 @@ export function renderPurgePreview(wouldRetract: string[], sourcesInGraph: strin
     "",
     ...wouldRetract.map((s) => `• <code>${escapeHtml(s)}</code>`),
     "",
-    "Це незворотно. Підтвердити: <code>/purge yes</code>",
+    withButtons ? "Це незворотно." : "Це незворотно. Підтвердити: <code>/purge yes</code>",
   ].join("\n");
 }
 
@@ -311,4 +320,138 @@ export function renderNoPlatform(): string {
     "",
     "Задайте <code>PLATFORM_API_URL</code> і <code>PLATFORM_API_KEY</code> у змінних консолі.",
   ].join("\n");
+}
+
+/* ─── Адмін-панель із кнопками ──────────────────────────────────────────── */
+
+/**
+ * Натискання кнопки.
+ *
+ * Telegram шле його окремим типом оновлення, не повідомленням, і в ньому є
+ * власний `from` — саме він каже, **хто натиснув**. Це не те саме, що автор
+ * повідомлення з кнопками: панель можна переслати, і тоді тиснути буде інший.
+ * Тому власник звіряється тут наново, а не «один раз, коли показували панель».
+ */
+export interface CallbackPress {
+  callbackId: string;
+  userId: number | undefined;
+  chatId: number;
+  messageId: number;
+  data: string;
+}
+
+interface TelegramCallbackUpdate {
+  callback_query?: {
+    id?: string;
+    from?: { id?: number };
+    message?: { message_id?: number; chat?: { id?: number } };
+    data?: string;
+  };
+}
+
+export function parseCallback(update: unknown): CallbackPress | null {
+  if (typeof update !== "object" || update === null) return null;
+  const query = (update as TelegramCallbackUpdate).callback_query;
+  if (!query) return null;
+  const callbackId = query.id;
+  const chatId = query.message?.chat?.id;
+  const messageId = query.message?.message_id;
+  const data = query.data;
+  if (typeof callbackId !== "string" || typeof data !== "string") return null;
+  if (typeof chatId !== "number" || typeof messageId !== "number") return null;
+  return { callbackId, userId: query.from?.id, chatId, messageId, data };
+}
+
+/**
+ * Коди кнопок.
+ *
+ * Короткі, бо Telegram дає на `callback_data` 64 байти — і це не запас, а
+ * стеля, за якою кнопка просто не працює.
+ */
+export const ADMIN_ACTIONS = {
+  layersOn: "l:on",
+  layersOff: "l:off",
+  purgePreview: "p:dry",
+  purgeConfirm: "p:go",
+  refresh: "r",
+} as const;
+
+export type AdminAction = (typeof ADMIN_ACTIONS)[keyof typeof ADMIN_ACTIONS];
+
+export function isAdminAction(data: string): data is AdminAction {
+  return (Object.values(ADMIN_ACTIONS) as string[]).includes(data);
+}
+
+export interface InlineButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface InlineKeyboard {
+  inline_keyboard: InlineButton[][];
+}
+
+/**
+ * Кнопки панелі під поточний стан.
+ *
+ * Показується дія, а не стан: «Увімкнути шари» під вимкненими. Кнопка, що
+ * називає поточне положення, читається як «зараз так» рівно настільки ж, як і
+ * «натисни, щоб стало так», і половина людей зрозуміє її навпаки — а ціна
+ * помилки тут в один бік значно вища.
+ */
+export function adminKeyboard(state: LayersState): InlineKeyboard {
+  const rows: InlineButton[][] = [];
+
+  if (state.switchedOn) {
+    rows.push([{ text: "🔻 Вимкнути шари", callback_data: ADMIN_ACTIONS.layersOff }]);
+  } else {
+    rows.push([
+      {
+        // Дозволу немає — кнопка лишається, але чесно каже, що сама по собі
+        // нічого не покаже: інакше натиснув, нічого не змінилося, і виглядає
+        // як поломка.
+        text: state.permitted ? "🔺 Увімкнути шари" : "🔺 Увімкнути (дозволу немає)",
+        callback_data: ADMIN_ACTIONS.layersOn,
+      },
+    ]);
+  }
+
+  rows.push([{ text: "🧹 Прибрати з графа", callback_data: ADMIN_ACTIONS.purgePreview }]);
+  rows.push([{ text: "🔄 Оновити", callback_data: ADMIN_ACTIONS.refresh }]);
+  return { inline_keyboard: rows };
+}
+
+/** Кнопки підтвердження чистки. Незворотну дію не роблять одним дотиком. */
+export function purgeKeyboard(): InlineKeyboard {
+  return {
+    inline_keyboard: [
+      [{ text: "⚠️ Так, прибрати", callback_data: ADMIN_ACTIONS.purgeConfirm }],
+      [{ text: "← Назад", callback_data: ADMIN_ACTIONS.refresh }],
+    ],
+  };
+}
+
+export function renderAdminPanel(state: LayersState): string {
+  return (
+    ["<b>⚙️ Адмін-панель</b>", "", renderLayers(state)]
+      .join("\n")
+      // У панелі з кнопками підказка про текстові команди зайва.
+      .replace("\n\n<code>/layers on</code> · <code>/layers off</code>", "")
+  );
+}
+
+/** Короткий спливний напис на самій кнопці. Telegram дає 200 символів. */
+export function callbackToast(action: AdminAction, state: LayersState): string {
+  switch (action) {
+    case ADMIN_ACTIONS.layersOn:
+      return state.enabled ? "Шари увімкнено" : "Ручку увімкнено, але дозволу розгортання немає";
+    case ADMIN_ACTIONS.layersOff:
+      return "Шари вимкнено";
+    case ADMIN_ACTIONS.purgePreview:
+      return "Перевіряю, що є в графі…";
+    case ADMIN_ACTIONS.purgeConfirm:
+      return "Прибрано";
+    default:
+      return "Оновлено";
+  }
 }

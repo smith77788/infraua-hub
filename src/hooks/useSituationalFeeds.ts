@@ -99,7 +99,7 @@ export function useSituationalFeeds(): SituationalFeeds {
     outages: outagesQ.data,
     weather: weatherQ.data,
     statuses: [
-      feedStatus("frontline", "Лінія фронту (DeepState)", frontline.length, frontlineQ),
+      feedStatus("frontline", "Окупована територія (DeepState)", frontline.length, frontlineQ),
       feedStatus("fires", "Пожежі (NASA FIRMS)", fires.length, firesQ),
       feedStatus(
         "spaceweather",

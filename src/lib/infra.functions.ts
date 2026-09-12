@@ -13,6 +13,7 @@ import {
   type AlertZone,
   type FirePoint,
   type FrontlineArea,
+  frontlineKind,
   type Threat,
   type ThreatType,
   type WeatherNow,
@@ -809,6 +810,22 @@ function simplifyRing(ring: number[][], max = 140): [number, number][] {
 }
 
 /** Назва DeepState: «Окуповано /// Occupied /// geoJSON.status.occupied» → перша частина. */
+/**
+ * Чи лежить полігон хоч якоюсь частиною в межах України.
+ *
+ * Перевіряється за вершинами, а не за центром: окупована територія на сході
+ * має центр у межах країни, а сатиричний полігон на Калінінград — ні, і
+ * жодна з них не вимагає точної геометрії, щоб їх розрізнити.
+ */
+function touchesUkraine(rings: [number, number][][]): boolean {
+  return rings.some((ring) =>
+    ring.some(
+      ([lat, lon]) =>
+        lat >= UA_BBOX.south && lat <= UA_BBOX.north && lon >= UA_BBOX.west && lon <= UA_BBOX.east,
+    ),
+  );
+}
+
 function statusFromName(name: string | undefined): string {
   return (
     (name ?? "")
@@ -843,13 +860,28 @@ export const getFrontline = createServerFn({ method: "GET" }).handler(
       const areas: FrontlineArea[] = [];
       for (const f of feats) {
         if (f?.geometry?.type !== "Polygon") continue;
+
+        const status = statusFromName(f.properties?.name);
+        // Беремо лише окуповану територію. Звільнене у 2022-му, стрілки
+        // напрямків ударів і позначки підрозділів — це робоча мапа редакції,
+        // а не межа контролю; намальовані разом, вони дають червону пляму, у
+        // якій справжньої лінії фронту не видно.
+        if (frontlineKind(status) !== "occupied") continue;
+
         const coords = f.geometry.coordinates as number[][][] | undefined;
         const rings = (coords ?? []).map((r) => simplifyRing(r)).filter((r) => r.length >= 3);
         if (!rings.length) continue;
+
+        // Джерело несе й сатиричні полігони на чужі регіони — «тимчасово
+        // окупована Карелія», Пруссія, Ічкерія. За назвою вони не
+        // відрізняються від справжніх, за розташуванням — відрізняються.
+        if (!touchesUkraine(rings)) continue;
+
         areas.push({
           polygons: rings,
           color: f.properties?.stroke ?? "#ff4d4d",
-          status: statusFromName(f.properties?.name),
+          status,
+          kind: "occupied",
         });
       }
       const payload: FrontlinePayload = { areas, datetime: data.datetime ?? "", degraded: false };

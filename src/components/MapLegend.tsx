@@ -88,13 +88,17 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
       </p>
       <div className="grid grid-cols-1 gap-1 text-[11px]">
         <div className="flex items-center gap-2">
-          <Swatch color="#a52714" shape="line" /> Лінія фронту (DeepState)
+          <span
+            className="inline-block h-2.5 w-4 rounded-[2px] border"
+            style={{ background: "#4a1b24", borderColor: "#9c5561" }}
+          />{" "}
+          Окупована територія (DeepState)
         </div>
         <div className="flex items-center gap-2">
           <Swatch color="#ff3b30" shape="dot" /> Пожежі (FIRMS, за FRP)
         </div>
         <div className="flex items-center gap-2">
-          <Swatch color="#ff4d4d" shape="line" /> Зони повітряної тривоги
+          <Swatch color="#ff4d4d" shape="line" /> Зони повітряної тривоги (пунктир)
         </div>
         {showInfra ? (
           <>

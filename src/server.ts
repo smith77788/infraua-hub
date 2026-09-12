@@ -3,20 +3,28 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import {
+  ADMIN_ACTIONS,
+  type AdminAction,
+  adminKeyboard,
+  callbackToast,
+  isAdminAction,
   isOwner,
+  type LayersState,
   miniAppKeyboard,
   type BotCommand,
+  parseCallback,
   parseCommand,
   parseLayersArg,
   renderHelp,
-  renderLayers,
   renderNoPlatform,
+  renderAdminPanel,
   renderNotOwner,
   renderPurgeDone,
   renderPurgePreview,
   renderStart,
   renderStatus,
   renderUnknown,
+  purgeKeyboard,
   secretMatches,
   senderId,
 } from "./lib/telegram";
@@ -153,6 +161,63 @@ async function telegramSend(
   }
 }
 
+/**
+ * Відповідь на натискання кнопки.
+ *
+ * Обовʼязкова: без неї Telegram тримає на кнопці годинник, доки не вирішить,
+ * що бот не працює. `show_alert` не вмикаємо — спливного напису досить, а
+ * модальне вікно на кожен дотик дратує.
+ */
+async function telegramAnswerCallback(
+  token: string,
+  callbackId: string,
+  text: string,
+): Promise<void> {
+  const response = await fetch(`${TELEGRAM_API}/bot${token}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackId, text: text.slice(0, 200) }),
+  });
+  if (!response.ok) {
+    console.error("telegram answerCallbackQuery failed", response.status, await response.text());
+  }
+}
+
+/**
+ * Перемальовує саму панель, а не шле нову.
+ *
+ * Інакше кожен дотик лишав би в чаті ще одну панель, і за хвилину їх десяток —
+ * причому старі показують застарілий стан і так само мають робочі кнопки.
+ */
+async function telegramEditMessage(
+  token: string,
+  chatId: number,
+  messageId: number,
+  text: string,
+  replyMarkup?: unknown,
+): Promise<void> {
+  const response = await fetch(`${TELEGRAM_API}/bot${token}/editMessageText`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    // «message is not modified» — це не помилка: стан не змінився, і Telegram
+    // відмовляється переписувати те саме. Кнопка вже відповіла спливним написом.
+    if (!body.includes("message is not modified")) {
+      console.error("telegram editMessageText failed", response.status, body);
+    }
+  }
+}
+
 /** Живі дані для /status. Тільки дешеві джерела: вебхук не має чекати хвилину. */
 async function situationBrief(request: Request) {
   const alarms: string[] = [];
@@ -196,34 +261,48 @@ async function situationBrief(request: Request) {
  * причини: Worker не може переписати власне оточення, тож команда з чату
  * змінити змінну не здатна. Платформа має диск, і саме тому ручка там.
  */
-async function adminCommand(parsed: BotCommand, ownerOk: boolean): Promise<string | null> {
-  if (parsed.command !== "layers" && parsed.command !== "purge") return null;
-  if (!ownerOk) return renderNotOwner();
+async function adminCommand(
+  parsed: BotCommand,
+  ownerOk: boolean,
+): Promise<{ text: string; keyboard?: unknown } | null> {
+  if (parsed.command !== "layers" && parsed.command !== "purge" && parsed.command !== "admin") {
+    return null;
+  }
+  if (!ownerOk) return { text: renderNotOwner() };
 
   const { isPlatformConfigured, platformFetch } = await import("./lib/platform-client");
-  if (!isPlatformConfigured()) return renderNoPlatform();
+  if (!isPlatformConfigured()) return { text: renderNoPlatform() };
+
+  // Панель із кнопками: те саме, що й текстові команди, але без набирання.
+  if (parsed.command === "admin") {
+    const state = await layersState();
+    if (!state) return { text: "Платформа не відповіла." };
+    return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
+  }
 
   if (parsed.command === "layers") {
     const wanted = parseLayersArg(parsed.args);
-    if (wanted === "invalid")
-      return "Не зрозумів. <code>/layers on</code> або <code>/layers off</code>";
+    if (wanted === "invalid") {
+      return { text: "Не зрозумів. <code>/layers on</code> або <code>/layers off</code>" };
+    }
 
     if (wanted === null) {
-      const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
-      if (!res.ok) return `Платформа не відповіла: ${res.status}`;
-      return renderLayers(res.body as never);
+      const state = await layersState();
+      if (!state) return { text: "Платформа не відповіла." };
+      return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
     }
 
     const res = await platformFetch("/api/platform/settings/infra-layers", {
       method: "PUT",
       body: JSON.stringify({ enabled: wanted, reason: `Telegram: ${parsed.chatId}` }),
     });
-    if (!res.ok) return `Платформа відхилила зміну: ${res.status}`;
+    if (!res.ok) return { text: `Платформа відхилила зміну: ${res.status}` };
     // Кеш консолі тримає відповідь до півхвилини; скидаємо, щоб оберт ручки
     // було видно одразу, а не «десь за хвилину».
     const { forgetInfraLayersCache } = await import("./lib/infra-gate");
     forgetInfraLayersCache();
-    return renderLayers(res.body as never);
+    const state = res.body as LayersState;
+    return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
   }
 
   const confirm = parsed.args.trim().toLowerCase();
@@ -231,16 +310,148 @@ async function adminCommand(parsed: BotCommand, ownerOk: boolean): Promise<strin
     method: "POST",
     body: JSON.stringify(confirm === "yes" || confirm === "так" ? { confirm: true } : {}),
   });
-  if (!res.ok) return `Платформа відхилила: ${res.status}`;
+  if (!res.ok) return { text: `Платформа відхилила: ${res.status}` };
   const body = res.body as {
     dryRun?: boolean;
     wouldRetract?: string[];
     sourcesInGraph?: string[];
     retracted?: { source: string; nodesRemoved: number; edgesRemoved: number }[];
   };
-  return body.dryRun
-    ? renderPurgePreview(body.wouldRetract ?? [], body.sourcesInGraph ?? [])
-    : renderPurgeDone(body.retracted ?? []);
+  if (!body.dryRun) return { text: renderPurgeDone(body.retracted ?? []) };
+
+  const targets = body.wouldRetract ?? [];
+  return {
+    text: renderPurgePreview(targets, body.sourcesInGraph ?? []),
+    ...(targets.length > 0 ? { keyboard: purgeKeyboard() } : {}),
+  };
+}
+
+/** Поточний стан вимикача з платформи. `null` — платформа не відповіла. */
+async function layersState(): Promise<LayersState | null> {
+  const { platformFetch } = await import("./lib/platform-client");
+  const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
+  return res.ok ? (res.body as LayersState) : null;
+}
+
+/**
+ * Натискання кнопки адмін-панелі.
+ *
+ * Власник звіряється **тут**, а не лише при показі панелі: повідомлення з
+ * кнопками можна переслати в інший чат, і тоді тиснути буде хтось інший. Право
+ * дає той, хто натиснув, а не той, кому колись показали.
+ */
+async function handleAdminPress(
+  token: string,
+  press: ReturnType<typeof parseCallback>,
+): Promise<void> {
+  if (!press) return;
+  if (!isAdminAction(press.data)) {
+    await telegramAnswerCallback(token, press.callbackId, "Невідома дія");
+    return;
+  }
+  if (!isOwner(press.userId, process.env["TELEGRAM_OWNER_ID"])) {
+    await telegramAnswerCallback(token, press.callbackId, "Лише для власника розгортання");
+    return;
+  }
+
+  const { isPlatformConfigured, platformFetch } = await import("./lib/platform-client");
+  if (!isPlatformConfigured()) {
+    await telegramAnswerCallback(token, press.callbackId, "Платформа не налаштована");
+    return;
+  }
+
+  const action = press.data as AdminAction;
+
+  if (action === ADMIN_ACTIONS.purgePreview || action === ADMIN_ACTIONS.purgeConfirm) {
+    const confirming = action === ADMIN_ACTIONS.purgeConfirm;
+    const res = await platformFetch("/api/platform/purge/infrastructure", {
+      method: "POST",
+      body: JSON.stringify(confirming ? { confirm: true } : {}),
+    });
+    if (!res.ok) {
+      await telegramAnswerCallback(token, press.callbackId, `Платформа відхилила: ${res.status}`);
+      return;
+    }
+    const body = res.body as {
+      wouldRetract?: string[];
+      sourcesInGraph?: string[];
+      retracted?: { source: string; nodesRemoved: number; edgesRemoved: number }[];
+    };
+
+    await telegramAnswerCallback(
+      token,
+      press.callbackId,
+      callbackToast(action, {
+        enabled: false,
+        permitted: false,
+        switchedOn: false,
+      }),
+    );
+
+    if (confirming) {
+      const state = await layersState();
+      await telegramEditMessage(
+        token,
+        press.chatId,
+        press.messageId,
+        renderPurgeDone(body.retracted ?? []),
+        state ? adminKeyboard(state) : undefined,
+      );
+      return;
+    }
+
+    const nothing = (body.wouldRetract ?? []).length === 0;
+    await telegramEditMessage(
+      token,
+      press.chatId,
+      press.messageId,
+      renderPurgePreview(body.wouldRetract ?? [], body.sourcesInGraph ?? [], true),
+      // Кнопки підтвердження тільки коли є що підтверджувати: «прибрати нічого»
+      // з кнопкою «Так, прибрати» — це пропозиція зробити ніщо.
+      nothing
+        ? await layersState().then((s) => (s ? adminKeyboard(s) : undefined))
+        : purgeKeyboard(),
+    );
+    return;
+  }
+
+  if (action === ADMIN_ACTIONS.layersOn || action === ADMIN_ACTIONS.layersOff) {
+    const enabled = action === ADMIN_ACTIONS.layersOn;
+    const res = await platformFetch("/api/platform/settings/infra-layers", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, reason: `Telegram: кнопка (${press.userId})` }),
+    });
+    if (!res.ok) {
+      await telegramAnswerCallback(token, press.callbackId, `Платформа відхилила: ${res.status}`);
+      return;
+    }
+    const state = res.body as LayersState;
+    const { forgetInfraLayersCache } = await import("./lib/infra-gate");
+    forgetInfraLayersCache();
+    await telegramAnswerCallback(token, press.callbackId, callbackToast(action, state));
+    await telegramEditMessage(
+      token,
+      press.chatId,
+      press.messageId,
+      renderAdminPanel(state),
+      adminKeyboard(state),
+    );
+    return;
+  }
+
+  const state = await layersState();
+  if (!state) {
+    await telegramAnswerCallback(token, press.callbackId, "Платформа не відповіла");
+    return;
+  }
+  await telegramAnswerCallback(token, press.callbackId, callbackToast(action, state));
+  await telegramEditMessage(
+    token,
+    press.chatId,
+    press.messageId,
+    renderAdminPanel(state),
+    adminKeyboard(state),
+  );
 }
 
 async function telegramWebhook(request: Request): Promise<Response> {
@@ -262,6 +473,13 @@ async function telegramWebhook(request: Request): Promise<Response> {
     return new Response("ok", { status: 200 });
   }
 
+  // Натискання кнопки приходить окремим типом оновлення, не повідомленням.
+  const press = parseCallback(update);
+  if (press) {
+    await handleAdminPress(token, press);
+    return new Response("ok", { status: 200 });
+  }
+
   const parsed = parseCommand(update);
   // Telegram вважає невдачею будь-що, крім 2xx, і повторює доставку. Тому
   // навіть «нічого робити» — це 200.
@@ -274,7 +492,7 @@ async function telegramWebhook(request: Request): Promise<Response> {
 
   const admin = await adminCommand(parsed, ownerOk);
   if (admin !== null) {
-    await telegramSend(token, parsed.chatId, admin, undefined);
+    await telegramSend(token, parsed.chatId, admin.text, admin.keyboard);
     return new Response("ok", { status: 200 });
   }
 

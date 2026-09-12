@@ -182,32 +182,33 @@ const ROTATABLE: Partial<Record<ThreatType, boolean>> = {
   recon: true,
   aircraft: true,
 };
-function threatIcon(
-  type: ThreatType,
-  fresh: Freshness,
-  reports: number,
-  heading: number | null,
-): L.DivIcon {
-  const badge = reports > 1 ? Math.min(reports, 99) : 0;
+/**
+ * Значок цілі: тип, свіжість, курс. Кількості повідомлень тут немає навмисно.
+ *
+ * Лічильник висів просто на позначці й читався як щось про саму ціль — скільки
+ * їх, скільки боєприпасів, наскільки вона небезпечна. Насправді це кількість
+ * згадок у OSINT-каналах, тобто показник **упевненості джерела**, а не
+ * властивість цілі. Число, яке на карті означає не те, що думає читач, гірше
+ * за його відсутність: воно не додає знання, а підмінює його.
+ *
+ * Місце такого числа — у вікні цілі, поруч із поясненням, що воно означає.
+ */
+function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null): L.DivIcon {
   // Курс округлюємо до 5° — досить для ока й тримає кеш маленьким.
   const rot =
     heading != null && ROTATABLE[type] ? Math.round((((heading % 360) + 360) % 360) / 5) * 5 : null;
-  const key = `${type}|${fresh}|${badge}|${rot ?? "x"}`;
+  const key = `${type}|${fresh}|${rot ?? "x"}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
   const { color, glyph } = TYPE_STYLE[type];
   const { opacity, size } = FRESH_TONE[fresh];
   const g = Math.round(size * 0.74);
   const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
-  const badgeHtml =
-    badge > 0
-      ? `<b style="position:absolute;top:-5px;right:-5px;min-width:13px;height:13px;padding:0 2px;border-radius:7px;background:${color};color:#0a0e14;font:700 9px 'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0a0e14">${badge}</b>`
-      : "";
-  // Повертаємо лише гліф (SVG), а не весь контейнер — значок-лічильник має
-  // лишатися вертикальним і читабельним.
+  // Обертається лише гліф, а не контейнер: так позначка лишається на місці, а
+  // за курсом дивиться саме форма цілі.
   const svgTransform = rot != null ? ` style="transform:rotate(${rot}deg)"` : "";
   const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg>${badgeHtml}</div>`;
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg></div>`;
   const icon = L.divIcon({
     html,
     className: "threat-pin",
@@ -482,12 +483,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             ) : null}
             <Marker
               position={[t.lat, t.lon]}
-              icon={threatIcon(
-                type,
-                fresh,
-                t.reports ?? 1,
-                hasCourse ? (t.heading as number) : null,
-              )}
+              icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
             >
               <Popup>
@@ -498,8 +494,13 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   </p>
                   <p className="opacity-80">{t.name}</p>
                   <p className="opacity-70">
+                    {/*
+                      Число названо тим, чим воно є: скільки каналів сказали про
+                      цю ціль. Це впевненість джерела, а не властивість цілі, —
+                      і саме тому воно тут, а не на позначці.
+                    */}
                     {t.reports && t.reports > 1
-                      ? `${t.reports} повідомлень з каналів: `
+                      ? `Підтверджень: ${t.reports} · канали: `
                       : "Канал: "}
                     {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
                   </p>
@@ -547,6 +548,15 @@ function FlyTo({ facility }: { facility: Facility | null }) {
   }, [facility, map]);
   return null;
 }
+
+/**
+ * Окупована територія і повітряна тривога — різні речі й мають виглядати
+ * по-різному. Тон приглушений навмисно: насичений червоний лишається за
+ * тривогою, бо на карті має бути рівно один колір, що означає «зараз».
+ */
+const OCCUPIED_FILL = "#4a1b24";
+const OCCUPIED_EDGE = "#9c5561";
+const ALERT_EDGE = "#ff4d4d";
 
 export default function InfraMap({
   facilities,
@@ -596,7 +606,19 @@ export default function InfraMap({
     >
       <BaseLayers />
 
-      {/* Лінія фронту (DeepState) — під усіма іншими шарами */}
+      {/*
+        Окупована територія — під усіма іншими шарами.
+
+        Колір НЕ береться з джерела. DeepState віддає власний `stroke`
+        червонуватим, і він збігався з червоним повітряної тривоги: два шари з
+        різним сенсом і різним часом життя виглядали однаково, а разом давали
+        суцільну червону пляму, у якій не читався жоден з них.
+
+        Тут територія — суцільна приглушена маса (те, що тримають місяцями),
+        тривога нижче — пунктирний контур (те, що минає за годину). Різниця і
+        за тоном, і за накресленням: одного тону замало, якщо дивитися з
+        телефона на сонці або не розрізняти червоне з зеленим.
+      */}
       {showFrontline
         ? frontline.flatMap((a, ai) =>
             a.polygons.map((ring, i) => (
@@ -604,22 +626,20 @@ export default function InfraMap({
                 key={`fl-${ai}-${i}`}
                 positions={ring}
                 pathOptions={{
-                  color: a.color,
-                  fillColor: a.color,
-                  fillOpacity: 0.12,
+                  color: OCCUPIED_EDGE,
+                  fillColor: OCCUPIED_FILL,
+                  fillOpacity: 0.42,
                   weight: 1,
-                  opacity: 0.7,
+                  opacity: 0.85,
                 }}
               >
-                {a.status ? (
-                  <Popup>
-                    <div className="font-sans text-xs">
-                      <p className="font-semibold">Лінія фронту</p>
-                      <p className="opacity-80">{a.status}</p>
-                      <p className="opacity-60">Джерело: DeepState Map</p>
-                    </div>
-                  </Popup>
-                ) : null}
+                <Popup>
+                  <div className="font-sans text-xs">
+                    <p className="font-semibold">Окупована територія</p>
+                    {a.status ? <p className="opacity-80">{a.status}</p> : null}
+                    <p className="opacity-60">Джерело: DeepState Map</p>
+                  </div>
+                </Popup>
               </Polygon>
             )),
           )
@@ -670,10 +690,13 @@ export default function InfraMap({
                 key={`zone-${z.region}-${i}`}
                 positions={ring}
                 pathOptions={{
-                  color: "#ff4d4d",
-                  fillColor: "#ff4d4d",
-                  fillOpacity: 0.1,
-                  weight: 1,
+                  color: ALERT_EDGE,
+                  fillColor: ALERT_EDGE,
+                  fillOpacity: 0.05,
+                  weight: 1.2,
+                  // Пунктир — стан, що минає. Суцільна лінія нижче належить
+                  // території, яку тримають місяцями.
+                  dashArray: "5 4",
                 }}
               >
                 <Popup>
