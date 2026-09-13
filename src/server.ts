@@ -385,7 +385,7 @@ async function adminCommand(
   // Панель із кнопками: те саме, що й текстові команди, але без набирання.
   if (parsed.command === "admin") {
     const state = await layersState();
-    if (!state) return { text: "Платформа не відповіла." };
+    if (!state) return { text: await platformFailure() };
     return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
   }
 
@@ -397,7 +397,7 @@ async function adminCommand(
 
     if (wanted === null) {
       const state = await layersState();
-      if (!state) return { text: "Платформа не відповіла." };
+      if (!state) return { text: await platformFailure() };
       return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
     }
 
@@ -440,6 +440,30 @@ async function layersState(): Promise<LayersState | null> {
   const { platformFetch } = await import("./lib/platform-client");
   const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
   return res.ok ? (res.body as LayersState) : null;
+}
+
+/**
+ * Чому платформа не відповіла — придатним для дії рядком.
+ *
+ * «Платформа не відповіла» без причини нічого не каже: не зрозуміло, чи URL
+ * хибний, чи сервіс лежить, чи ключ не той. Тут дістаємо справжній статус і
+ * повертаємо коротку підказку, що саме перевірити.
+ */
+async function platformFailure(): Promise<string> {
+  const { platformFetch } = await import("./lib/platform-client");
+  const res = await platformFetch("/api/platform/settings/infra-layers", {
+    method: "GET",
+    timeoutMs: 8000,
+  });
+  const detail =
+    res.status === 0
+      ? "сервіс не відповів (лежить, хибний PLATFORM_API_URL або таймаут)"
+      : res.status === 401 || res.status === 403
+        ? `відмова доступу ${res.status} — перевірте PLATFORM_API_KEY`
+        : res.status === 404
+          ? "404 — PLATFORM_API_URL веде не на сервіс платформи"
+          : `HTTP ${res.status}`;
+  return `Платформа не відповіла: ${detail}.`;
 }
 
 /**
