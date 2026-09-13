@@ -160,7 +160,7 @@ interface OverpassElement {
  * Тобто це не «джерело лежить», а «нас не пускають».
  */
 const USER_AGENT =
-  "InfraUA-Console/1.0 (critical infrastructure monitor; +https://github.com/smith77788/infraua-hub)";
+  "InfraUA-Console/1.0 (critical infrastructure situational awareness)";
 
 async function overpass(body: string, signal: AbortSignal): Promise<OverpassElement[]> {
   let lastError: unknown = null;

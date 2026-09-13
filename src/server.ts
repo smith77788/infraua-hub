@@ -97,7 +97,7 @@ async function runProbes(): Promise<SourceProbe[]> {
           // Те саме представлення, що й у робочому шляху, — інакше проба
           // міряла б не те, що відбувається насправді.
           "user-agent":
-            "InfraUA-Console/1.0 (critical infrastructure monitor; +https://github.com/smith77788/infraua-hub)",
+            "InfraUA-Console/1.0 (critical infrastructure situational awareness)",
           accept: "application/json",
         },
         // Найдешевший осмислений запит: рахунок підстанцій 110 кВ+ по країні.
