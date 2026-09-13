@@ -37,21 +37,21 @@ describe("renderChannelPost", () => {
       threat({ lat: 51.1, lon: 34.6, type: "shahed" }),
       threat({ lat: 51.2, lon: 34.7, type: "shahed" }),
     ])!;
-    expect(post.text).toContain("3 мопеда");
+    expect(post.text).toContain("3 шахеди");
     expect(post.targets).toBe(3);
   });
 
   it("додає курс, коли він відомий", () => {
     const post = renderChannelPost([threat({ lat: 49.0, lon: 33.0, type: "shahed", heading: 0 })])!;
-    expect(post.text).toContain("курсом на север");
+    expect(post.text).toContain("курсом на північ");
   });
 
-  it("«может быть громко», коли ціль іде на місто поруч", () => {
+  it("«у бік міста», коли ціль іде на місто поруч", () => {
     // ціль трохи південніше Полтави (49.59,34.55), курс 0° = на неї
     const post = renderChannelPost([
       threat({ lat: 49.3, lon: 34.55, type: "shahed", heading: 0 }),
     ])!;
-    expect(post.text).toContain("может быть громко: Полтавщина");
+    expect(post.text).toContain("у бік: Полтавщина");
   });
 
   it("шапка веде найгострішим: ракета важливіша за мопед", () => {
@@ -74,14 +74,14 @@ describe("renderChannelPost", () => {
       threat({ lat: 51.1, lon: 34.6, type: "shahed" }),
     ])!;
     expect(post.text).toContain("🛸");
-    expect(post.text).toContain("всего в небе: 2");
+    expect(post.text).toContain("всього в небі: 2");
   });
 
   it("count (згадки в OSINT) НЕ роздуває кількість цілей", () => {
     // Одна ціль із 17 згадок — це ОДИН об'єкт, а не «17 мопедов». Саме так
     // канал розходився з картою й писав фейкові числа.
     const post = renderChannelPost([threat({ lat: 46.6, lon: 32.6, type: "shahed", count: 17 })])!;
-    expect(post.text).toContain("1 мопед");
+    expect(post.text).toContain("1 шахед");
     expect(post.text).not.toContain("17");
     expect(post.targets).toBe(1);
   });
@@ -95,7 +95,7 @@ describe("renderChannelPost", () => {
       { maxOblasts: 1 },
     )!;
     // Показано лише одну область у тілі, решта згорнута.
-    expect(post.text).toContain("…и ещё 1 область");
+    expect(post.text).toContain("…і ще 1 область");
     // Але дедуп-підпис усе одно містить обидві.
     expect(post.signature.split("|").length).toBe(2);
   });

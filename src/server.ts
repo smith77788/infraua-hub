@@ -247,7 +247,7 @@ async function sendChannelUpdate(
     const caption =
       text.length <= 1024
         ? text
-        : `${text.split("\n")[0]}\n<i>всего в небе: ${targets} · по данным OSINT</i>`;
+        : `${text.split("\n")[0]}\n<i>всього в небі: ${targets} · за даними OSINT</i>`;
     const form = new FormData();
     form.append("chat_id", channel);
     form.append("caption", caption);
