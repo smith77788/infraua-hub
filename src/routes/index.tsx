@@ -956,7 +956,7 @@ function Console() {
                   : "border-border text-muted-foreground"
               }`}
             >
-              <AlertTriangle className="size-3.5" /> Лінія фронту (DeepState)
+              <AlertTriangle className="size-3.5" /> Окупована територія (DeepState)
               {frontline.length > 0 ? (
                 <span className="ml-auto font-mono text-[10px] opacity-70">{frontline.length}</span>
               ) : null}
@@ -1204,10 +1204,10 @@ function Console() {
                         ]),
                     {
                       key: "frontline",
-                      label: "Лінія фронту",
+                      label: "Окупована територія",
                       active: showFrontline,
                       disabled: frontline.length === 0,
-                      color: "#a52714",
+                      color: "#9c5561",
                     },
                     {
                       key: "fires",

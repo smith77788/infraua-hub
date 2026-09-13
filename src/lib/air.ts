@@ -176,11 +176,43 @@ export interface AlertZone {
 }
 
 /** Ділянка лінії фронту (DeepState): кільця + колір статусу. */
+/**
+ * Що саме означає полігон DeepState.
+ *
+ * Стрічка джерела — не карта окупації, а робоча мапа редакції: у ній поруч
+ * лежать окупована територія, звільнена у 2022-му, стрілки напрямків ударів,
+ * позначки підрозділів і відверто сатиричні полігони на чужі регіони. Усе це
+ * приходить однаковими полігонами з однаковим червонуватим `stroke`, і карта,
+ * що малює їх усі, показує не лінію фронту, а червону пляму на півконтиненту.
+ */
+export type FrontlineKind = "occupied" | "liberated" | "direction" | "unknown" | "other";
+
 export interface FrontlineArea {
   /** Кільця у форматі Leaflet: [lat, lon][]. */
   polygons: [number, number][][];
   color: string;
   status: string;
+  kind: FrontlineKind;
+}
+
+/**
+ * Класифікація за назвою полігона — єдиним, що джерело дає.
+ *
+ * Порядок перевірок має значення: «Звільнено 25.03» мусить читатися як
+ * звільнене, а не як щось інше через збіг підрядка.
+ */
+export function frontlineKind(name: string): FrontlineKind {
+  const value = name
+    .toLowerCase()
+    .replace(/\u00a0/g, " ")
+    .trim();
+  if (!value) return "unknown";
+  if (value.startsWith("звільнено")) return "liberated";
+  if (value.startsWith("напрямок удару")) return "direction";
+  if (value.startsWith("статус невідомий")) return "unknown";
+  // «Окуповано», «Окупований Крим», «Окупована …», «ОРДЛО».
+  if (value.startsWith("окупов") || value.startsWith("ордло")) return "occupied";
+  return "other";
 }
 
 /** Термоточка активної пожежі (NASA FIRMS, VIIRS/MODIS, 24 год). */

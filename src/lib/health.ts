@@ -42,6 +42,23 @@ export interface HealthReport {
   now: string;
   /** Результати проби зовнішніх джерел — лише коли її просили. */
   probes?: SourceProbe[];
+  /**
+   * Чи налаштований бот — самі прапорці, без значень.
+   *
+   * Мовчазний бот має щонайменше три різні причини, і ззовні вони виглядають
+   * однаково: немає токена, немає секрету вебхука, або Telegram перестав
+   * доставляти після серії відмов. Перші дві видно звідси; третю — лише в
+   * `getWebhookInfo` у самого Telegram.
+   *
+   * Значень тут немає й бути не може: прапорець каже «задано», а не «що
+   * задано». Службовий маршрут, який показує секрет, — це маршрут, який його
+   * публікує.
+   */
+  telegram?: {
+    tokenConfigured: boolean;
+    webhookSecretConfigured: boolean;
+    ownerConfigured: boolean;
+  };
 }
 
 const startedAt = Date.now();
@@ -52,6 +69,11 @@ export function baseReport(service = "infraua-console"): HealthReport {
     service,
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
     now: new Date().toISOString(),
+    telegram: {
+      tokenConfigured: Boolean(process.env["TELEGRAM_BOT_TOKEN"]),
+      webhookSecretConfigured: Boolean(process.env["TELEGRAM_WEBHOOK_SECRET"]),
+      ownerConfigured: Boolean(process.env["TELEGRAM_OWNER_ID"]),
+    },
   };
 }
 

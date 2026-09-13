@@ -14,8 +14,9 @@ import {
  * сервері, де `window` не існує, а значення з Telegram різні на сервері й у
  * клієнті — це те саме розходження гідратації, яке вже ламало плеєр часу.
  */
-export function useTelegram(): { inTelegram: boolean } {
+export function useTelegram(): { inTelegram: boolean; initData: string } {
   const [inTelegram, setInTelegram] = useState(false);
+  const [initData, setInitData] = useState("");
 
   useEffect(() => {
     const webApp = (window as unknown as { Telegram?: { WebApp?: TelegramWebApp } }).Telegram
@@ -23,6 +24,9 @@ export function useTelegram(): { inTelegram: boolean } {
     if (!isTelegramMiniApp(webApp) || !webApp) return;
 
     setInTelegram(true);
+    // initData потрібен серверу для підпису-автентифікації (напр., кнопка
+    // «полагодити бота»). Тримаємо як є — перевіряє його сервер, не клієнт.
+    setInitData(webApp.initData ?? "");
     // Каже Telegram, що сторінка готова — доти показується його заставка.
     webApp.ready?.();
     // Без цього Mini App відкривається半-екраном і карта отримує смужку.
@@ -47,5 +51,5 @@ export function useTelegram(): { inTelegram: boolean } {
     return () => window.removeEventListener("resize", applyHeight);
   }, []);
 
-  return { inTelegram };
+  return { inTelegram, initData };
 }
