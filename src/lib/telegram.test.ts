@@ -8,9 +8,11 @@ import {
   isAdminAction,
   isOwner,
   miniAppKeyboard,
+  ownerCommands,
   parseCallback,
   parseCommand,
   parseLayersArg,
+  publicCommands,
   purgeKeyboard,
   renderAdminPanel,
   renderHelp,
@@ -373,5 +375,29 @@ describe("кнопки під станом", () => {
     const toast = callbackToast(ADMIN_ACTIONS.layersOn, state(true, false));
     expect(toast).toContain("дозволу розгортання немає");
     expect(callbackToast(ADMIN_ACTIONS.layersOn, state(true, true))).toBe("Шари увімкнено");
+  });
+});
+
+describe("перелік команд для меню Telegram", () => {
+  it("публічні команди містять status/start/help", () => {
+    const names = publicCommands().map((c) => c.command);
+    expect(names).toContain("status");
+    expect(names).toContain("help");
+    expect(names).not.toContain("admin");
+  });
+
+  it("власник бачить /admin у своєму переліку", () => {
+    const names = ownerCommands().map((c) => c.command);
+    expect(names).toContain("admin");
+    expect(names).toContain("layers");
+    expect(names).toContain("purge");
+  });
+
+  it("усі команди мають несуфіксовану назву й опис", () => {
+    for (const c of ownerCommands()) {
+      expect(c.command).toMatch(/^[a-z_]+$/); // Telegram вимагає a-z0-9_
+      expect(c.description.length).toBeGreaterThan(0);
+      expect(c.description.length).toBeLessThanOrEqual(256);
+    }
   });
 });

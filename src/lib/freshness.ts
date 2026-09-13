@@ -52,10 +52,33 @@ export function ageOf(
   return { freshness, minutes: clamped, label: humanAge(clamped) };
 }
 
+/**
+ * Те саме, що `ageOf`, але з мітки часу в мілісекундах (react-query
+ * `dataUpdatedAt` — коли фід успішно взято востаннє). `0` до першого
+ * завантаження → «час невідомий», а не «щойно».
+ */
+export function ageFromEpoch(
+  epochMs: number | null | undefined,
+  agingAfter: number,
+  staleAfter: number,
+  now: number = Date.now(),
+): AgeInfo {
+  if (!epochMs || !Number.isFinite(epochMs) || epochMs <= 0) {
+    return { freshness: "unknown", minutes: null, label: "час невідомий" };
+  }
+  return ageOf(new Date(epochMs).toISOString(), agingAfter, staleAfter, now);
+}
+
 /** Пороги за джерелом — задокументовані, а не розсипані по компонентах. */
 export const FRESHNESS_THRESHOLDS = {
   /** Перелік обʼєктів: змінюється роками, але старший за добу вже не «живий». */
   facilities: { aging: 60, stale: 24 * 60 },
   /** Події: доба — уже минуле, три доби — історія. */
   events: { aging: 24 * 60, stale: 72 * 60 },
+  /**
+   * Повітряна обстановка (тривоги, цілі, полігони) оновлюється щохвилини.
+   * Тут «свіжість» міряє РОБОТУ фіду — коли ми востаннє його успішно взяли,
+   * а не вік окремої події. Пороги — за часом оновлення запиту.
+   */
+  air: { aging: 3, stale: 15 },
 } as const;

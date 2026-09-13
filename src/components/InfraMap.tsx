@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -26,6 +26,7 @@ import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { UA_OUTLINE } from "@/lib/ua-outline";
 import { type AlertRegion } from "@/lib/alerts";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
+import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -440,6 +441,17 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     moveend: () => setBounds(map.getBounds()),
   });
 
+  // Спостережений трек накопичуємо між опитуваннями: джерело віддає лише
+  // поточну позицію, а суцільна лінія має показувати, де ціль РЕАЛЬНО була.
+  const historyRef = useRef<Map<string, FixPoint[]>>(new Map());
+  useEffect(() => {
+    historyRef.current = updateHistory(
+      historyRef.current,
+      threats.map((t) => ({ id: t.id, lat: t.lat, lon: t.lon })),
+      Date.now(),
+    );
+  }, [threats]);
+
   if (zoom < 7) {
     const clusters = gridClusters(threats, zoom);
     return (
@@ -469,15 +481,29 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         const style = TYPE_STYLE[type];
         const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
         const vecEnd = hasCourse ? destPoint(t.lat, t.lon, t.heading as number, 16) : null;
+        // Спостережений трек (де ціль реально була) — СУЦІЛЬНА лінія; вектор
+        // курсу вперед — ПУНКТИР (екстраполяція, а не факт). Це прибирає
+        // хибну паніку: пунктир прямо каже «це припущення, не трек».
+        const observed = trackLatLngs(historyRef.current.get(t.id));
         return (
           <Fragment key={t.id}>
+            {observed.length >= 2 ? (
+              <Polyline
+                positions={observed}
+                pathOptions={{
+                  color: style.color,
+                  weight: 2,
+                  opacity: fresh === "stale" ? 0.4 : 0.85,
+                }}
+              />
+            ) : null}
             {vecEnd ? (
               <Polyline
                 positions={[[t.lat, t.lon], vecEnd]}
                 pathOptions={{
                   color: style.color,
                   weight: 1.6,
-                  opacity: fresh === "stale" ? 0.35 : 0.75,
+                  opacity: fresh === "stale" ? 0.3 : 0.6,
                   dashArray: "5 5",
                 }}
               />
@@ -508,6 +534,12 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   {hasCourse ? (
                     <p className="opacity-70">
                       Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
+                    </p>
+                  ) : null}
+                  {observed.length >= 2 || vecEnd ? (
+                    <p className="opacity-60 text-[11px] leading-snug">
+                      {observed.length >= 2 ? "── трек (де була) · " : ""}
+                      {vecEnd ? "╌╌ курс (екстраполяція, не факт)" : ""}
                     </p>
                   ) : null}
                   {(() => {

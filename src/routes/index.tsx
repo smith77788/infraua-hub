@@ -6,9 +6,9 @@ import { backoffMs, sourceUnavailable } from "@/lib/backoff";
 import { applyFocus, focusLabel, type Focus } from "@/lib/focus";
 import { formatVoltage, voltageClass, VOLTAGE_CLASS_LABEL } from "@/lib/osm-tags";
 import { operatorProfile } from "@/lib/operators";
-import { ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
+import { ageFromEpoch, ageOf, FRESHNESS_THRESHOLDS } from "@/lib/freshness";
 import { selectVisibleLinks } from "@/lib/map-links";
-import { statusOf, worstState, type SourceStatus } from "@/lib/sources";
+import { statusOf, trustState, type SourceStatus } from "@/lib/sources";
 import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -570,12 +570,19 @@ function Console() {
       ),
     [facilitiesQuery.data],
   );
-  const eventsAge = useMemo(() => {
-    // Вік найсвіжішої події: якщо найновіша стара, стрічка не жива.
-    let newest: string | null = null;
-    for (const e of allEvents) if (!newest || e.time > newest) newest = e.time;
-    return ageOf(newest, FRESHNESS_THRESHOLDS.events.aging, FRESHNESS_THRESHOLDS.events.stale);
-  }, [allEvents]);
+  const eventsAge = useMemo(
+    () =>
+      // Стан фіду подій — це чи ми його ЩОЙНО взяли, а не вік окремої події.
+      // Землетрус тижневої давнини — не поломка джерела: природні події рідкісні,
+      // і судити «застаріло» за їх відсутністю означало б фарбувати всю консоль
+      // у тривогу через тишу, якої й треба хотіти.
+      ageFromEpoch(
+        eventsQuery.dataUpdatedAt,
+        FRESHNESS_THRESHOLDS.events.aging,
+        FRESHNESS_THRESHOLDS.events.stale,
+      ),
+    [eventsQuery.dataUpdatedAt],
+  );
 
   const sourceDown = sourceUnavailable(powerEmpty) || sourceUnavailable(facEmpty);
 
@@ -631,19 +638,39 @@ function Console() {
         count: allEvents.length,
         age: eventsAge,
       }),
+      // Повітряні фіди — найсвіжіше на екрані. Показуємо РЕАЛЬНИЙ час
+      // оновлення запиту (dataUpdatedAt), а не «час невідомий»: жива обстановка
+      // не має виглядати найзагадковішим джерелом у списку.
       statusOf({
         id: "alerts",
         label: "Повітряні тривоги",
         count: regions.filter((r) => r.active).length,
-        age: unknownAge,
+        age: ageFromEpoch(
+          alertsQuery.dataUpdatedAt,
+          FRESHNESS_THRESHOLDS.air.aging,
+          FRESHNESS_THRESHOLDS.air.stale,
+        ),
       }),
       statusOf({
         id: "threats",
         label: "Повітряні цілі (OSINT)",
         count: threats.length,
-        age: unknownAge,
+        age: ageFromEpoch(
+          threatsQuery.dataUpdatedAt,
+          FRESHNESS_THRESHOLDS.air.aging,
+          FRESHNESS_THRESHOLDS.air.stale,
+        ),
       }),
-      statusOf({ id: "zones", label: "Полігони тривог", count: zones.length, age: unknownAge }),
+      statusOf({
+        id: "zones",
+        label: "Полігони тривог",
+        count: zones.length,
+        age: ageFromEpoch(
+          zonesQuery.dataUpdatedAt,
+          FRESHNESS_THRESHOLDS.air.aging,
+          FRESHNESS_THRESHOLDS.air.stale,
+        ),
+      }),
       // Ситуаційні фонові фіди — той самий data-plane, та сама панель: оператор
       // бачить стан усіх джерел в одному місці, а не по кутах.
       ...feeds.statuses,
@@ -666,6 +693,9 @@ function Console() {
     regions,
     threats.length,
     zones.length,
+    alertsQuery.dataUpdatedAt,
+    threatsQuery.dataUpdatedAt,
+    zonesQuery.dataUpdatedAt,
     feeds.statuses,
   ]);
   const { hiddenLinks, shownLinks } = useMemo(() => {
@@ -675,7 +705,9 @@ function Console() {
     return { hiddenLinks: sel.hidden, shownLinks: sel.visible.length };
   }, [edges, allFacilities]);
 
-  const worstSource = useMemo(() => worstState(sources), [sources]);
+  // Для шапки — trustState, а не worstState: порожній benign-фід (немає
+  // збоїв, немає подій) не має фарбувати всю консоль у тривогу.
+  const worstSource = useMemo(() => trustState(sources), [sources]);
 
   const loading = facilitiesQuery.isLoading;
   const counts = useMemo(() => {

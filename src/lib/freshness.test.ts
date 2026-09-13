@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { ageOf, FRESHNESS_THRESHOLDS } from "./freshness";
+import { ageFromEpoch, ageOf, FRESHNESS_THRESHOLDS } from "./freshness";
 
 const NOW = new Date("2026-09-09T12:00:00.000Z").getTime();
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
@@ -41,5 +41,22 @@ describe("ageOf", () => {
     // Перелік підстанцій не змінюється роками, тривога протухає за хвилини —
     // один поріг на всіх був би неправдою про якесь із джерел.
     expect(FRESHNESS_THRESHOLDS.facilities.stale).not.toBe(FRESHNESS_THRESHOLDS.events.stale);
+  });
+});
+
+describe("ageFromEpoch", () => {
+  const NOW = 1_700_000_000_000;
+
+  it("0 до першого завантаження — час невідомий", () => {
+    expect(ageFromEpoch(0, 3, 15, NOW).freshness).toBe("unknown");
+    expect(ageFromEpoch(undefined, 3, 15, NOW).freshness).toBe("unknown");
+  });
+
+  it("щойно взятий фід — свіжий", () => {
+    expect(ageFromEpoch(NOW - 30_000, 3, 15, NOW).freshness).toBe("fresh");
+  });
+
+  it("давно не оновлювався — застарілий", () => {
+    expect(ageFromEpoch(NOW - 20 * 60_000, 3, 15, NOW).freshness).toBe("stale");
   });
 });

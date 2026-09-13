@@ -5,9 +5,11 @@ import type { Threat } from "@/lib/air";
 import type { WeatherNow } from "@/lib/air";
 import {
   compass,
+  dangerIndex,
   debrisDrift,
   personalAssessment,
   windowExposure,
+  type DangerLevel,
   type WindowSide,
 } from "@/lib/advisory";
 import { newInboundIds, notify, playBeep, vibrate } from "@/lib/alarm";
@@ -44,6 +46,20 @@ const CITIES: { name: string; lat: number; lon: number }[] = [
   { name: "Черкаси", lat: 49.44, lon: 32.06 },
   { name: "Херсон", lat: 46.64, lon: 32.61 },
 ];
+
+// Колір індексу небезпеки за рівнем: спокій → зелений, укриття → червоний.
+const DANGER_FG: Record<DangerLevel, string> = {
+  calm: "text-emerald-400",
+  watch: "text-sky-400",
+  attention: "text-amber-400",
+  shelter: "text-red-400",
+};
+const DANGER_BG: Record<DangerLevel, string> = {
+  calm: "bg-emerald-500/10 border border-emerald-500/25",
+  watch: "bg-sky-500/10 border border-sky-500/25",
+  attention: "bg-amber-500/10 border border-amber-500/30",
+  shelter: "bg-red-500/12 border border-red-500/40",
+};
 
 const SIDES: WindowSide[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 const SIDE_TEXT: Record<WindowSide, string> = {
@@ -300,6 +316,31 @@ export default function PersonalThreatPanel({
         </div>
       ) : assessment ? (
         <div className="space-y-2">
+          {(() => {
+            // Індекс «спати чи в укриття» — головне число для точки. Це оцінка
+            // обстановки, не ймовірність влучання (див. advisory.dangerIndex).
+            const di = dangerIndex(assessment);
+            return (
+              <div
+                className={`flex items-center gap-2 rounded px-2 py-1.5 ${DANGER_BG[di.level]}`}
+                title={di.caveat}
+              >
+                <span
+                  className={`font-mono text-[22px] font-bold leading-none ${DANGER_FG[di.level]}`}
+                >
+                  {di.percent}%
+                </span>
+                <div className="min-w-0">
+                  <div className={`text-[12px] font-bold leading-tight ${DANGER_FG[di.level]}`}>
+                    {di.verdict}
+                  </div>
+                  <div className="font-mono text-[9px] leading-tight text-muted-foreground">
+                    індекс небезпеки для точки
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
           <div className={`font-mono text-[12px] font-bold leading-tight ${verdictTone}`}>
             {assessment.minutesToNearest != null
               ? `~${assessment.minutesToNearest} хв до найближчої цілі`

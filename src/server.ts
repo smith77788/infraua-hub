@@ -12,9 +12,11 @@ import {
   type LayersState,
   miniAppKeyboard,
   type BotCommand,
+  ownerCommands,
   parseCallback,
   parseCommand,
   parseLayersArg,
+  publicCommands,
   renderHelp,
   renderNoPlatform,
   renderAdminPanel,
@@ -31,6 +33,7 @@ import {
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { publicOrigin } from "./lib/request-origin";
+import type { Threat } from "./lib/air";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -195,6 +198,76 @@ async function telegramSend(
   if (!response.ok) {
     console.error("telegram sendMessage failed", response.status, await response.text());
   }
+}
+
+/**
+ * Автовідання Telegram-каналу штучним інтелектом замість людини.
+ *
+ * Канал у стилі народних моніторів («Ванёк»): бере ті самі повітряні цілі, що
+ * на карті, і сам складає пост людською мовою (channel-post.ts). Тут — лише
+ * звʼязок: узяти дані, дедупнути, надіслати в канал. Уся мова й групування —
+ * у чистому, покритому тестами генераторі.
+ *
+ * Дедуп у памʼяті інстанса: небо змінюється повільно, і без цього канал
+ * спамив би той самий пост. Найгірше після редеплою — один повтор; це
+ * прийнятно й не варте стороннього сховища.
+ */
+const CHANNEL_MIN_INTERVAL_MS = 4 * 60 * 1000;
+let lastChannelPost = { signature: "", at: 0 };
+
+async function channelTick(request: Request): Promise<Response> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const channel = process.env["TELEGRAM_CHANNEL_ID"];
+  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
+
+  // Той самий секрет, що боронить вебхук: тик має право смикати лише той, хто
+  // налаштував бота (зовнішній планувальник із секретом в URL).
+  const provided = new URL(request.url).searchParams.get("secret");
+  if (!secretMatches(secret, provided)) return new Response("unauthorized", { status: 401 });
+  if (!token) return json({ posted: false, reason: "TELEGRAM_BOT_TOKEN не заданий" }, 503);
+  if (!channel) return json({ posted: false, reason: "TELEGRAM_CHANNEL_ID не заданий" }, 503);
+
+  const { fetchNeptunThreats } = await import("./lib/infra.functions");
+  const { renderChannelPost } = await import("./lib/channel-post");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  let threats: Threat[] = [];
+  try {
+    threats = (await fetchNeptunThreats(controller.signal)) ?? [];
+  } catch {
+    threats = [];
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const post = renderChannelPost(threats);
+  if (!post) return json({ posted: false, reason: "небо чисте" });
+
+  const now = Date.now();
+  const dryRun = new URL(request.url).searchParams.get("dry") === "1";
+  if (dryRun) return json({ posted: false, dryRun: true, targets: post.targets, text: post.text });
+  if (post.signature === lastChannelPost.signature) {
+    return json({ posted: false, reason: "без змін від останнього поста" });
+  }
+  if (now - lastChannelPost.at < CHANNEL_MIN_INTERVAL_MS) {
+    return json({ posted: false, reason: "мінімальний інтервал ще не минув" });
+  }
+
+  const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: channel,
+      text: post.text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    }),
+  });
+  if (!res.ok) {
+    return json({ posted: false, reason: `Telegram відхилив: ${res.status}` }, 502);
+  }
+  lastChannelPost = { signature: post.signature, at: now };
+  return json({ posted: true, targets: post.targets });
 }
 
 /**
@@ -596,8 +669,47 @@ async function telegramWebhook(request: Request): Promise<Response> {
  * Реєструє вебхук на цей хост і повертає стан від Telegram. Спільне тіло для
  * обох шляхів: секретного /setup і підписаного /repair із Mini App.
  */
+/**
+ * Реєструє перелік команд бота в Telegram (`setMyCommands`).
+ *
+ * Без цього меню по «/» порожнє — саме тому «команда не викликається»: її не
+ * видно й не запропонує. Публічні команди ставимо в типовий scope (усім);
+ * якщо задано власника — додаємо йому в особистий чат scope `chat` повний
+ * перелік із /admin. Так /admin зʼявляється в меню власника й не світиться
+ * стороннім. Помилка тут не має валити реєстрацію вебхука — команди вторинні.
+ */
+async function setBotCommands(token: string, ownerId: string | undefined): Promise<string> {
+  try {
+    const pub = await fetch(`${TELEGRAM_API}/bot${token}/setMyCommands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ commands: publicCommands() }),
+    });
+    let ownerNote = "власник не заданий — /admin у меню не показуємо";
+    if (ownerId && ownerId.trim()) {
+      const chatId = Number(ownerId.trim());
+      const res = await fetch(`${TELEGRAM_API}/bot${token}/setMyCommands`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          commands: ownerCommands(),
+          scope: { type: "chat", chat_id: chatId },
+        }),
+      });
+      ownerNote = res.ok
+        ? "команди власника (з /admin) зареєстровано"
+        : `власник: HTTP ${res.status}`;
+    }
+    return pub.ok ? `публічні команди зареєстровано; ${ownerNote}` : `публічні: HTTP ${pub.status}`;
+  } catch (error) {
+    console.error("setBotCommands failed", error);
+    return "не вдалося зареєструвати команди";
+  }
+}
+
 async function registerWebhook(token: string, secret: string | undefined, request: Request) {
   const hookUrl = `${consoleUrl(request)}/api/telegram/webhook`;
+  const commands = await setBotCommands(token, process.env["TELEGRAM_OWNER_ID"]);
   const set = await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -616,6 +728,7 @@ async function registerWebhook(token: string, secret: string | undefined, reques
   return {
     ok: set.ok,
     registeredTo: hookUrl,
+    commands,
     setWebhook: setBody?.description ?? (set.ok ? "ok" : `HTTP ${set.status}`),
     telegram: {
       url: result["url"],
@@ -712,7 +825,12 @@ async function ensureWebhook(request: Request): Promise<void> {
   try {
     const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
     const current = (info as { result?: { url?: string } } | null)?.result?.url ?? "";
-    if (current === target) return; // уже там — нічого не робимо
+    // Команди реєструємо навіть коли вебхук уже на місці: перелік міг
+    // зʼявитися (ця функція) вже після того, як вебхук став правильним, тож
+    // прив'язувати їх до зміни адреси не можна — інакше /admin так і не
+    // зʼявиться в меню на вже налаштованому боті.
+    void setBotCommands(token, process.env["TELEGRAM_OWNER_ID"]);
+    if (current === target) return; // адреса вже там — лишається тільки команди вище
     await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -763,6 +881,18 @@ export default {
         console.error(error);
         // 200 навмисно: Telegram повторював би доставку тієї самої помилки.
         return new Response("ok", { status: 200 });
+      }
+    }
+
+    // Тик автоканалу: зовнішній планувальник смикає це з секретом кожні
+    // кілька хвилин, і бот сам постить обстановку в канал. `?dry=1` показує
+    // пост, не надсилаючи, — для перевірки без спаму в канал.
+    if (pathname === "/api/telegram/channel/tick") {
+      try {
+        return await channelTick(request);
+      } catch (error) {
+        console.error(error);
+        return json({ posted: false, reason: "internal error" }, 500);
       }
     }
 

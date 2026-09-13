@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import type { Threat } from "./air";
 import {
   compass,
+  dangerIndex,
   debrisDrift,
   personalAssessment,
   skyState,
@@ -157,5 +158,44 @@ describe("personalAssessment", () => {
       me,
     );
     expect(a.nearest[0]?.threat.id).toBe("inbound");
+  });
+});
+
+describe("dangerIndex — спати чи в укриття", () => {
+  const me = { lat: 50.0, lon: 30.0 };
+
+  it("немає цілей поруч — спокійно, можна спати", () => {
+    const a = personalAssessment([threat({ lat: 46, lon: 30 })], me);
+    const d = dangerIndex(a);
+    expect(d.level).toBe("calm");
+    expect(d.verdict).toContain("можна спати");
+    expect(d.percent).toBeLessThan(15);
+  });
+
+  it("швидка вхідна ціль поруч — в укриття", () => {
+    // ціль за ~20 км південніше, курс 0° (на мене), тип shahed
+    const a = personalAssessment(
+      [threat({ lat: 49.8, lon: 30.0, heading: 0, type: "shahed" })],
+      me,
+    );
+    const d = dangerIndex(a);
+    expect(d.level).toBe("shelter");
+    expect(d.percent).toBeGreaterThanOrEqual(70);
+  });
+
+  it("індекс завжди 0..100 і несе застереження", () => {
+    const a = personalAssessment(
+      [threat({ lat: 49.9, lon: 30.0, heading: 0, type: "shahed" })],
+      me,
+    );
+    const d = dangerIndex(a);
+    expect(d.percent).toBeGreaterThanOrEqual(0);
+    expect(d.percent).toBeLessThanOrEqual(100);
+    expect(d.caveat).toContain("не ймовірність");
+  });
+
+  it("НЕ називає себе ймовірністю влучання (правило проекту)", () => {
+    const a = personalAssessment([], me);
+    expect(dangerIndex(a).caveat).toContain("не радар");
   });
 });
