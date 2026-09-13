@@ -644,11 +644,66 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/**
+ * Самозцілення вебхука: сервер сам реєструє свій вебхук після старту.
+ *
+ * Корінь «бот мовчить»: вебхук ніде не реєструвався автоматично, тож після
+ * кожного редеплою Telegram лишався без адреси доставки — і бот замовкав, доки
+ * хтось не зареєструє вебхук руками. Тут це робить сам сервіс: один раз на
+ * інстанс, при першому ж запиті, звіряє свій вебхук і реєструє, якщо його немає
+ * або він веде не сюди.
+ *
+ * Жодного зовнішнього вводу: токен і секрет — зі змінних оточення, хост — або з
+ * явної TELEGRAM_WEBHOOK_HOST (безпечніший вибір), або з домену цього ж запиту,
+ * і тільки https. Тому маршрут не можна намовити перенаправити бота кудись інде.
+ *
+ * Не блокує відповідь: викликається fire-and-forget, помилка лягає в лог, а не
+ * ламає запит користувача.
+ */
+let webhookEnsured = false;
+
+async function ensureWebhook(request: Request): Promise<void> {
+  if (webhookEnsured) return;
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
+  if (!token) return;
+
+  const reqUrl = new URL(request.url);
+  const host = process.env["TELEGRAM_WEBHOOK_HOST"]?.trim() || reqUrl.host;
+  // Тільки https: вебхук над plaintext Telegram усе одно не прийме, а хост із
+  // http-запиту — привід не довіряти йому як цілі реєстрації.
+  if (reqUrl.protocol !== "https:" && !process.env["TELEGRAM_WEBHOOK_HOST"]) return;
+
+  webhookEnsured = true; // ставимо одразу: навіть якщо впаде, не спамимо Telegram щозапиту
+  const target = `https://${host}/api/telegram/webhook`;
+  try {
+    const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
+    const current = (info as { result?: { url?: string } } | null)?.result?.url ?? "";
+    if (current === target) return; // уже там — нічого не робимо
+    await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: target,
+        ...(secret ? { secret_token: secret } : {}),
+        allowed_updates: ["message", "callback_query"],
+        drop_pending_updates: true,
+      }),
+    });
+  } catch (error) {
+    console.error("ensureWebhook failed", error);
+    webhookEnsured = false; // дозволимо спробувати ще раз наступного запиту
+  }
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     // Перехоплюється до маршрутизатора: службова відповідь не має залежати
     // від того, чи зібрався застосунок.
     const pathname = new URL(request.url).pathname;
+
+    // Самозцілення вебхука — не блокуючи відповідь.
+    void ensureWebhook(request);
 
     if (pathname === "/api/telegram/repair" && request.method === "POST") {
       try {
