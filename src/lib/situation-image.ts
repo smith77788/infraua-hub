@@ -13,6 +13,7 @@
 
 import type { Threat, ThreatType } from "./air";
 import { UA_OUTLINE } from "./ua-outline";
+import { UA_OBLASTS } from "./ua-oblasts";
 
 const W = 1000;
 const PAD = 24;
@@ -75,18 +76,33 @@ function marker(t: Threat): string {
 }
 
 /** Рядок SVG обстановки. Чиста функція: та сама на вході — та сама на виході. */
+function ringPath(ring: readonly [number, number][]): string {
+  return (
+    ring
+      .map(([lat, lon], i) => {
+        const [x, y] = project(lat, lon);
+        return `${i === 0 ? "M" : "L"}${x},${y}`;
+      })
+      .join(" ") + " Z"
+  );
+}
+
 export function situationSvg(threats: readonly Threat[]): string {
   const outline = UA_OUTLINE.map(([lat, lon], i) => {
     const [x, y] = project(lat, lon);
     return `${i === 0 ? "M" : "L"}${x},${y}`;
   }).join(" ");
+  const oblastBorders = UA_OBLASTS.map(ringPath).join(" ");
 
   const markers = threats.map(marker).join("");
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
     `<rect width="${W}" height="${H}" fill="#0b0f16"/>` +
-    `<path d="${outline} Z" fill="#0f1a24" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
+    // Заливка країни, потім тонкі межі областей, потім чіткий контур зверху.
+    `<path d="${outline} Z" fill="#0f1a24" stroke="none"/>` +
+    `<path d="${oblastBorders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
+    `<path d="${outline} Z" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
     markers +
     `</svg>`
   );
