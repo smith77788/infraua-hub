@@ -268,9 +268,13 @@ const DISABLED_FACILITIES = (): FacilitiesPayload => ({
   truncatedCategories: [],
 });
 
-export const getFacilities = createServerFn({ method: "GET" }).handler(
-  async (): Promise<FacilitiesPayload> => {
-    if (!(await infraLayersEnabled())) return DISABLED_FACILITIES();
+export const getFacilities = createServerFn({ method: "GET" })
+  .validator((input: unknown): { initData?: string } => {
+    const initData = (input as { initData?: unknown } | undefined)?.initData;
+    return typeof initData === "string" && initData ? { initData } : {};
+  })
+  .handler(async ({ data }): Promise<FacilitiesPayload> => {
+    if (!(await infraLayersEnabled(data.initData))) return DISABLED_FACILITIES();
 
     const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
     if (cached) return cached;
@@ -331,8 +335,7 @@ export const getFacilities = createServerFn({ method: "GET" }).handler(
     } finally {
       clearTimeout(timer);
     }
-  },
-);
+  });
 
 interface EonetEvent {
   id: string;
@@ -1279,14 +1282,19 @@ export interface PowerLinesPayload {
 }
 
 export const getPowerLines = createServerFn({ method: "GET" })
-  .validator((input: unknown): { have: string[] } => {
-    const have = (input as { have?: unknown } | undefined)?.have;
-    if (!Array.isArray(have)) return { have: [] };
-    return { have: have.filter((k): k is string => typeof k === "string") };
+  .validator((input: unknown): { have: string[]; initData?: string } => {
+    const obj = input as { have?: unknown; initData?: unknown } | undefined;
+    const have = Array.isArray(obj?.have)
+      ? obj.have.filter((k): k is string => typeof k === "string")
+      : [];
+    const initData = obj?.initData;
+    return typeof initData === "string" && initData ? { have, initData } : { have };
   })
   .handler(async ({ data }) => {
     // tilesTotal 0 означає «покриття повне»: клієнт не проситиме ще.
-    if (!infraLayersEnabled()) {
+    // (Раніше тут бракувало await — проміс завжди істинний, і шар віддавався
+    // будь-кому попри вимикач. Тепер право звіряється як і всюди.)
+    if (!(await infraLayersEnabled(data.initData))) {
       return {
         tiles: [],
         retrievedAt: new Date().toISOString(),
@@ -1368,13 +1376,17 @@ export interface SubstationTilesPayload {
 const SUBSTATIONS_PER_TILE = 1200;
 
 export const getSubstationTiles = createServerFn({ method: "GET" })
-  .validator((input: unknown): { have: string[] } => {
-    const have = (input as { have?: unknown } | undefined)?.have;
-    if (!Array.isArray(have)) return { have: [] };
-    return { have: have.filter((k): k is string => typeof k === "string") };
+  .validator((input: unknown): { have: string[]; initData?: string } => {
+    const obj = input as { have?: unknown; initData?: unknown } | undefined;
+    const have = Array.isArray(obj?.have)
+      ? obj.have.filter((k): k is string => typeof k === "string")
+      : [];
+    const initData = obj?.initData;
+    return typeof initData === "string" && initData ? { have, initData } : { have };
   })
   .handler(async ({ data }): Promise<SubstationTilesPayload> => {
-    if (!(await infraLayersEnabled())) return { tiles: [], tilesTotal: 0, disabled: true };
+    if (!(await infraLayersEnabled(data.initData)))
+      return { tiles: [], tilesTotal: 0, disabled: true };
 
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);
@@ -1444,13 +1456,17 @@ export interface FacilityTilesPayload {
 const FACILITIES_PER_TILE = 8000;
 
 export const getFacilityTiles = createServerFn({ method: "GET" })
-  .validator((input: unknown): { have: string[] } => {
-    const have = (input as { have?: unknown } | undefined)?.have;
-    if (!Array.isArray(have)) return { have: [] };
-    return { have: have.filter((k): k is string => typeof k === "string") };
+  .validator((input: unknown): { have: string[]; initData?: string } => {
+    const obj = input as { have?: unknown; initData?: unknown } | undefined;
+    const have = Array.isArray(obj?.have)
+      ? obj.have.filter((k): k is string => typeof k === "string")
+      : [];
+    const initData = obj?.initData;
+    return typeof initData === "string" && initData ? { have, initData } : { have };
   })
   .handler(async ({ data }): Promise<FacilityTilesPayload> => {
-    if (!(await infraLayersEnabled())) return { tiles: [], tilesTotal: 0, disabled: true };
+    if (!(await infraLayersEnabled(data.initData)))
+      return { tiles: [], tilesTotal: 0, disabled: true };
 
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);

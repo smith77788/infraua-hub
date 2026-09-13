@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { INFRA_DISABLED_NOTICE, infraLayersOff } from "@/lib/infra-gate";
+import { useInitData } from "@/hooks/use-telegram";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 
@@ -35,7 +36,20 @@ function Brief() {
   const eventsFn = useServerFn(getEvents);
   const alertsFn = useServerFn(getAlerts);
 
-  const facilitiesQuery = useQuery({ queryKey: ["facilities"], queryFn: () => facilitiesFn() });
+  /*
+   * Брифінг друкує впорядкований перелік обʼєктів за наслідками їхньої втрати —
+   * найчутливіше, що є в консолі. Тому його теж віддаємо лише власникові:
+   * підпис Telegram Mini App доводить право, поза Telegram рядок порожній і
+   * сервер нічого не віддає. `viewer` у ключі — щоб запит повторився власницьким,
+   * щойно підпис зʼявиться після монтування.
+   */
+  const initData = useInitData();
+  const viewer = initData ? "owner" : "public";
+
+  const facilitiesQuery = useQuery({
+    queryKey: ["facilities", viewer],
+    queryFn: () => facilitiesFn({ data: { initData } }),
+  });
   const eventsQuery = useQuery({ queryKey: ["events"], queryFn: () => eventsFn() });
   const alertsQuery = useQuery({ queryKey: ["alerts"], queryFn: () => alertsFn() });
   const threatsFn = useServerFn(getThreats);
@@ -81,8 +95,8 @@ function Brief() {
    */
   const powerLinesFn = useServerFn(getPowerLines);
   const powerLinesQuery = useQuery({
-    queryKey: ["brief-power-lines"],
-    queryFn: () => powerLinesFn({ data: { have: [] } }),
+    queryKey: ["brief-power-lines", viewer],
+    queryFn: () => powerLinesFn({ data: { have: [], initData } }),
     staleTime: 10 * 60 * 1000,
     // Сервер і так відмовить, але питати те, чого свідомо не віддають, —
     // зайвий запит на кожне відкриття сторінки.
