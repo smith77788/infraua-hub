@@ -96,10 +96,12 @@ function freshnessOf(iso: string | undefined): Freshness {
   return "stale";
 }
 
+// Розміри підняті під телефон: на маленькому екрані позначка має читатися й
+// бути придатною для дотику. Свіжі — найбільші, застарілі — дрібніші й тьмяні.
 const FRESH_TONE: Record<Freshness, { opacity: number; size: number }> = {
-  fresh: { opacity: 1, size: 26 },
-  recent: { opacity: 0.9, size: 22 },
-  stale: { opacity: 0.5, size: 18 },
+  fresh: { opacity: 1, size: 32 },
+  recent: { opacity: 0.9, size: 27 },
+  stale: { opacity: 0.5, size: 21 },
 };
 
 /** Точка на відстані `km` за курсом `headingDeg` (0=Пн) — для вектора курсу. */
@@ -115,7 +117,15 @@ const compass = (d: number) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45
 // Силует + колір за типом цілі. Кольори узгоджені зі звичною семантикою:
 // БпЛА — жовтий, реактивний БпЛА — помаранчевий, ракети/балістика — червоне.
 const TYPE_STYLE: Record<ThreatType, { color: string; glyph: string; label: string }> = {
-  shahed: { color: "#ffd23f", glyph: '<path d="M12 3l7 16-7-3.6L5 19z"/>', label: "Ударний БпЛА" },
+  // Силует дельтакрилого БпЛА (Shahed-136), а не абстрактна стрілка: широке
+  // дельтакрило, осьова фюзеляжна лінія і задня риска — штовхальний гвинт. Так
+  // ціль упізнається як дрон з першого погляду, як на картах конкурентів.
+  shahed: {
+    color: "#ffd23f",
+    glyph:
+      '<path d="M12 2.5 L20 19.5 L12 15.5 L4 19.5 Z"/><path d="M12 5.5 L12 15"/><path d="M9 19 L15 19"/>',
+    label: "Ударний БпЛА",
+  },
   reactive: {
     color: "#ff8c1a",
     glyph: '<path d="M12 2l6 18-6-3.6L6 20z"/><path d="M12 5v11"/>',
@@ -210,7 +220,7 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   // за курсом дивиться саме форма цілі.
   const svgTransform = rot != null ? ` style="transform:rotate(${rot}deg)"` : "";
   const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg></div>`;
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg></div>`;
   const icon = L.divIcon({
     html,
     className: "threat-pin",

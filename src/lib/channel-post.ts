@@ -123,6 +123,33 @@ function loudCity(t: Threat, nearKm = 60, sectorDeg = 40): string | null {
   return best;
 }
 
+// Значок типу цілі — щоб пост читався оком, а не суцільним рядком.
+const TYPE_EMOJI: Record<ThreatType, string> = {
+  shahed: "🛸",
+  reactive: "🛸",
+  cruise: "🚀",
+  missile: "🚀",
+  ballistic: "🎯",
+  kab: "💥",
+  recon: "👁",
+  aircraft: "✈️",
+  unknown: "❔",
+};
+
+/**
+ * Шапка за найгострішим, що є в небі. Ракета важливіша за мопед, тож заголовок
+ * веде саме нею — як у справжніх моніторів, де перше слово вже каже, бігти чи
+ * ні. Формулювання лишається чесним: це OSINT-спостереження, не гарантія.
+ */
+function header(types: ReadonlySet<ThreatType>): string {
+  if (types.has("missile") || types.has("ballistic") || types.has("cruise")) {
+    return "🚀 <b>внимание, ракетная угроза</b>";
+  }
+  if (types.has("kab")) return "💥 <b>КАБы в воздухе</b>";
+  if (types.has("shahed") || types.has("reactive")) return "🛸 <b>шахеды в небе</b>";
+  return "🛰 <b>движение в воздухе</b>";
+}
+
 export interface ChannelPost {
   text: string;
   /** Стабільний відбиток картини для дедупу. */
@@ -166,29 +193,40 @@ export function renderChannelPost(threats: readonly Threat[]): ChannelPost | nul
     (a, b) => total(b.byType) - total(a.byType) || a.oblast.localeCompare(b.oblast),
   );
 
-  const lines: string[] = ["<b>общая по воздуху:</b>", ""];
+  const allTypes = new Set<ThreatType>();
   const sigParts: string[] = [];
+  const bodyLines: string[] = [];
   for (const g of ordered) {
     const parts: string[] = [];
     for (const [type, n] of [...g.byType.entries()].sort((a, b) => b[1] - a[1])) {
+      allTypes.add(type);
       const course = g.courses.get(type);
-      parts.push(`${n} ${typePlural(type, n)}${course ? ` курсом ${course}` : ""}`);
+      // Значок веде тип, далі — кількість словом у «ванёк»-регістрі й курс.
+      parts.push(
+        `${TYPE_EMOJI[type]} ${n} ${typePlural(type, n)}${course ? ` курсом ${course}` : ""}`,
+      );
       sigParts.push(`${g.oblast}:${type}:${n}`);
     }
-    let line = `${g.oblast}: ${parts.join(", ")}`;
+    let line = `📍 <b>${g.oblast}</b>: ${parts.join(", ")}`;
     // Без прийменника, щоб уникнути відмінка: назви в даних — у називному
     // («Харківщина», «Запоріжжя»), і «громко в Запоріжжя» різало б слух.
     if (g.loud.size) line += ` — может быть громко: ${[...g.loud].join(", ")}!`;
-    lines.push(line);
+    bodyLines.push(line);
   }
 
-  lines.push("");
-  lines.push("<i>по данным OSINT · берегите себя</i>");
+  const targets = threats.reduce((n, t) => n + Math.max(1, t.count), 0);
+  const lines = [
+    header(allTypes),
+    "",
+    ...bodyLines,
+    "",
+    `<i>всего в небе: ${targets} · по данным OSINT · берегите себя</i>`,
+  ];
 
   return {
     text: lines.join("\n"),
     signature: sigParts.sort().join("|"),
-    targets: threats.reduce((n, t) => n + Math.max(1, t.count), 0),
+    targets,
   };
 }
 

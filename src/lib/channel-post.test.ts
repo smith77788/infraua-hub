@@ -54,6 +54,26 @@ describe("renderChannelPost", () => {
     expect(post.text).toContain("может быть громко: Полтавщина");
   });
 
+  it("шапка веде найгострішим: ракета важливіша за мопед", () => {
+    const post = renderChannelPost([
+      threat({ lat: 51, lon: 34.5, type: "shahed" }),
+      threat({ lat: 50, lon: 30, type: "missile" }),
+    ])!;
+    expect(post.text).toContain("ракетная угроза");
+    expect(post.text.startsWith("🚀")).toBe(true);
+  });
+
+  it("без ракет шапка про шахеди", () => {
+    const post = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed" })])!;
+    expect(post.text).toContain("шахеды в небе");
+  });
+
+  it("значок типу і загальний лік у пості", () => {
+    const post = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed", count: 2 })])!;
+    expect(post.text).toContain("🛸");
+    expect(post.text).toContain("всего в небе: 2");
+  });
+
   it("однакова картина дає однаковий підпис (дедуп)", () => {
     const a = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed" })])!;
     const b = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed" })])!;
