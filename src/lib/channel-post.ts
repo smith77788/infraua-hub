@@ -21,7 +21,7 @@
 import type { Threat, ThreatType } from "./air";
 import { OBLASTS } from "./alerts";
 import { distanceKm } from "./infra-types";
-import { angularDiff, bearingDeg } from "./threat-eta";
+import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
 
 // Множина за українськими правилами (ті самі 3 форми: 1 / 2-4 / 5+).
 function plural(n: number, one: string, few: string, many: string): string {
@@ -91,23 +91,24 @@ export function oblastOf(lat: number, lon: number): string {
 }
 
 /**
- * Чи йде ціль на місто поблизу — тоді «у бік міста — уважно».
- * Місто в межах `nearKm` і курс у секторі ±`sectorDeg` на нього.
+ * Чи йде ціль на місто поблизу — тоді «у бік міста, ~N хв — уважно».
+ * Місто в межах `nearKm` і курс у секторі ±`sectorDeg` на нього. ETA — за
+ * типовою швидкістю типу цілі (SPEED_KMH): орієнтир, скільки лишилось.
  */
-function loudCity(t: Threat, nearKm = 60, sectorDeg = 40): string | null {
+function loudCity(t: Threat, nearKm = 80, sectorDeg = 40): { name: string; etaMin: number } | null {
   if (typeof t.heading !== "number") return null;
-  let best: string | null = null;
-  let bestD = Infinity;
+  let best: { name: string; d: number } | null = null;
   for (const c of CITY_REFS) {
     const d = distanceKm(t, c);
     if (d > nearKm || d < 3) continue;
     const brg = bearingDeg(t, c);
-    if (angularDiff(brg, t.heading) <= sectorDeg && d < bestD) {
-      bestD = d;
-      best = c.name;
+    if (angularDiff(brg, t.heading) <= sectorDeg && (!best || d < best.d)) {
+      best = { name: c.name, d };
     }
   }
-  return best;
+  if (!best) return null;
+  const speed = SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+  return { name: best.name, etaMin: Math.max(1, Math.round((best.d / speed) * 60)) };
 }
 
 // Значок типу цілі — щоб пост читався оком, а не суцільним рядком.
@@ -259,7 +260,8 @@ export interface ChannelPost {
 interface Group {
   oblast: string;
   byType: Map<ThreatType, number>;
-  loud: Set<string>;
+  /** Місто на курсі → мінімальна ETA (хв). */
+  loud: Map<string, number>;
   courses: Map<ThreatType, string>;
 }
 
@@ -280,7 +282,7 @@ export function renderChannelPost(
     const oblast = oblastOf(t.lat, t.lon);
     let g = groups.get(oblast);
     if (!g) {
-      g = { oblast, byType: new Map(), loud: new Set(), courses: new Map() };
+      g = { oblast, byType: new Map(), loud: new Map(), courses: new Map() };
       groups.set(oblast, g);
     }
     // Рахуємо ОБ'ЄКТИ (1 ціль = 1), а не поле count. count — це кількість
@@ -291,7 +293,10 @@ export function renderChannelPost(
     const course = coursePhrase(t.heading);
     if (course && !g.courses.has(type)) g.courses.set(type, course);
     const loud = loudCity(t);
-    if (loud) g.loud.add(loud);
+    if (loud) {
+      const prev = g.loud.get(loud.name);
+      if (prev === undefined || loud.etaMin < prev) g.loud.set(loud.name, loud.etaMin);
+    }
   }
 
   // Найгарячіші області — де більше цілей — вище.
@@ -325,7 +330,10 @@ export function renderChannelPost(
     let line = `📍 <b>${g.oblast}</b>: ${parts.join(", ")}`;
     // Без прийменника, щоб уникнути відмінка: назви в даних — у називному
     // («Харківщина», «Запоріжжя»), і «громко в Запоріжжя» різало б слух.
-    if (g.loud.size) line += ` — у бік: ${[...g.loud].join(", ")}, уважно!`;
+    if (g.loud.size) {
+      const near = [...g.loud.entries()].map(([n, e]) => `${n} (~${e} хв)`);
+      line += ` — у бік: ${near.join(", ")}, уважно!`;
+    }
     bodyLines.push(line);
   });
   const hidden = ordered.length - Math.min(ordered.length, maxOblasts);

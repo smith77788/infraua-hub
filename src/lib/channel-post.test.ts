@@ -52,6 +52,8 @@ describe("renderChannelPost", () => {
       threat({ lat: 49.3, lon: 34.55, type: "shahed", heading: 0 }),
     ])!;
     expect(post.text).toContain("у бік: Полтавщина");
+    // ETA до міста — «(~N хв)» за типовою швидкістю типу.
+    expect(post.text).toMatch(/у бік: Полтавщина \(~\d+ хв\)/);
   });
 
   it("шапка веде найгострішим: ракета важливіша за мопед", () => {
