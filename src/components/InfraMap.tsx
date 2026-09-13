@@ -23,6 +23,7 @@ import {
   type ThreatType,
 } from "@/lib/air";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
+import { UA_OUTLINE } from "@/lib/ua-outline";
 import { type AlertRegion } from "@/lib/alerts";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
@@ -572,6 +573,18 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
   );
 }
 
+/**
+ * Маска-прожектор: усе поза Україною трохи притемнюється, щоб країна читалася
+ * серед сусідів. Зовнішнє кільце — увесь світ, дірка — контур України; Leaflet
+ * малює полігон із діркою, тож затемнюється лише зовнішнє.
+ */
+const WORLD_RING: [number, number][] = [
+  [-89, -179],
+  [89, -179],
+  [89, 179],
+  [-89, 179],
+];
+
 function FlyTo({ facility }: { facility: Facility | null }) {
   const map = useMap();
   useEffect(() => {
@@ -637,6 +650,21 @@ export default function InfraMap({
       style={{ background: "#0a0e14" }}
     >
       <BaseLayers />
+
+      {/*
+        Підсвічування України серед сусідів. Дві частини: легка маска, що
+        притемнює все ЗА межами країни (полігон світу з діркою-Україною), і
+        чіткий контур самого кордону. Це орієнтир, а не юридична межа —
+        координати спрощені (див. ua-outline.ts).
+      */}
+      <Polygon
+        positions={[WORLD_RING, UA_OUTLINE]}
+        pathOptions={{ stroke: false, fillColor: "#050810", fillOpacity: 0.5, interactive: false }}
+      />
+      <Polyline
+        positions={UA_OUTLINE}
+        pathOptions={{ color: "#22d3ee", weight: 1.5, opacity: 0.6, interactive: false }}
+      />
 
       {/*
         Окупована територія — під усіма іншими шарами.

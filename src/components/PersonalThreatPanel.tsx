@@ -325,10 +325,12 @@ export default function PersonalThreatPanel({
                 className={`flex items-center gap-2 rounded px-2 py-1.5 ${DANGER_BG[di.level]}`}
                 title={di.caveat}
               >
-                <span
-                  className={`font-mono text-[22px] font-bold leading-none ${DANGER_FG[di.level]}`}
-                >
-                  {di.percent}%
+                <span className={`flex items-baseline font-mono font-bold ${DANGER_FG[di.level]}`}>
+                  {/* Без «%»: це індекс обстановки 0–100, а не ймовірність
+                      влучання. Знак відсотка читався б саме як «шанс прильоту»,
+                      якого ми не знаємо, — те, чого dangerIndex навмисно уникає. */}
+                  <span className="text-[22px] leading-none">{di.percent}</span>
+                  <span className="ml-0.5 text-[10px] opacity-60">/100</span>
                 </span>
                 <div className="min-w-0">
                   <div className={`text-[12px] font-bold leading-tight ${DANGER_FG[di.level]}`}>
