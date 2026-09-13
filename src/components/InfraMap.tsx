@@ -263,6 +263,21 @@ function BaseLayers() {
           maxZoom={19}
         />
       </LayersControl.BaseLayer>
+      {/*
+       * Межі областей і назви міст — постійним накладним шаром, увімкненим за
+       * замовчуванням. Базовий «Canvas» майже не показує адмінмеж на малому
+       * зумі, тож країна виглядала суцільною плямою. Довідковий шар Esri
+       * (Dark Gray Reference) домальовує адмінкордони й підписи міст поверх
+       * будь-якої підкладки в тон темної теми, на всіх зумах. Це overlay, тож
+       * його видно завжди, а не замість базового шару; кому заважає — вимкне.
+       */}
+      <LayersControl.Overlay checked name="Межі областей і міста">
+        <TileLayer
+          attribution="Labels &copy; Esri"
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+          maxZoom={18}
+        />
+      </LayersControl.Overlay>
     </LayersControl>
   );
 }
