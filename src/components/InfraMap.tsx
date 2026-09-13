@@ -24,6 +24,7 @@ import {
 } from "@/lib/air";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { UA_OUTLINE } from "@/lib/ua-outline";
+import { UA_OBLASTS } from "@/lib/ua-oblasts";
 import { type AlertRegion } from "@/lib/alerts";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
@@ -686,6 +687,18 @@ export default function InfraMap({
         positions={[WORLD_RING, UA_OUTLINE]}
         pathOptions={{ stroke: false, fillColor: "#050810", fillOpacity: 0.5, interactive: false }}
       />
+      {/*
+        Межі областей — тонкою лінією, завжди. Орієнтир, не юридичні межі
+        (спрощено, див. ua-oblasts.ts). Дає читабельну мапу областей на будь-якій
+        підкладці, не покладаючись на підписи тайлів Esri.
+      */}
+      {UA_OBLASTS.map((ring, i) => (
+        <Polyline
+          key={`oblast-${i}`}
+          positions={ring}
+          pathOptions={{ color: "#3b5566", weight: 0.8, opacity: 0.5, interactive: false }}
+        />
+      ))}
       <Polyline
         positions={UA_OUTLINE}
         pathOptions={{ color: "#22d3ee", weight: 1.5, opacity: 0.6, interactive: false }}

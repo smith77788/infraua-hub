@@ -35,6 +35,7 @@ import { verifyInitData } from "./lib/telegram-initdata";
 import { publicOrigin } from "./lib/request-origin";
 import type { Threat } from "./lib/air";
 import type { AirSnapshot } from "./lib/channel-post";
+import { distanceKm } from "./lib/infra-types";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -221,6 +222,37 @@ let lastChannelPost: { signature: string; at: number; snapshot: AirSnapshot | un
   snapshot: undefined,
 };
 
+/**
+ * Згладжування картини каналу в часі.
+ *
+ * `fetchNeptunThreats` віддає лише миттєвий «активний» набір, а OSINT-звіти
+ * спорадичні: ціль зникає з набору на один-два опити й повертається. Без
+ * згладжування сусідні пости за 4 хвилини виглядали «категорично різними» —
+ * хоча шахед за 4 хв нікуди не подівся. Тримаємо кожну нещодавно бачену ціль
+ * до HOLD_MS, зливаючи близькі за типом (той самий фізичний апарат, різні
+ * звіти), тож картина ЕВОЛЮЦІОНУЄ, а не стрибає, і «відбій» по області
+ * настає лише після справжньої відсутності, а не через один пропущений звіт.
+ */
+const CHANNEL_MEMORY_HOLD_MS = 8 * 60 * 1000;
+const CHANNEL_MERGE_KM = 22;
+let channelThreatMemory: { threat: Threat; seenAt: number }[] = [];
+function smoothChannelThreats(current: Threat[], now: number): Threat[] {
+  channelThreatMemory = channelThreatMemory.filter((m) => now - m.seenAt < CHANNEL_MEMORY_HOLD_MS);
+  for (const t of current) {
+    const type = t.type ?? "unknown";
+    const hit = channelThreatMemory.find(
+      (m) => (m.threat.type ?? "unknown") === type && distanceKm(m.threat, t) < CHANNEL_MERGE_KM,
+    );
+    if (hit) {
+      hit.threat = t;
+      hit.seenAt = now;
+    } else {
+      channelThreatMemory.push({ threat: t, seenAt: now });
+    }
+  }
+  return channelThreatMemory.map((m) => m.threat);
+}
+
 interface ChannelTickResult {
   posted: boolean;
   reason?: string;
@@ -296,7 +328,11 @@ async function runChannelTick(
     clearTimeout(timer);
   }
 
-  const post = renderChannelPost(threats, { previous: lastChannelPost.snapshot });
+  // Згладжуємо картину в часі, щоб сусідні пости не «стрибали» через блимання
+  // OSINT-набору. Пам'ять оновлюється щотику (навіть коли не постимо).
+  const smoothed = smoothChannelThreats(threats, Date.now());
+
+  const post = renderChannelPost(smoothed, { previous: lastChannelPost.snapshot });
   if (!post) {
     // Небо чисте. Забуваємо зріз, щоб поява цілей знову була «суттєвою».
     lastChannelPost = { signature: "", at: lastChannelPost.at, snapshot: undefined };

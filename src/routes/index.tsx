@@ -328,10 +328,11 @@ function Console() {
   const [linkView, setLinkView] = useState<"list" | "graph">("list");
   const [showFrontline, setShowFrontline] = useState(true);
   const [showFires, setShowFires] = useState(false);
-  // Увесь шар обʼєктів інфраструктури можна сховати одним перемикачем: у
-  // насичений день сотні позначок перекривають повітряну обстановку, а комусь
-  // потрібна лише вона. Стосується тільки показу на карті, не аналітики.
-  const [showFacilities, setShowFacilities] = useState(true);
+  // Шар обʼєктів інфраструктури ВИМКНЕНИЙ за замовчуванням: консоль тепер
+  // передусім повітряний радар, і сотні позначок перекривали б обстановку.
+  // Вмикається перемикачем «Обʼєкти інфраструктури». Стосується показу на
+  // карті, не аналітики.
+  const [showFacilities, setShowFacilities] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
@@ -1204,7 +1205,7 @@ function Console() {
                 </Suspense>
               </ClientOnly>
 
-              {loading ? (
+              {showFacilities && loading ? (
                 <div className="pointer-events-none absolute inset-x-0 top-3 z-[500] flex justify-center">
                   <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                     <Loader2 className="size-3 animate-spin" /> Завантаження обʼєктів з
@@ -1219,7 +1220,10 @@ function Console() {
                 там налазили один на одного. Повідомлення про вимкнені шари тут
                 прибрано як дубль: те саме вже пояснює бічна панель.
               */}
-              {!infraDisabled && !loading && facilitiesQuery.data?.source === "baseline" ? (
+              {showFacilities &&
+              !infraDisabled &&
+              !loading &&
+              facilitiesQuery.data?.source === "baseline" ? (
                 <div className="pointer-events-none absolute inset-x-0 top-14 z-[500] flex justify-center px-3">
                   <span className="max-w-full rounded border border-amber-500/50 bg-background/95 px-3 py-2 text-center font-mono text-[10px] leading-snug text-amber-400">
                     Live-джерело OpenStreetMap недоступне — показано опорний перелік. Натисніть
