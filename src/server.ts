@@ -113,11 +113,41 @@ async function runProbes(): Promise<SourceProbe[]> {
   return probes;
 }
 
+/**
+ * Стан вебхука очима самого Telegram — без секрету й без витоку.
+ *
+ * Викликає getWebhookInfo токеном, який має сервер, і повертає лише те, що
+ * відповідає на «чому бот мовчить»: чи зареєстрований вебхук, скільки оновлень
+ * висить у черзі, яка була остання помилка доставки. Адресу вебхука навмисно
+ * НЕ повертаємо — вона тут ні до чого, а зайве назовні не показуємо.
+ */
+async function webhookStatus(): Promise<Record<string, unknown>> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  if (!token) return { registered: false, reason: "no token" };
+  try {
+    const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
+    const r = (info as { result?: Record<string, unknown> } | null)?.result ?? {};
+    const hasUrl = typeof r["url"] === "string" && (r["url"] as string).length > 0;
+    return {
+      registered: hasUrl,
+      // Чи веде вебхук на цей самий сервіс (порівнюємо лише хост, не шлях).
+      pendingUpdates: r["pending_update_count"] ?? 0,
+      lastError: r["last_error_message"] ?? null,
+      lastErrorAt: r["last_error_date"] ?? null,
+      allowedUpdates: r["allowed_updates"] ?? null,
+    };
+  } catch {
+    return { registered: false, reason: "getWebhookInfo failed" };
+  }
+}
+
 async function health(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const report = baseReport();
-  const body =
-    url.searchParams.get("probe") === "1" ? { ...report, probes: await runProbes() } : report;
+  let body: Record<string, unknown> = { ...report };
+  if (url.searchParams.get("probe") === "1") body = { ...body, probes: await runProbes() };
+  // ?telegram=1 питає Telegram про стан вебхука — діагностика «бот мовчить».
+  if (url.searchParams.get("telegram") === "1") body = { ...body, webhook: await webhookStatus() };
   return new Response(JSON.stringify(body, null, 2), {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
