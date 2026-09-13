@@ -59,13 +59,13 @@ describe("renderChannelPost", () => {
       threat({ lat: 51, lon: 34.5, type: "shahed" }),
       threat({ lat: 50, lon: 30, type: "missile" }),
     ])!;
-    expect(post.text).toContain("ракетная угроза");
     expect(post.text.startsWith("🚀")).toBe(true);
+    expect(post.text.toLowerCase()).toContain("ракет");
   });
 
   it("без ракет шапка про шахеди", () => {
     const post = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed" })])!;
-    expect(post.text).toContain("шахеды в небе");
+    expect(post.text.startsWith("🛸")).toBe(true);
   });
 
   it("значок типу і загальний лік у пості", () => {
@@ -92,12 +92,45 @@ describe("renderChannelPost", () => {
         threat({ lat: 51, lon: 34.5, type: "shahed" }),
         threat({ lat: 46.97, lon: 32.0, type: "shahed" }),
       ],
-      1,
+      { maxOblasts: 1 },
     )!;
     // Показано лише одну область у тілі, решта згорнута.
     expect(post.text).toContain("…и ещё 1 область");
     // Але дедуп-підпис усе одно містить обидві.
     expect(post.signature.split("|").length).toBe(2);
+  });
+
+  it("живе оновлення: веде зміну, а не повтор тієї самої картини", () => {
+    const first = renderChannelPost([threat({ lat: 46.6, lon: 32.6, type: "shahed" })])!;
+    // Та сама картина вдруге — несуттєво, постити не варто.
+    const same = renderChannelPost([threat({ lat: 46.6, lon: 32.6, type: "shahed" })], {
+      previous: first.snapshot,
+    })!;
+    expect(same.material).toBe(false);
+
+    // З'явилась нова область — суттєво, і в тексті видно, що саме змінилось.
+    const grown = renderChannelPost(
+      [
+        threat({ lat: 46.6, lon: 32.6, type: "shahed" }),
+        threat({ lat: 49.9, lon: 36.2, type: "shahed" }),
+      ],
+      { previous: first.snapshot },
+    )!;
+    expect(grown.material).toBe(true);
+    expect(grown.text).toContain("🆕");
+  });
+
+  it("ескалація до ракет — завжди суттєво", () => {
+    const drones = renderChannelPost([threat({ lat: 46.6, lon: 32.6, type: "shahed" })])!;
+    const rockets = renderChannelPost(
+      [
+        threat({ lat: 46.6, lon: 32.6, type: "shahed" }),
+        threat({ lat: 47.8, lon: 35.1, type: "missile" }),
+      ],
+      { previous: drones.snapshot },
+    )!;
+    expect(rockets.material).toBe(true);
+    expect(rockets.text).toContain("⚠️");
   });
 
   it("однакова картина дає однаковий підпис (дедуп)", () => {

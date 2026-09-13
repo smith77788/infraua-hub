@@ -34,6 +34,7 @@ import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { publicOrigin } from "./lib/request-origin";
 import type { Threat } from "./lib/air";
+import type { AirSnapshot } from "./lib/channel-post";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -211,8 +212,14 @@ async function telegramSend(
  * спамив би той самий пост. Найгірше після редеплою — один повтор; це
  * прийнятно й не варте стороннього сховища.
  */
-const CHANNEL_MIN_INTERVAL_MS = 4 * 60 * 1000;
-let lastChannelPost = { signature: "", at: 0 };
+// Навіть коли нічого суттєво не змінилось, зрідка постимо «тримається» — щоб
+// канал виглядав живим, а не мертвим. Але рідко, щоб не було відчуття дублів.
+const CHANNEL_HEARTBEAT_MS = 25 * 60 * 1000;
+let lastChannelPost: { signature: string; at: number; snapshot: AirSnapshot | undefined } = {
+  signature: "",
+  at: 0,
+  snapshot: undefined,
+};
 
 interface ChannelTickResult {
   posted: boolean;
@@ -253,17 +260,25 @@ async function runChannelTick(
     clearTimeout(timer);
   }
 
-  const post = renderChannelPost(threats);
-  if (!post) return { posted: false, reason: "небо чисте" };
+  const post = renderChannelPost(threats, { previous: lastChannelPost.snapshot });
+  if (!post) {
+    // Небо чисте. Забуваємо зріз, щоб поява цілей знову була «суттєвою».
+    lastChannelPost = { signature: "", at: lastChannelPost.at, snapshot: undefined };
+    return { posted: false, reason: "небо чисте" };
+  }
   if (opts.dryRun) return { posted: false, dryRun: true, targets: post.targets, text: post.text };
 
   const now = Date.now();
+  // Постимо лише коли є що сказати: суттєва зміна (нова/зникла область,
+  // ескалація, помітна зміна кількості) АБО давно не було ознаки життя
+  // (heartbeat). Інакше мовчимо — щоб не було дублів тієї самої картини.
   if (!opts.force) {
-    if (post.signature === lastChannelPost.signature) {
-      return { posted: false, reason: "без змін від останнього поста" };
-    }
-    if (now - lastChannelPost.at < CHANNEL_MIN_INTERVAL_MS) {
-      return { posted: false, reason: "мінімальний інтервал ще не минув" };
+    const heartbeatDue = now - lastChannelPost.at >= CHANNEL_HEARTBEAT_MS;
+    if (!post.material && !heartbeatDue) {
+      // Зріз НЕ оновлюємо: дельту рахуємо від останнього ОПУБЛІКОВАНОГО, щоб
+      // повільне наростання (по +1 за тик) зрештою набрало поріг і про нього
+      // сказали, а не розчинилось у дрібних кроках.
+      return { posted: false, reason: "без суттєвих змін" };
     }
   }
 
@@ -280,7 +295,7 @@ async function runChannelTick(
   if (!res.ok) {
     return { posted: false, reason: `Telegram відхилив: ${res.status}`, status: 502 };
   }
-  lastChannelPost = { signature: post.signature, at: now };
+  lastChannelPost = { signature: post.signature, at: now, snapshot: post.snapshot };
   return { posted: true, targets: post.targets };
 }
 

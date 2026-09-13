@@ -137,25 +137,140 @@ const TYPE_EMOJI: Record<ThreatType, string> = {
 };
 
 /**
- * Шапка за найгострішим, що є в небі. Ракета важливіша за мопед, тож заголовок
- * веде саме нею — як у справжніх моніторів, де перше слово вже каже, бігти чи
- * ні. Формулювання лишається чесним: це OSINT-спостереження, не гарантія.
+ * Живість без випадковості. Канал має звучати як людина, а не шаблон, але
+ * лишатися чистою функцією (щоб тестуватись і давати стабільний підпис). Тому
+ * варіанти фраз обираються ДЕТЕРМІНОВАНО — за «насінням» від підпису картини:
+ * різні ситуації звучать по-різному, а та сама — однаково.
  */
-function header(types: ReadonlySet<ThreatType>): string {
-  if (types.has("missile") || types.has("ballistic") || types.has("cruise")) {
-    return "🚀 <b>внимание, ракетная угроза</b>";
+function seedFrom(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function pick<T>(arr: readonly T[], seed: number): T {
+  return arr[seed % arr.length]!;
+}
+
+// Заголовки за найгострішим типом. Для ракет — серйозно, без жартів; для
+// «мопедів» дозволена жива подача. Формулювання чесні: це OSINT, не гарантія.
+const HEAD_ROCKET = ["🚀 <b>Ракетная опасность!</b>", "🚀 <b>Внимание, ракеты!</b>"];
+const HEAD_KAB = ["💥 <b>КАБы в воздухе</b>", "💥 <b>Работают КАБы</b>"];
+const HEAD_SWARM = [
+  "🛸 <b>Мопеды роем</b>",
+  "🛸 <b>Шахеды пачками</b>",
+  "🛸 <b>Ночная смена «мопедов»</b>",
+];
+const HEAD_FEW = [
+  "🛸 <b>Мопеды в небе</b>",
+  "🛸 <b>Опять «мопеды»</b>",
+  "🛸 <b>Жужжат «мопеды»</b>",
+];
+const HEAD_CALM = ["🛰 <b>Движение в небе</b>", "🛰 <b>Что-то летает</b>"];
+
+// Кінцівка. Для небезпечних типів — стримано; для решти — легкий, доброзичливий
+// тон (не глузування з небезпеки, а «свій» голос монітора).
+const TAIL_SERIOUS = ["берегите себя 🙏", "не игнорируйте тревогу", "укрытие — не лишнее 🛡"];
+const TAIL_LIGHT = [
+  "берегите себя 🙏",
+  "ПВО не спит — и вы поглядывайте 👀",
+  "держим на карандаше ✍️",
+  "пауэрбанк на зарядку 🔋",
+];
+
+function isRocketish(types: ReadonlySet<ThreatType>): boolean {
+  return types.has("missile") || types.has("ballistic") || types.has("cruise");
+}
+function headline(types: ReadonlySet<ThreatType>, shaheds: number, seed: number): string {
+  if (isRocketish(types)) return pick(HEAD_ROCKET, seed);
+  if (types.has("kab")) return pick(HEAD_KAB, seed);
+  if (types.has("shahed") || types.has("reactive")) {
+    return pick(shaheds >= 8 ? HEAD_SWARM : HEAD_FEW, seed);
   }
-  if (types.has("kab")) return "💥 <b>КАБы в воздухе</b>";
-  if (types.has("shahed") || types.has("reactive")) return "🛸 <b>шахеды в небе</b>";
-  return "🛰 <b>движение в воздухе</b>";
+  return pick(HEAD_CALM, seed);
+}
+function tail(types: ReadonlySet<ThreatType>, seed: number): string {
+  const serious = isRocketish(types) || types.has("kab");
+  return pick(serious ? TAIL_SERIOUS : TAIL_LIGHT, seed);
+}
+
+/** Структурований зріз обстановки — область → тип → кількість ОБ'ЄКТІВ. */
+export interface AirSnapshot {
+  oblasts: Record<string, Partial<Record<ThreatType, number>>>;
+  targets: number;
+}
+
+function snapshotOf(groups: Iterable<Group>): AirSnapshot {
+  const oblasts: Record<string, Partial<Record<ThreatType, number>>> = {};
+  let targets = 0;
+  for (const g of groups) {
+    const m: Partial<Record<ThreatType, number>> = {};
+    for (const [type, n] of g.byType) {
+      m[type] = n;
+      targets += n;
+    }
+    oblasts[g.oblast] = m;
+  }
+  return { oblasts, targets };
+}
+
+/**
+ * «Що змінилось із минулого разу» — щоб пост читався як живе оновлення, а не
+ * повторний дамп тієї самої картини. Повертає ще й `material`: чи зміна варта
+ * окремого поста (нова/зникла область, ескалація типу, помітна зміна кількості).
+ * Без попереднього зрізу все — матеріальне (перша зведення).
+ */
+function describeDelta(
+  prev: AirSnapshot | undefined,
+  cur: AirSnapshot,
+): { line: string | null; material: boolean } {
+  if (!prev) return { line: null, material: true };
+
+  const prevOblasts = new Set(Object.keys(prev.oblasts));
+  const curOblasts = new Set(Object.keys(cur.oblasts));
+  const appeared = [...curOblasts].filter((o) => !prevOblasts.has(o));
+  const cleared = [...prevOblasts].filter((o) => !curOblasts.has(o));
+
+  const dangerBefore = new Set<ThreatType>();
+  for (const m of Object.values(prev.oblasts)) {
+    for (const t of Object.keys(m) as ThreatType[]) dangerBefore.add(t);
+  }
+  const escalated: ThreatType[] = [];
+  for (const m of Object.values(cur.oblasts)) {
+    for (const t of Object.keys(m) as ThreatType[]) {
+      const dangerous = t === "missile" || t === "cruise" || t === "ballistic" || t === "kab";
+      if (dangerous && !dangerBefore.has(t) && !escalated.includes(t)) escalated.push(t);
+    }
+  }
+
+  const totalDelta = cur.targets - prev.targets;
+  const material =
+    appeared.length > 0 || cleared.length > 0 || escalated.length > 0 || Math.abs(totalDelta) >= 2;
+
+  const bits: string[] = [];
+  if (escalated.length)
+    bits.push(`⚠️ добавились ${escalated.map((t) => typePlural(t, 2)).join(", ")}`);
+  if (appeared.length) bits.push(`🆕 ${appeared.join(", ")}`);
+  if (cleared.length) bits.push(`✅ чисто: ${cleared.join(", ")}`);
+  if (!bits.length && totalDelta !== 0) {
+    bits.push(
+      totalDelta > 0
+        ? `📈 целей прибавилось (${prev.targets}→${cur.targets})`
+        : `📉 целей поменьше (${prev.targets}→${cur.targets})`,
+    );
+  }
+  return { line: bits.length ? bits.join(" · ") : null, material };
 }
 
 export interface ChannelPost {
   text: string;
-  /** Стабільний відбиток картини для дедупу. */
+  /** Відбиток картини для дедупу: області+типи+кількість (без курсу). */
   signature: string;
-  /** Скільки цілей увійшло — для рішення «постити чи ні». */
+  /** Скільки цілей (ОБ'ЄКТІВ) у небі — не згадок. */
   targets: number;
+  /** Зріз обстановки — щоб наступний пост показав зміну. */
+  snapshot: AirSnapshot;
+  /** Чи змінилось суттєво від previous — сигнал постити чи промовчати. */
+  material: boolean;
 }
 
 interface Group {
@@ -169,8 +284,12 @@ interface Group {
  * Складає пост каналу з поточних цілей. `null` — постити нічого (небо чисте):
  * канал у стилі «Ванька» не пише «целей нет» щохвилини.
  */
-export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): ChannelPost | null {
+export function renderChannelPost(
+  threats: readonly Threat[],
+  opts: { previous?: AirSnapshot | undefined; maxOblasts?: number } = {},
+): ChannelPost | null {
   if (!threats.length) return null;
+  const maxOblasts = opts.maxOblasts ?? 12;
 
   const groups = new Map<string, Group>();
   for (const t of threats) {
@@ -197,9 +316,13 @@ export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): 
     (a, b) => total(b.byType) - total(a.byType) || a.oblast.localeCompare(b.oblast),
   );
 
+  const snapshot = snapshotOf(ordered);
+  const { line: deltaLine, material } = describeDelta(opts.previous, snapshot);
+
   const allTypes = new Set<ThreatType>();
   const sigParts: string[] = [];
   const bodyLines: string[] = [];
+  let shaheds = 0;
   // Підпис (дедуп) читає ВСІ області, а тіло — лише перші maxOblasts: у масований
   // наліт десятки областей зробили б пост завеликим (ліміт Telegram 4096) і
   // нечитабельним. Решта згортається в один рядок «…и ещё N областей».
@@ -207,6 +330,7 @@ export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): 
     const entries = [...g.byType.entries()].sort((a, b) => b[1] - a[1]);
     for (const [type, n] of entries) {
       allTypes.add(type);
+      if (type === "shahed" || type === "reactive") shaheds += n;
       sigParts.push(`${g.oblast}:${type}:${n}`);
     }
     if (idx >= maxOblasts) return;
@@ -227,19 +351,18 @@ export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): 
   }
 
   const targets = threats.length;
+  const signature = sigParts.sort().join("|");
+  const seed = seedFrom(signature);
   const lines = [
-    header(allTypes),
+    headline(allTypes, shaheds, seed),
+    ...(deltaLine ? ["", deltaLine] : []),
     "",
     ...bodyLines,
     "",
-    `<i>всего в небе: ${targets} · по данным OSINT · берегите себя</i>`,
+    `<i>всего в небе: ${targets} · по данным OSINT · ${tail(allTypes, seed)}</i>`,
   ];
 
-  return {
-    text: lines.join("\n"),
-    signature: sigParts.sort().join("|"),
-    targets,
-  };
+  return { text: lines.join("\n"), signature, targets, snapshot, material };
 }
 
 function total(m: Map<ThreatType, number>): number {
