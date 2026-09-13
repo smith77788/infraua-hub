@@ -399,16 +399,6 @@ function Index() {
               <Button asChild size="lg" className="font-mono text-xs uppercase tracking-[0.14em]">
                 <Link to="/">Відкрити консоль</Link>
               </Button>
-              <Button
-                asChild
-                size="lg"
-                variant="outline"
-                className="font-mono text-xs uppercase tracking-[0.14em]"
-              >
-                <a href="https://github.com/smith77788/Palanter" target="_blank" rel="noreferrer">
-                  Код проєкту
-                </a>
-              </Button>
             </div>
           </div>
         </section>
