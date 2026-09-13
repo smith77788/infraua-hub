@@ -29,6 +29,7 @@ import {
   senderId,
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
+import { verifyInitData } from "./lib/telegram-initdata";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -528,6 +529,69 @@ async function telegramWebhook(request: Request): Promise<Response> {
  * його знає той, хто налаштовував бота. Ціль реєстрації завжди ЦЕЙ хост, узятий
  * із запиту, — маршрут не можна намовити перенаправити бота кудись інде.
  */
+/**
+ * Реєструє вебхук на цей хост і повертає стан від Telegram. Спільне тіло для
+ * обох шляхів: секретного /setup і підписаного /repair із Mini App.
+ */
+async function registerWebhook(token: string, secret: string | undefined, request: Request) {
+  const hookUrl = `${consoleUrl(request)}/api/telegram/webhook`;
+  const set = await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: hookUrl,
+      ...(secret ? { secret_token: secret } : {}),
+      allowed_updates: ["message", "callback_query"],
+      drop_pending_updates: true,
+    }),
+  });
+  const setBody = (await set.json().catch(() => null)) as { description?: string } | null;
+  const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`)
+    .then((r) => r.json())
+    .catch(() => null);
+  const result = (info as { result?: Record<string, unknown> } | null)?.result ?? {};
+  return {
+    ok: set.ok,
+    registeredTo: hookUrl,
+    setWebhook: setBody?.description ?? (set.ok ? "ok" : `HTTP ${set.status}`),
+    telegram: {
+      url: result["url"],
+      pendingUpdates: result["pending_update_count"],
+      lastError: result["last_error_message"] ?? null,
+      lastErrorAt: result["last_error_date"] ?? null,
+    },
+  };
+}
+
+/**
+ * Полагодити бота з Mini App — без жодного секрету, за підписом Telegram.
+ *
+ * Власник відкриває Mini App і тисне кнопку; браузер шле initData, який Telegram
+ * підписав ботовим токеном. Сервер звіряє підпис тим самим токеном (він у нього
+ * є) і, якщо задано власника, ще й що це справді він. Далі — та сама реєстрація
+ * вебхука, що й у /setup. Так людина, яка загубила секрет вебхука, все одно може
+ * оживити бота одним дотиком, а чужий — не може, бо не має підпису.
+ */
+async function telegramRepair(request: Request): Promise<Response> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
+  const owner = process.env["TELEGRAM_OWNER_ID"];
+  if (!token) return json({ ok: false, reason: "TELEGRAM_BOT_TOKEN не заданий" }, 503);
+
+  const body = (await request.json().catch(() => null)) as { initData?: string } | null;
+  const verified = await verifyInitData(body?.initData ?? "", token);
+  if (!verified.ok)
+    return json({ ok: false, reason: `initData не підтверджено: ${verified.reason}` }, 401);
+
+  // Якщо власника задано — тільки він. Якщо ні — досить справжнього підпису
+  // цього бота: полагодити може лише той, хто відкрив саме цей Mini App.
+  if (owner && owner.trim() && String(verified.user?.id ?? "") !== owner.trim()) {
+    return json({ ok: false, reason: "лише власник розгортання може це робити" }, 403);
+  }
+
+  return json(await registerWebhook(token, secret, request));
+}
+
 async function telegramSetup(request: Request): Promise<Response> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
@@ -540,36 +604,7 @@ async function telegramSetup(request: Request): Promise<Response> {
     return json({ ok: false, reason: "TELEGRAM_BOT_TOKEN не заданий у змінних оточення" }, 503);
   }
 
-  const hookUrl = `${consoleUrl(request)}/api/telegram/webhook`;
-  const set = await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      url: hookUrl,
-      secret_token: secret,
-      // Натискання кнопок приходять окремим типом — без цього бот їх не бачить.
-      allowed_updates: ["message", "callback_query"],
-      // Черга старих оновлень за добу мовчання нікому не потрібна.
-      drop_pending_updates: true,
-    }),
-  });
-  const setBody = (await set.json().catch(() => null)) as { description?: string } | null;
-
-  const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json()).catch(() => null);
-  const result = (info as { result?: Record<string, unknown> } | null)?.result ?? {};
-
-  return json({
-    ok: set.ok,
-    registeredTo: hookUrl,
-    setWebhook: setBody?.description ?? (set.ok ? "ok" : `HTTP ${set.status}`),
-    telegram: {
-      // Саме ці два поля відповідають на «чому мовчав».
-      url: result["url"],
-      pendingUpdates: result["pending_update_count"],
-      lastError: result["last_error_message"] ?? null,
-      lastErrorAt: result["last_error_date"] ?? null,
-    },
-  });
+  return json(await registerWebhook(token, secret, request));
 }
 
 function json(body: unknown, status = 200): Response {
@@ -584,6 +619,15 @@ export default {
     // Перехоплюється до маршрутизатора: службова відповідь не має залежати
     // від того, чи зібрався застосунок.
     const pathname = new URL(request.url).pathname;
+
+    if (pathname === "/api/telegram/repair" && request.method === "POST") {
+      try {
+        return await telegramRepair(request);
+      } catch (error) {
+        console.error(error);
+        return json({ ok: false, reason: "internal error" }, 500);
+      }
+    }
 
     if (pathname === "/api/telegram/setup") {
       try {
