@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { ageOf } from "./freshness";
-import { statusOf, worstState, type SourceInput } from "./sources";
+import { statusOf, trustState, worstState, type SourceInput } from "./sources";
 
 const NOW = new Date("2026-09-09T12:00:00.000Z").getTime();
 const fresh = ageOf(new Date(NOW - 60_000).toISOString(), 60, 1440, NOW);
@@ -74,5 +74,26 @@ describe("worstState", () => {
 
   it("порожній список не ламається", () => {
     expect(worstState([])).toBe("live");
+  });
+});
+
+describe("trustState (індикатор довіри в шапці)", () => {
+  it("порожній benign-фід НЕ тривожить шапку", () => {
+    // «Немає інтернет-збоїв» чи «немає подій» — норма, а не поломка.
+    const s = trustState([statusOf(input()), statusOf(input({ count: 0 }))]);
+    expect(s).toBe("live");
+  });
+
+  it("завантаження ще не тривога", () => {
+    expect(trustState([statusOf(input({ coverage: { loaded: 1, total: 5 } }))])).toBe("live");
+  });
+
+  it("справжня недоступність тривожить", () => {
+    expect(trustState([statusOf(input()), statusOf(input({ down: true }))])).toBe("down");
+  });
+
+  it("застаріле джерело тривожить", () => {
+    const stale = ageOf(new Date(NOW - 48 * 60 * 60 * 1000).toISOString(), 60, 1440, NOW);
+    expect(trustState([statusOf(input({ age: stale }))])).toBe("stale");
   });
 });

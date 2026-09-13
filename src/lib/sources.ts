@@ -87,6 +87,26 @@ export function worstState(statuses: SourceStatus[]): SourceState {
   return worst;
 }
 
+/**
+ * Стан для ЗАГАЛЬНОГО індикатора «чи можна вірити екрану».
+ *
+ * Тривожать лише РЕАЛЬНІ проблеми джерела: не відповідає (`down`), резервний
+ * перелік (`degraded`), застаріло (`stale`). Порожній фід — це не поломка:
+ * «немає інтернет-збоїв» чи «немає подій» — нормальна, ба навіть бажана тиша,
+ * і фарбувати через неї всю консоль у тривогу означало б брехати оператору.
+ * `statusOf` уже відрізняє `empty` (зараз 0 записів) від `down` (мовчить), тож
+ * справжня недоступність тут не губиться. `loading` теж не тривога — фід ще
+ * вантажиться.
+ */
+export function trustState(statuses: SourceStatus[]): SourceState {
+  let worst: SourceState = "live";
+  for (const s of statuses) {
+    const effective: SourceState = s.state === "empty" || s.state === "loading" ? "live" : s.state;
+    if (SEVERITY[effective] > SEVERITY[worst]) worst = effective;
+  }
+  return worst;
+}
+
 export const SOURCE_STATE_LABEL: Record<SourceState, string> = {
   live: "живе",
   loading: "вантажиться",
