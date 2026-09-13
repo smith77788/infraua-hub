@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildObservedGraph, mergeGraphs, type PowerLine } from "@/lib/power-grid";
 import { backoffMs, sourceUnavailable } from "@/lib/backoff";
 import { applyFocus, focusLabel, type Focus } from "@/lib/focus";
@@ -150,6 +150,7 @@ const AIR_SEV_TONE: Record<ThreatSeverity, string> = {
 };
 
 function Console() {
+  const queryClient = useQueryClient();
   const facilitiesFn = useServerFn(getFacilities);
   const eventsFn = useServerFn(getEvents);
   const powerLinesFn = useServerFn(getPowerLines);
@@ -802,11 +803,9 @@ function Console() {
             aria-label="Оновити дані"
             className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
             onClick={() => {
-              void facilitiesQuery.refetch();
-              void eventsQuery.refetch();
-              void alertsQuery.refetch();
-              void threatsQuery.refetch();
-              void zonesQuery.refetch();
+              // Оновлюємо ВСЕ активне, а не 5 обраних запитів: раніше кнопка
+              // мовчки лишала пожежі, фронт, погоду тощо застарілими.
+              void queryClient.invalidateQueries();
             }}
           >
             <RefreshCw className={eventsQuery.isFetching ? "animate-spin" : ""} />
@@ -1210,18 +1209,18 @@ function Console() {
                 </div>
               ) : null}
 
-              {infraDisabled ? (
-                <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto w-fit rounded border border-border bg-background/95 px-3 py-2 text-center font-mono text-[10px] text-muted-foreground">
-                  {facilitiesQuery.data?.notice ?? INFRA_DISABLED_NOTICE}
-                </div>
-              ) : facilitiesQuery.isFetching && allFacilities.length === 0 ? (
-                <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto flex w-fit items-center gap-2 rounded border border-border bg-background/95 px-3 py-2 font-mono text-[10px] text-muted-foreground">
-                  <Loader2 className="size-3 animate-spin" /> Вантажимо дані з OpenStreetMap…
-                </div>
-              ) : facilitiesQuery.data?.source === "baseline" ? (
-                <div className="absolute inset-x-0 bottom-14 z-[500] mx-auto w-fit rounded border border-amber-500/50 bg-background/95 px-3 py-2 font-mono text-[10px] text-amber-400">
-                  Live-джерело OpenStreetMap недоступне — показано опорний перелік ключових
-                  обʼєктів. Натисніть «Оновити» для повторної спроби.
+              {/*
+                Банер стану джерела — вгорі, не внизу: знизу карти вже стоять
+                легенда (ліворуч) і атрибуція Leaflet (праворуч), і три банери
+                там налазили один на одного. Повідомлення про вимкнені шари тут
+                прибрано як дубль: те саме вже пояснює бічна панель.
+              */}
+              {!infraDisabled && !loading && facilitiesQuery.data?.source === "baseline" ? (
+                <div className="pointer-events-none absolute inset-x-0 top-14 z-[500] flex justify-center px-3">
+                  <span className="max-w-full rounded border border-amber-500/50 bg-background/95 px-3 py-2 text-center font-mono text-[10px] leading-snug text-amber-400">
+                    Live-джерело OpenStreetMap недоступне — показано опорний перелік. Натисніть
+                    «Оновити».
+                  </span>
                 </div>
               ) : null}
 
