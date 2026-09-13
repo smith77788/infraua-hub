@@ -69,9 +69,21 @@ describe("renderChannelPost", () => {
   });
 
   it("значок типу і загальний лік у пості", () => {
-    const post = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed", count: 2 })])!;
+    const post = renderChannelPost([
+      threat({ lat: 51, lon: 34.5, type: "shahed" }),
+      threat({ lat: 51.1, lon: 34.6, type: "shahed" }),
+    ])!;
     expect(post.text).toContain("🛸");
     expect(post.text).toContain("всего в небе: 2");
+  });
+
+  it("count (згадки в OSINT) НЕ роздуває кількість цілей", () => {
+    // Одна ціль із 17 згадок — це ОДИН об'єкт, а не «17 мопедов». Саме так
+    // канал розходився з картою й писав фейкові числа.
+    const post = renderChannelPost([threat({ lat: 46.6, lon: 32.6, type: "shahed", count: 17 })])!;
+    expect(post.text).toContain("1 мопед");
+    expect(post.text).not.toContain("17");
+    expect(post.targets).toBe(1);
   });
 
   it("масований наліт: тіло обмежене, підпис бачить усе", () => {

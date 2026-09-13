@@ -181,7 +181,11 @@ export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): 
       g = { oblast, byType: new Map(), loud: new Set(), courses: new Map() };
       groups.set(oblast, g);
     }
-    g.byType.set(type, (g.byType.get(type) ?? 0) + Math.max(1, t.count));
+    // Рахуємо ОБ'ЄКТИ (1 ціль = 1), а не поле count. count — це кількість
+    // згадок у OSINT-каналах (впевненість джерела), а НЕ кількість дронів;
+    // додавати його означало б писати «17 мопедів» там, де ціль одна. Карта
+    // теж рахує об'єкти — так канал і карта показують одне число.
+    g.byType.set(type, (g.byType.get(type) ?? 0) + 1);
     const course = coursePhrase(t.heading);
     if (course && !g.courses.has(type)) g.courses.set(type, course);
     const loud = loudCity(t);
@@ -222,7 +226,7 @@ export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): 
     bodyLines.push(`…и ещё ${hidden} ${plural(hidden, "область", "области", "областей")}`);
   }
 
-  const targets = threats.reduce((n, t) => n + Math.max(1, t.count), 0);
+  const targets = threats.length;
   const lines = [
     header(allTypes),
     "",
