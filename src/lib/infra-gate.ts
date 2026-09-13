@@ -45,57 +45,54 @@ export function infraLayersPermitted(): boolean {
 }
 
 /**
- * Скільки триматися за відповідь платформи, мс.
+ * Чи цей запит зроблено ВЛАСНИКОМ розгортання через Telegram Mini App.
  *
- * Вимикач крутять руками, не автоматом, тож півхвилини затримки прийнятні, а
- * запит до Railway на кожен показ карти — ні.
+ * Telegram підписує `initData` ботовим токеном. Сервер із тим самим токеном
+ * звіряє підпис і дістає id користувача; шари віддаються, лише якщо цей id —
+ * `TELEGRAM_OWNER_ID`. Немає токена, власника або справжнього підпису — не
+ * власник, і шарів не буде.
+ *
+ * Підпис перевіряється на кожному запиті й не кешується: HMAC дешевий, а кеш
+ * тут означав би віддати чиєсь право сусідньому запитові. `verifyInitData` уже
+ * відкидає прострочені підписи, тож перехоплений колись рядок не працює вічно.
  */
-const CACHE_MS = 30_000;
+async function requestFromOwner(initData: string | undefined): Promise<boolean> {
+  if (!initData) return false;
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const owner = process.env["TELEGRAM_OWNER_ID"];
+  if (!token || !owner) return false;
 
-let cached: { value: boolean; at: number } | null = null;
+  const [{ verifyInitData }, { isOwner }] = await Promise.all([
+    import("./telegram-initdata"),
+    import("./telegram"),
+  ]);
+  const res = await verifyInitData(initData, token);
+  return res.ok && res.user !== undefined && isOwner(res.user.id, owner);
+}
 
 /**
- * Чи віддавати обʼєкти інфраструктури просто зараз.
+ * Чи віддавати обʼєкти інфраструктури цьому запиту.
  *
- * Дозвіл читається з оточення, положення ручки — з платформи, бо консоль живе
- * на Workers і власного диска не має: змінну оточення бот змінити не може, а
- * стан має переживати рестарт і бути спільним для обох половин системи.
+ * Читається на кожному виклику. Публічного «увімкнено для всіх» більше немає:
+ * у продакшні шари бачить лише власник, підтверджений підписом Telegram Mini
+ * App, — для решти їх ніби не існує. Це строгіше за колишній глобальний
+ * вимикач, який, увімкнувшись, відкривав обʼєкти будь-кому, хто відкрив карту.
  *
- * **Недоступна платформа означає «вимкнено».** Це свідомий обмін: збій звʼязку
- * ховає шари, замість того щоб лишити їх увімкненими тоді, коли ніхто не може
- * їх вимкнути. Вимикач, який заклинює в положенні «увімкнено», гірший за його
- * відсутність.
- *
- * Якщо платформа взагалі не налаштована, лишається сам дозвіл: розгортання без
- * платформи — штатний стан, і воно керується змінною оточення, як і раніше.
+ * Окремого сервісу платформи для цього більше не треба: право доводить сам
+ * підпис Telegram, а не стан у чужому сервісі. `INFRA_LAYERS=on` лишається
+ * шляхом для локальної розробки, де Telegram і підпису немає; у продакшні цю
+ * змінну не задають.
  */
-export async function infraLayersEnabled(): Promise<boolean> {
-  if (!infraLayersPermitted()) return false;
-
-  const { isPlatformConfigured, platformFetch } = await import("./platform-client");
-  if (!isPlatformConfigured()) return true;
-
-  const now = Date.now();
-  if (cached && now - cached.at < CACHE_MS) return cached.value;
-
-  try {
-    const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
-    const body = res.body as { switchedOn?: boolean } | null;
-    // `switchedOn`, а не `enabled`: платформа рахує «enabled» з урахуванням
-    // **свого** дозволу, а він тут ні до чого — консоль має власний.
-    const value = res.ok && body?.switchedOn === true;
-    cached = { value, at: now };
-    return value;
-  } catch {
-    cached = { value: false, at: now };
-    return false;
-  }
+export async function infraLayersEnabled(initData?: string): Promise<boolean> {
+  if (infraLayersPermitted()) return true;
+  return requestFromOwner(initData);
 }
 
-/** Тільки для тестів і для негайного застосування після оберту ручки. */
-export function forgetInfraLayersCache(): void {
-  cached = null;
-}
+/**
+ * Історичний no-op. Стан більше не кешується: право власника перевіряється на
+ * кожен запит окремо, тож скидати нічого. Лишено, щоб не ламати наявні виклики.
+ */
+export function forgetInfraLayersCache(): void {}
 
 /**
  * Причина, яку бачить консоль, коли шарів немає.

@@ -53,3 +53,24 @@ export function useTelegram(): { inTelegram: boolean; initData: string } {
 
   return { inTelegram, initData };
 }
+
+/**
+ * Лише підписаний `initData`, без побічних ефектів теми й розмірів.
+ *
+ * Потрібен там, де компонент шле запити, які сервер віддає тільки власникові
+ * (шари критичної інфраструктури): initData доводить серверу, що за запитом —
+ * власник. Порожній рядок до монтування й поза Telegram — сервер трактує його
+ * як «не власник». Окремий від `useTelegram`, щоб не запускати `ready`/`expand`
+ * та слухачів вдруге в іншому компоненті.
+ */
+export function useInitData(): string {
+  const [initData, setInitData] = useState("");
+
+  useEffect(() => {
+    const webApp = (window as unknown as { Telegram?: { WebApp?: TelegramWebApp } }).Telegram
+      ?.WebApp;
+    if (isTelegramMiniApp(webApp) && webApp?.initData) setInitData(webApp.initData);
+  }, []);
+
+  return initData;
+}

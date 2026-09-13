@@ -60,6 +60,7 @@ import {
 } from "@/lib/infra.functions";
 import { platformEntityId } from "@/lib/cases";
 import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
+import { useInitData } from "@/hooks/use-telegram";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import { projectThreats } from "@/lib/threat-eta";
@@ -153,9 +154,18 @@ function Console() {
   const eventsFn = useServerFn(getEvents);
   const powerLinesFn = useServerFn(getPowerLines);
 
+  /*
+   * Підпис Telegram Mini App: шари критичної інфраструктури сервер віддає лише
+   * власникові, і цей рядок доводить, що за запитом він. Поза Telegram — порожній,
+   * і сервер чесно нічого не віддає. Він приходить після монтування, тому стоїть
+   * у ключі запиту: щойно зʼявився — запит повторюється вже як власницький.
+   */
+  const initData = useInitData();
+  const viewer = initData ? "owner" : "public";
+
   const facilitiesQuery = useQuery({
-    queryKey: ["facilities"],
-    queryFn: () => facilitiesFn(),
+    queryKey: ["facilities", viewer],
+    queryFn: () => facilitiesFn({ data: { initData } }),
     staleTime: 30 * 60 * 1000,
     /*
      * Опорного набору тут більше немає, і це не втрата зручності.
@@ -187,8 +197,8 @@ function Console() {
    */
   const [powerEmpty, setPowerEmpty] = useState(0);
   const powerLinesQuery = useQuery({
-    queryKey: ["power-lines"],
-    queryFn: () => powerLinesFn({ data: { have: [...powerTilesRef.current.keys()] } }),
+    queryKey: ["power-lines", viewer],
+    queryFn: () => powerLinesFn({ data: { have: [...powerTilesRef.current.keys()], initData } }),
     staleTime: 60 * 1000,
     // Мережа передачі змінюється роками, поспішати нікуди.
     refetchInterval: (q) => {
@@ -229,8 +239,8 @@ function Console() {
 
   const [facEmpty, setFacEmpty] = useState(0);
   const facTilesQuery = useQuery({
-    queryKey: ["facility-tiles"],
-    queryFn: () => facilityTilesFn({ data: { have: [...facTilesRef.current.keys()] } }),
+    queryKey: ["facility-tiles", viewer],
+    queryFn: () => facilityTilesFn({ data: { have: [...facTilesRef.current.keys()], initData } }),
     staleTime: 60 * 1000,
     refetchInterval: (q) => {
       const data = q.state.data;
