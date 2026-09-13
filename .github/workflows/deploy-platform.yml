@@ -1,0 +1,73 @@
+# Автодеплой сервісу platform-api з main.
+#
+# Навіщо це, а не налаштування в дашборді Railway: консоль на Railway
+# автодеплоїться, а platform-api — ні (у нього не було GitHub-тригера, і додати
+# його project-токеном не вдавалося). Через це новий код платформи діставався
+# продакшну лише руками, і саме тому /admin у боті впирався в стару платформу.
+#
+# Тут те саме робить CI: на push у main, що зачепив платформу, ганяє її
+# перевірки й викликає `railway up`, який збирає з Dockerfile.platform і
+# розгортає. Один секрет — RAILWAY_TOKEN (проєктний токен Railway); ім'я сервісу
+# — змінна RAILWAY_PLATFORM_SERVICE (усталено "platform-api").
+#
+# Якщо секрет не заданий, job не падає, а чесно каже, що деплой пропущено, — щоб
+# CI не червонів у того, хто цей токен не додав.
+
+name: Deploy platform-api
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "platform/**"
+      - "Dockerfile.platform"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/deploy-platform.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-platform
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Не деплоїмо зламане: ті самі перевірки платформи, що й у CI. Дешевше
+      # впасти тут, ніж викотити червону платформу, від якої залежить бот.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Platform typecheck
+        run: bun run platform:typecheck
+      - name: Platform tests
+        run: bun run platform:test
+
+      - name: Guard — is RAILWAY_TOKEN set?
+        id: guard
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN не заданий у секретах репозиторію — деплой пропущено."
+            echo "Додайте секрет RAILWAY_TOKEN (Settings → Secrets → Actions), щоб увімкнути автодеплой."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy to Railway
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE: ${{ vars.RAILWAY_PLATFORM_SERVICE || 'platform-api' }}
+        run: |
+          npm install -g @railway/cli
+          # `up` завантажує репо й будує з Dockerfile.platform (шлях налаштований
+          # на сервісі). --ci не тримає лог відкритим вічно, --service обирає
+          # саме платформу, а не консоль у тому ж проєкті.
+          railway up --ci --service "$SERVICE"
