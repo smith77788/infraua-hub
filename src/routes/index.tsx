@@ -328,6 +328,10 @@ function Console() {
   const [linkView, setLinkView] = useState<"list" | "graph">("list");
   const [showFrontline, setShowFrontline] = useState(true);
   const [showFires, setShowFires] = useState(false);
+  // Увесь шар обʼєктів інфраструктури можна сховати одним перемикачем: у
+  // насичений день сотні позначок перекривають повітряну обстановку, а комусь
+  // потрібна лише вона. Стосується тільки показу на карті, не аналітики.
+  const [showFacilities, setShowFacilities] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [outageId, setOutageId] = useState<string | null>(null);
   const [view, setView] = useState<"map" | "analytics">("map");
@@ -1180,7 +1184,7 @@ function Console() {
               <ClientOnly fallback={<MapSkeleton />}>
                 <Suspense fallback={<MapSkeleton />}>
                   <InfraMap
-                    facilities={visible}
+                    facilities={showFacilities ? visible : []}
                     events={events}
                     edges={edges}
                     alerts={regions}
@@ -1237,6 +1241,12 @@ function Console() {
                       ? []
                       : [
                           {
+                            key: "facilities",
+                            label: "Обʼєкти інфраструктури",
+                            active: showFacilities,
+                            color: "#67e8f9",
+                          },
+                          {
                             key: "links",
                             label: "Звʼязки живлення",
                             active: showLinks,
@@ -1271,7 +1281,8 @@ function Console() {
                   ] satisfies LayerToggle[]
                 }
                 onToggle={(key) => {
-                  if (key === "links") setShowLinks((v) => !v);
+                  if (key === "facilities") setShowFacilities((v) => !v);
+                  else if (key === "links") setShowLinks((v) => !v);
                   else if (key === "frontline") setShowFrontline((v) => !v);
                   else if (key === "fires") setShowFires((v) => !v);
                   else if (key === "graph") setShowGraph((v) => !v);
