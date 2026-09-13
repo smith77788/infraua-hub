@@ -30,6 +30,7 @@ import {
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
+import { publicOrigin } from "./lib/request-origin";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -166,8 +167,12 @@ const TELEGRAM_API = "https://api.telegram.org";
 function consoleUrl(request: Request): string {
   // Адреса береться з самого запиту: сервіс живе під кількома доменами
   // (Railway, Cloudflare), і зашита константа вела б із бота не туди.
-  const url = new URL(request.url);
-  return `${url.protocol}//${url.host}`;
+  //
+  // За TLS-термінуючим проксі (Railway) внутрішній request.url приходить як
+  // http:// із внутрішнім хостом. Публічну адресу знають лише forwarded-
+  // заголовки, які ставить сам проксі. Без цього вебхук реєструвався б на
+  // http://, і Telegram його відхиляв би — саме це й тримало бота німим.
+  return publicOrigin(request);
 }
 
 async function telegramSend(
@@ -668,14 +673,14 @@ async function ensureWebhook(request: Request): Promise<void> {
   const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
   if (!token) return;
 
-  const reqUrl = new URL(request.url);
-  const host = process.env["TELEGRAM_WEBHOOK_HOST"]?.trim() || reqUrl.host;
-  // Тільки https: вебхук над plaintext Telegram усе одно не прийме, а хост із
-  // http-запиту — привід не довіряти йому як цілі реєстрації.
-  if (reqUrl.protocol !== "https:" && !process.env["TELEGRAM_WEBHOOK_HOST"]) return;
+  // Публічний origin: явний TELEGRAM_WEBHOOK_HOST, або те, що каже проксі через
+  // consoleUrl (forwarded-заголовки). Ціль завжди https.
+  const envHost = process.env["TELEGRAM_WEBHOOK_HOST"]?.trim();
+  const origin = envHost ? `https://${envHost}` : consoleUrl(request);
+  if (!origin.startsWith("https://")) return; // не реєструємо вебхук на http
 
   webhookEnsured = true; // ставимо одразу: навіть якщо впаде, не спамимо Telegram щозапиту
-  const target = `https://${host}/api/telegram/webhook`;
+  const target = `${origin}/api/telegram/webhook`;
   try {
     const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
     const current = (info as { result?: { url?: string } } | null)?.result?.url ?? "";
