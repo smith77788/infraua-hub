@@ -311,8 +311,8 @@ async function adminCommand(
 
   // Панель із кнопками: те саме, що й текстові команди, але без набирання.
   if (parsed.command === "admin") {
-    const state = await layersState();
-    if (!state) return { text: "Платформа не відповіла." };
+    const { state, status, error } = await layersState();
+    if (!state) return { text: platformError(status, error) };
     return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
   }
 
@@ -323,8 +323,8 @@ async function adminCommand(
     }
 
     if (wanted === null) {
-      const state = await layersState();
-      if (!state) return { text: "Платформа не відповіла." };
+      const { state, status, error } = await layersState();
+      if (!state) return { text: platformError(status, error) };
       return { text: renderAdminPanel(state), keyboard: adminKeyboard(state) };
     }
 
@@ -363,10 +363,33 @@ async function adminCommand(
 }
 
 /** Поточний стан вимикача з платформи. `null` — платформа не відповіла. */
-async function layersState(): Promise<LayersState | null> {
+async function layersState(): Promise<{
+  state: LayersState | null;
+  status: number;
+  error?: string;
+}> {
   const { platformFetch } = await import("./lib/platform-client");
   const res = await platformFetch("/api/platform/settings/infra-layers", { method: "GET" });
-  return res.ok ? (res.body as LayersState) : null;
+  return res.ok
+    ? { state: res.body as LayersState, status: res.status }
+    : { state: null, status: res.status, ...(res.error ? { error: res.error } : {}) };
+}
+
+/**
+ * Людське пояснення, чому платформа не відповіла, з кодом.
+ *
+ * «Платформа не відповіла» без коду — це те саме, що «бот мовчить»: змушує
+ * гадати. 404 означає, що сервіс платформи не оновлений (він не автодеплоїться);
+ * 401/403 — розбіжність ключа; 0 — недоступний хост.
+ */
+function platformError(status: number, error?: string): string {
+  if (status === 404) {
+    return "Платформа відповіла 404: сервіс platform-api не має цього маршруту — його треба передеплоїти вручну (він не оновлюється автоматично).";
+  }
+  if (status === 401 || status === 403)
+    return `Платформа відхилила ключ (${status}). Перевірте PLATFORM_API_KEY.`;
+  if (status === 0) return "Платформа недоступна: перевірте PLATFORM_API_URL.";
+  return `Платформа відповіла ${status}${error ? `: ${error}` : ""}.`;
 }
 
 /**
@@ -425,13 +448,13 @@ async function handleAdminPress(
     );
 
     if (confirming) {
-      const state = await layersState();
+      const after = await layersState();
       await telegramEditMessage(
         token,
         press.chatId,
         press.messageId,
         renderPurgeDone(body.retracted ?? []),
-        state ? adminKeyboard(state) : undefined,
+        after.state ? adminKeyboard(after.state) : undefined,
       );
       return;
     }
@@ -445,7 +468,7 @@ async function handleAdminPress(
       // Кнопки підтвердження тільки коли є що підтверджувати: «прибрати нічого»
       // з кнопкою «Так, прибрати» — це пропозиція зробити ніщо.
       nothing
-        ? await layersState().then((s) => (s ? adminKeyboard(s) : undefined))
+        ? await layersState().then((r) => (r.state ? adminKeyboard(r.state) : undefined))
         : purgeKeyboard(),
     );
     return;
@@ -475,11 +498,16 @@ async function handleAdminPress(
     return;
   }
 
-  const state = await layersState();
-  if (!state) {
-    await telegramAnswerCallback(token, press.callbackId, "Платформа не відповіла");
+  const refreshed = await layersState();
+  if (!refreshed.state) {
+    await telegramAnswerCallback(
+      token,
+      press.callbackId,
+      platformError(refreshed.status, refreshed.error),
+    );
     return;
   }
+  const state = refreshed.state;
   await telegramAnswerCallback(token, press.callbackId, callbackToast(action, state));
   await telegramEditMessage(
     token,
