@@ -169,7 +169,7 @@ interface Group {
  * Складає пост каналу з поточних цілей. `null` — постити нічого (небо чисте):
  * канал у стилі «Ванька» не пише «целей нет» щохвилини.
  */
-export function renderChannelPost(threats: readonly Threat[]): ChannelPost | null {
+export function renderChannelPost(threats: readonly Threat[], maxOblasts = 12): ChannelPost | null {
   if (!threats.length) return null;
 
   const groups = new Map<string, Group>();
@@ -196,22 +196,30 @@ export function renderChannelPost(threats: readonly Threat[]): ChannelPost | nul
   const allTypes = new Set<ThreatType>();
   const sigParts: string[] = [];
   const bodyLines: string[] = [];
-  for (const g of ordered) {
-    const parts: string[] = [];
-    for (const [type, n] of [...g.byType.entries()].sort((a, b) => b[1] - a[1])) {
+  // Підпис (дедуп) читає ВСІ області, а тіло — лише перші maxOblasts: у масований
+  // наліт десятки областей зробили б пост завеликим (ліміт Telegram 4096) і
+  // нечитабельним. Решта згортається в один рядок «…и ещё N областей».
+  ordered.forEach((g, idx) => {
+    const entries = [...g.byType.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [type, n] of entries) {
       allTypes.add(type);
-      const course = g.courses.get(type);
-      // Значок веде тип, далі — кількість словом у «ванёк»-регістрі й курс.
-      parts.push(
-        `${TYPE_EMOJI[type]} ${n} ${typePlural(type, n)}${course ? ` курсом ${course}` : ""}`,
-      );
       sigParts.push(`${g.oblast}:${type}:${n}`);
     }
+    if (idx >= maxOblasts) return;
+    const parts = entries.map(([type, n]) => {
+      const course = g.courses.get(type);
+      // Значок веде тип, далі — кількість словом у «ванёк»-регістрі й курс.
+      return `${TYPE_EMOJI[type]} ${n} ${typePlural(type, n)}${course ? ` курсом ${course}` : ""}`;
+    });
     let line = `📍 <b>${g.oblast}</b>: ${parts.join(", ")}`;
     // Без прийменника, щоб уникнути відмінка: назви в даних — у називному
     // («Харківщина», «Запоріжжя»), і «громко в Запоріжжя» різало б слух.
     if (g.loud.size) line += ` — может быть громко: ${[...g.loud].join(", ")}!`;
     bodyLines.push(line);
+  });
+  const hidden = ordered.length - Math.min(ordered.length, maxOblasts);
+  if (hidden > 0) {
+    bodyLines.push(`…и ещё ${hidden} ${plural(hidden, "область", "области", "областей")}`);
   }
 
   const targets = threats.reduce((n, t) => n + Math.max(1, t.count), 0);

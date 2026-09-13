@@ -74,6 +74,20 @@ describe("renderChannelPost", () => {
     expect(post.text).toContain("всего в небе: 2");
   });
 
+  it("масований наліт: тіло обмежене, підпис бачить усе", () => {
+    const post = renderChannelPost(
+      [
+        threat({ lat: 51, lon: 34.5, type: "shahed" }),
+        threat({ lat: 46.97, lon: 32.0, type: "shahed" }),
+      ],
+      1,
+    )!;
+    // Показано лише одну область у тілі, решта згорнута.
+    expect(post.text).toContain("…и ещё 1 область");
+    // Але дедуп-підпис усе одно містить обидві.
+    expect(post.signature.split("|").length).toBe(2);
+  });
+
   it("однакова картина дає однаковий підпис (дедуп)", () => {
     const a = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed" })])!;
     const b = renderChannelPost([threat({ lat: 51, lon: 34.5, type: "shahed" })])!;

@@ -214,17 +214,31 @@ async function telegramSend(
 const CHANNEL_MIN_INTERVAL_MS = 4 * 60 * 1000;
 let lastChannelPost = { signature: "", at: 0 };
 
-async function channelTick(request: Request): Promise<Response> {
+interface ChannelTickResult {
+  posted: boolean;
+  reason?: string;
+  targets?: number;
+  text?: string;
+  dryRun?: boolean;
+  /** HTTP-статус для відповіді ендпоінта; для інших викликачів неважливий. */
+  status?: number;
+}
+
+/**
+ * Ядро автоканалу — без HTTP і без секрету. Бере ті самі цілі, що на карті,
+ * складає пост і (якщо не dry-run) шле в TELEGRAM_CHANNEL_ID. Тут уся логіка;
+ * її ділять три викликачі: HTTP-тик (зовнішній крон), самопланувальник (таймер
+ * усередині сервера) і команда /channel у боті.
+ *
+ * `force` пропускає дедуп і мінімальний інтервал — для ручного /channel post.
+ */
+async function runChannelTick(
+  opts: { dryRun?: boolean; force?: boolean } = {},
+): Promise<ChannelTickResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   const channel = process.env["TELEGRAM_CHANNEL_ID"];
-  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
-
-  // Той самий секрет, що боронить вебхук: тик має право смикати лише той, хто
-  // налаштував бота (зовнішній планувальник із секретом в URL).
-  const provided = new URL(request.url).searchParams.get("secret");
-  if (!secretMatches(secret, provided)) return new Response("unauthorized", { status: 401 });
-  if (!token) return json({ posted: false, reason: "TELEGRAM_BOT_TOKEN не заданий" }, 503);
-  if (!channel) return json({ posted: false, reason: "TELEGRAM_CHANNEL_ID не заданий" }, 503);
+  if (!token) return { posted: false, reason: "TELEGRAM_BOT_TOKEN не заданий", status: 503 };
+  if (!channel) return { posted: false, reason: "TELEGRAM_CHANNEL_ID не заданий", status: 503 };
 
   const { fetchNeptunThreats } = await import("./lib/infra.functions");
   const { renderChannelPost } = await import("./lib/channel-post");
@@ -240,16 +254,17 @@ async function channelTick(request: Request): Promise<Response> {
   }
 
   const post = renderChannelPost(threats);
-  if (!post) return json({ posted: false, reason: "небо чисте" });
+  if (!post) return { posted: false, reason: "небо чисте" };
+  if (opts.dryRun) return { posted: false, dryRun: true, targets: post.targets, text: post.text };
 
   const now = Date.now();
-  const dryRun = new URL(request.url).searchParams.get("dry") === "1";
-  if (dryRun) return json({ posted: false, dryRun: true, targets: post.targets, text: post.text });
-  if (post.signature === lastChannelPost.signature) {
-    return json({ posted: false, reason: "без змін від останнього поста" });
-  }
-  if (now - lastChannelPost.at < CHANNEL_MIN_INTERVAL_MS) {
-    return json({ posted: false, reason: "мінімальний інтервал ще не минув" });
+  if (!opts.force) {
+    if (post.signature === lastChannelPost.signature) {
+      return { posted: false, reason: "без змін від останнього поста" };
+    }
+    if (now - lastChannelPost.at < CHANNEL_MIN_INTERVAL_MS) {
+      return { posted: false, reason: "мінімальний інтервал ще не минув" };
+    }
   }
 
   const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
@@ -263,11 +278,50 @@ async function channelTick(request: Request): Promise<Response> {
     }),
   });
   if (!res.ok) {
-    return json({ posted: false, reason: `Telegram відхилив: ${res.status}` }, 502);
+    return { posted: false, reason: `Telegram відхилив: ${res.status}`, status: 502 };
   }
   lastChannelPost = { signature: post.signature, at: now };
-  return json({ posted: true, targets: post.targets });
+  return { posted: true, targets: post.targets };
 }
+
+async function channelTick(request: Request): Promise<Response> {
+  const secret = process.env["TELEGRAM_WEBHOOK_SECRET"];
+  const url = new URL(request.url);
+  // Той самий секрет, що боронить вебхук: тик має право смикати лише той, хто
+  // налаштував бота (зовнішній планувальник із секретом в URL).
+  const provided = url.searchParams.get("secret");
+  if (!secretMatches(secret, provided)) return new Response("unauthorized", { status: 401 });
+
+  const result = await runChannelTick({ dryRun: url.searchParams.get("dry") === "1" });
+  const { status, ...body } = result;
+  return json(body, status ?? 200);
+}
+
+/**
+ * Самопланувальник каналу — щоб не залежати від зовнішнього крона.
+ *
+ * Консоль на Railway запускається живим Node-процесом (`node
+ * .output/server/index.mjs`), тож таймер усередині сервера працює, поки живий
+ * процес. Без TELEGRAM_CHANNEL_ID — no-op (штатний стан). Інстанс один
+ * (1 replica), тож дубль-постів немає; дедуп за підписом і мінімальний інтервал
+ * усередині runChannelTick страхують і тут. `unref` — щоб таймер не заважав
+ * коректному завершенню процесу; HTTP-сервер і так тримає цикл подій живим.
+ */
+const CHANNEL_TICK_EVERY_MS = 5 * 60 * 1000;
+let channelTimer: ReturnType<typeof setInterval> | null = null;
+function startChannelScheduler(): void {
+  if (channelTimer) return;
+  if (!process.env["TELEGRAM_CHANNEL_ID"] || !process.env["TELEGRAM_BOT_TOKEN"]) return;
+  const tick = () => {
+    runChannelTick().catch((e) => console.error("channel tick failed", e));
+  };
+  // Перший постинг незабаром після старту, далі — за інтервалом.
+  const warmup = setTimeout(tick, 20_000);
+  (warmup as unknown as { unref?: () => void }).unref?.();
+  channelTimer = setInterval(tick, CHANNEL_TICK_EVERY_MS);
+  (channelTimer as unknown as { unref?: () => void }).unref?.();
+}
+startChannelScheduler();
 
 /**
  * Відповідь на натискання кнопки.
@@ -373,10 +427,34 @@ async function adminCommand(
   parsed: BotCommand,
   ownerOk: boolean,
 ): Promise<{ text: string; keyboard?: unknown } | null> {
-  if (parsed.command !== "layers" && parsed.command !== "purge" && parsed.command !== "admin") {
+  if (
+    parsed.command !== "layers" &&
+    parsed.command !== "purge" &&
+    parsed.command !== "admin" &&
+    parsed.command !== "channel"
+  ) {
     return null;
   }
   if (!ownerOk) return { text: renderNotOwner() };
+
+  // Автоканал не залежить від платформи — керується прямо тут. `/channel`
+  // показує прев'ю поста (нічого не шле), `/channel post` — постить зараз.
+  // Так власник тестує й публікує з телефона, без браузера й секрету в URL.
+  if (parsed.command === "channel") {
+    const arg = parsed.args.trim().toLowerCase();
+    const force = arg === "post" || arg === "пост" || arg === "постити";
+    const r = await runChannelTick({ dryRun: !force, force });
+    if (r.dryRun) {
+      return {
+        text:
+          "🧪 <b>Прев'ю поста в канал</b> (не надіслано):\n\n" +
+          (r.text ?? "") +
+          "\n\n— щоб надіслати зараз: <code>/channel post</code>",
+      };
+    }
+    if (r.posted) return { text: `✅ Надіслано в канал. Цілей у пості: ${r.targets}.` };
+    return { text: `Не надіслано: ${r.reason}.` };
+  }
 
   const { isPlatformConfigured, platformFetch } = await import("./lib/platform-client");
   if (!isPlatformConfigured()) return { text: renderNoPlatform() };

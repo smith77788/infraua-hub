@@ -187,6 +187,7 @@ export function publicCommands(): TgBotCommand[] {
 export function adminCommands(): TgBotCommand[] {
   return [
     { command: "admin", description: "Панель власника з кнопками" },
+    { command: "channel", description: "Автоканал: прев'ю; /channel post — надіслати" },
     { command: "layers", description: "Шари інфраструктури: on / off" },
     { command: "purge", description: "Прибрати завантажені обʼєкти з графа" },
   ];
