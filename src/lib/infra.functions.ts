@@ -599,7 +599,7 @@ interface NeptunThreat {
   status?: string;
 }
 
-async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null> {
+export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null> {
   const res = await fetch(NEPTUN_ENDPOINT, {
     signal,
     headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
