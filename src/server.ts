@@ -232,6 +232,42 @@ interface ChannelTickResult {
 }
 
 /**
+ * Надсилає пост у канал: із картинкою обстановки (sendPhoto), а без неї —
+ * текстом (sendMessage). Підпис фото обмежений 1024 символами: якщо текст
+ * довший (масований наліт), у підпис іде коротка шапка, а не обрізаний HTML.
+ */
+async function sendChannelUpdate(
+  token: string,
+  channel: string,
+  text: string,
+  targets: number,
+  png: Buffer | null,
+): Promise<Response> {
+  if (png) {
+    const caption =
+      text.length <= 1024
+        ? text
+        : `${text.split("\n")[0]}\n<i>всего в небе: ${targets} · по данным OSINT</i>`;
+    const form = new FormData();
+    form.append("chat_id", channel);
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+    form.append("photo", new Blob([new Uint8Array(png)], { type: "image/png" }), "situation.png");
+    return fetch(`${TELEGRAM_API}/bot${token}/sendPhoto`, { method: "POST", body: form });
+  }
+  return fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: channel,
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    }),
+  });
+}
+
+/**
  * Ядро автоканалу — без HTTP і без секрету. Бере ті самі цілі, що на карті,
  * складає пост і (якщо не dry-run) шле в TELEGRAM_CHANNEL_ID. Тут уся логіка;
  * її ділять три викликачі: HTTP-тик (зовнішній крон), самопланувальник (таймер
@@ -282,16 +318,11 @@ async function runChannelTick(
     }
   }
 
-  const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      chat_id: channel,
-      text: post.text,
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-    }),
-  });
+  // Картинка обстановки — best-effort: якщо не вийшла, шлемо текст без неї.
+  const { renderSituationPng } = await import("./lib/situation-image");
+  const png = await renderSituationPng(threats);
+
+  const res = await sendChannelUpdate(token, channel, post.text, post.targets, png);
   if (!res.ok) {
     return { posted: false, reason: `Telegram відхилив: ${res.status}`, status: 502 };
   }
