@@ -311,3 +311,60 @@ export function personalAssessment(
     sky: skyState(threats, point, radiusKm),
   };
 }
+
+// ── 6. Індекс небезпеки: «спати чи в укриття» ───────────────────────────
+export type DangerLevel = "calm" | "watch" | "attention" | "shelter";
+
+export interface DangerIndex {
+  /** 0..100 — НЕ ймовірність влучання, а зважена оцінка обстановки для точки. */
+  percent: number;
+  level: DangerLevel;
+  verdict: string;
+  /** Межа чесності: це оцінка за покриттям OSINT, не гарантія й не радар. */
+  caveat: string;
+}
+
+const DANGER_CAVEAT =
+  "Це оцінка обстановки за даними OSINT, а не ймовірність влучання й не радар. " +
+  "Рішення про укриття лишається за вами; офіційний відбій дають Повітряні Сили.";
+
+/**
+ * Зводить оцінку точки в один індекс «спати чи в укриття».
+ *
+ * Навмисно НЕ називається «ймовірністю прилёта»: точних чисел про влучання в
+ * конкретний квадрат ми не маємо, і вигадати їх означало б збрехати (правило
+ * проекту: заміряне окремо від оціненого). Це зважена оцінка ситуації —
+ * головне важить час до найближчої ВХІДНОЇ цілі, далі кількість вхідних і
+ * близькість найближчої. Коли вхідних немає — небо навколо тихе, індекс малий,
+ * і так і сказано: «можна спати».
+ */
+export function dangerIndex(a: PersonalAssessment): DangerIndex {
+  let percent: number;
+
+  if (a.inboundCount === 0) {
+    // Ніщо не йде на точку. Лишається лише фон близькості найближчої цілі.
+    const near = a.sky.nearestKm;
+    percent = near == null ? 0 : near < 30 ? 22 : near < 60 ? 14 : near < 100 ? 8 : 3;
+  } else {
+    const m = a.minutesToNearest ?? 30;
+    const base = m <= 5 ? 95 : m <= 10 ? 85 : m <= 20 ? 65 : m <= 30 ? 45 : 32;
+    // Кілька вхідних гірше за одну, але з швидким насиченням.
+    percent = Math.min(100, base + Math.min(a.inboundCount - 1, 4) * 4);
+  }
+  percent = Math.max(0, Math.min(100, Math.round(percent)));
+
+  const level: DangerLevel =
+    percent >= 70 ? "shelter" : percent >= 40 ? "attention" : percent >= 15 ? "watch" : "calm";
+  const verdict =
+    level === "shelter"
+      ? "В укриття зараз"
+      : level === "attention"
+        ? "Будьте напоготові, стежте"
+        : level === "watch"
+          ? "Тримайте зв'язок під рукою"
+          : a.inboundCount === 0 && (a.sky.nearestKm == null || a.sky.nearestKm > 100)
+            ? "Спокійно, можна спати"
+            : "Спокійно, але поглядайте";
+
+  return { percent, level, verdict, caveat: DANGER_CAVEAT };
+}

@@ -3,7 +3,7 @@ import { Database } from "lucide-react";
 import {
   SOURCE_STATE_LABEL,
   SOURCE_STATE_TONE,
-  worstState,
+  trustState,
   type SourceStatus,
 } from "@/lib/sources";
 
@@ -15,7 +15,9 @@ import {
  * потрібна інформація вже була в системі.
  */
 export default function SourceHealth({ sources }: { sources: SourceStatus[] }) {
-  const worst = worstState(sources);
+  // Загальний індикатор — trustState: порожній benign-фід (немає збоїв/подій)
+  // не робить усю панель тривожною. Порядок кожного джерела нижче лишається.
+  const worst = trustState(sources);
 
   return (
     <section>
