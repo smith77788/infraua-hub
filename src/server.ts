@@ -12,9 +12,11 @@ import {
   type LayersState,
   miniAppKeyboard,
   type BotCommand,
+  ownerCommands,
   parseCallback,
   parseCommand,
   parseLayersArg,
+  publicCommands,
   renderHelp,
   renderNoPlatform,
   renderAdminPanel,
@@ -568,8 +570,47 @@ async function telegramWebhook(request: Request): Promise<Response> {
  * Реєструє вебхук на цей хост і повертає стан від Telegram. Спільне тіло для
  * обох шляхів: секретного /setup і підписаного /repair із Mini App.
  */
+/**
+ * Реєструє перелік команд бота в Telegram (`setMyCommands`).
+ *
+ * Без цього меню по «/» порожнє — саме тому «команда не викликається»: її не
+ * видно й не запропонує. Публічні команди ставимо в типовий scope (усім);
+ * якщо задано власника — додаємо йому в особистий чат scope `chat` повний
+ * перелік із /admin. Так /admin зʼявляється в меню власника й не світиться
+ * стороннім. Помилка тут не має валити реєстрацію вебхука — команди вторинні.
+ */
+async function setBotCommands(token: string, ownerId: string | undefined): Promise<string> {
+  try {
+    const pub = await fetch(`${TELEGRAM_API}/bot${token}/setMyCommands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ commands: publicCommands() }),
+    });
+    let ownerNote = "власник не заданий — /admin у меню не показуємо";
+    if (ownerId && ownerId.trim()) {
+      const chatId = Number(ownerId.trim());
+      const res = await fetch(`${TELEGRAM_API}/bot${token}/setMyCommands`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          commands: ownerCommands(),
+          scope: { type: "chat", chat_id: chatId },
+        }),
+      });
+      ownerNote = res.ok
+        ? "команди власника (з /admin) зареєстровано"
+        : `власник: HTTP ${res.status}`;
+    }
+    return pub.ok ? `публічні команди зареєстровано; ${ownerNote}` : `публічні: HTTP ${pub.status}`;
+  } catch (error) {
+    console.error("setBotCommands failed", error);
+    return "не вдалося зареєструвати команди";
+  }
+}
+
 async function registerWebhook(token: string, secret: string | undefined, request: Request) {
   const hookUrl = `${consoleUrl(request)}/api/telegram/webhook`;
+  const commands = await setBotCommands(token, process.env["TELEGRAM_OWNER_ID"]);
   const set = await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -588,6 +629,7 @@ async function registerWebhook(token: string, secret: string | undefined, reques
   return {
     ok: set.ok,
     registeredTo: hookUrl,
+    commands,
     setWebhook: setBody?.description ?? (set.ok ? "ok" : `HTTP ${set.status}`),
     telegram: {
       url: result["url"],
@@ -684,7 +726,12 @@ async function ensureWebhook(request: Request): Promise<void> {
   try {
     const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
     const current = (info as { result?: { url?: string } } | null)?.result?.url ?? "";
-    if (current === target) return; // уже там — нічого не робимо
+    // Команди реєструємо навіть коли вебхук уже на місці: перелік міг
+    // зʼявитися (ця функція) вже після того, як вебхук став правильним, тож
+    // прив'язувати їх до зміни адреси не можна — інакше /admin так і не
+    // зʼявиться в меню на вже налаштованому боті.
+    void setBotCommands(token, process.env["TELEGRAM_OWNER_ID"]);
+    if (current === target) return; // адреса вже там — лишається тільки команди вище
     await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "content-type": "application/json" },

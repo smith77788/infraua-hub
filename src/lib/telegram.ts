@@ -161,6 +161,43 @@ export function renderUnknown(command: string): string {
 }
 
 /**
+ * Перелік команд для меню Telegram (`setMyCommands`).
+ *
+ * Корінь «команда не викликається»: бот НІКОЛИ не реєстрував свій перелік у
+ * Telegram. Без цього кнопка меню й підказка по «/» порожні — команд не видно,
+ * тож їх ніби й немає. setMyCommands це виправляє.
+ *
+ * Публічні команди бачать усі; адміністративні (зокрема /admin) додаються ЛИШЕ
+ * у чат власника через scope `chat` — тому в меню власника вони є, а у чужому
+ * меню їх немає. Так /admin і зʼявляється, і не світиться стороннім.
+ */
+export interface TgBotCommand {
+  command: string;
+  description: string;
+}
+
+export function publicCommands(): TgBotCommand[] {
+  return [
+    { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
+    { command: "start", description: "Про систему та посилання на консоль" },
+    { command: "help", description: "Що вміє бот" },
+  ];
+}
+
+export function adminCommands(): TgBotCommand[] {
+  return [
+    { command: "admin", description: "Панель власника з кнопками" },
+    { command: "layers", description: "Шари інфраструктури: on / off" },
+    { command: "purge", description: "Прибрати завантажені обʼєкти з графа" },
+  ];
+}
+
+/** Повний перелік для власника: спершу адмінські, далі публічні. */
+export function ownerCommands(): TgBotCommand[] {
+  return [...adminCommands(), ...publicCommands()];
+}
+
+/**
  * Кнопка, що відкриває консоль як Mini App.
  *
  * Telegram приймає `web_app` у клавіатурі **лише в приватному чаті** — у групі
