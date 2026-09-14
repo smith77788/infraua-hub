@@ -62,6 +62,7 @@ import {
 } from "@/lib/infra.functions";
 import { platformEntityId } from "@/lib/cases";
 import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
+import { useAirActivityHistory } from "@/hooks/useAirActivityHistory";
 import { useInitData } from "@/hooks/use-telegram";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
@@ -502,6 +503,11 @@ function Console() {
     [threats, allFacilities],
   );
 
+  // Сплеск активності: поточна кількість цілей проти власної норми (історія на
+  // пристрої). Відповідає на «це вже налiт чи звичайний фон» — те, чого одне
+  // число «N цілей» не каже.
+  const airSurge = useAirActivityHistory(threats.length, !threatsQuery.isLoading);
+
   const atRiskList = useMemo(
     () =>
       [...riskMap.entries()]
@@ -880,6 +886,28 @@ function Console() {
         onEventKind={setEventKind}
         showInfra={!infraDisabled}
       />
+
+      {/*
+        Сплеск активності: поточна кількість цілей різко вища за власну норму
+        (історія на пристрої). Показуємо лише коли справді ненормально — банер,
+        що висить завжди, перестають помічати.
+      */}
+      {airSurge.level !== "normal" ? (
+        <div
+          className={`z-10 flex shrink-0 items-center gap-2 border-b px-4 py-1.5 ${
+            airSurge.level === "surge"
+              ? "border-red-500/50 bg-red-500/10 text-red-300"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+          }`}
+          title="Порівняння поточної кількості повітряних цілей із власною нормою за попередні години"
+        >
+          <AlertTriangle className="size-3 shrink-0" />
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em]">
+            {airSurge.level === "surge" ? "Сплеск активності" : "Активність підвищена"}:{" "}
+            {airSurge.current} цілей проти норми ~{airSurge.baseline} (×{airSurge.ratio})
+          </span>
+        </div>
+      ) : null}
 
       {/*
         Активний фокус завжди видимий і знімається одним рухом. Мовчазний
