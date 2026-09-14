@@ -240,7 +240,10 @@ function describeDelta(
         : lex.delta.shrank(prev.targets, cur.targets),
     );
   }
-  return { line: bits.length ? bits.join(" · ") : null, material };
+  // Кожна зміна — окремим рядком. Склеєні через «·», вони читались навпаки:
+  // зелена позначка «цілей не бачимо» опинялась поруч із назвами областей, де
+  // цілі щойно ЗʼЯВИЛИСЬ, і люди розуміли рядок як «там чисто».
+  return { line: bits.length ? bits.join("\n") : null, material };
 }
 
 export interface ChannelPost {

@@ -83,6 +83,14 @@ import { kyivDate, kyivHour } from "./lib/kyiv";
 import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
 import {
+  channelUrl,
+  GATE_ACTION,
+  gateKeyboard,
+  isSubscribed,
+  renderGate,
+  renderStillNotSubscribed,
+} from "./lib/gate";
+import {
   canReport,
   corroborate,
   pruneReports,
@@ -1087,6 +1095,84 @@ function startChannelScheduler(): void {
 }
 startChannelScheduler();
 
+/* ─── Гейт підписки на канал ────────────────────────────────────────────── */
+
+/**
+ * Перевірка членства з коротким кешем.
+ *
+ * `getChatMember` — це запит на КОЖЕН дотик кнопки, а їх у тривогу буває
+ * багато. Хвилинний кеш прибирає лавину, не роблячи гейт дірявим: людина, яка
+ * щойно підписалась, чекає щонайбільше хвилину, а «Я підписався» скидає кеш
+ * для неї одразу.
+ *
+ * `null` означає «перевірити не вдалося» — і воно НЕ зводиться до «не
+ * підписаний»: збій на нашому боці не має коштувати комусь сповіщення.
+ */
+const GATE_TTL_MS = 60 * 1000;
+const gateCache = new Map<number, { at: number; ok: boolean }>();
+
+async function checkSubscription(token: string, userId: number): Promise<boolean | null> {
+  const channel = process.env["TELEGRAM_CHANNEL_ID"]?.trim();
+  if (!channel) return null; // канал не налаштований — гейта немає
+  const cached = gateCache.get(userId);
+  const now = Date.now();
+  if (cached && now - cached.at < GATE_TTL_MS) return cached.ok;
+  try {
+    const res = await fetch(
+      `${TELEGRAM_API}/bot${token}/getChatMember?chat_id=${encodeURIComponent(channel)}&user_id=${userId}`,
+    );
+    const body = (await res.json()) as {
+      ok?: boolean;
+      result?: { status?: string; is_member?: boolean };
+    };
+    if (!body.ok || !body.result) return null;
+    const ok = isSubscribed(body.result.status, body.result.is_member);
+    gateCache.set(userId, { at: now, ok });
+    return ok;
+  } catch {
+    // Telegram не відповів. Пускаємо: інструмент безпеки не має замикатись
+    // через власний збій.
+    return null;
+  }
+}
+
+/**
+ * Чи пускати далі. `null` у відповіді — «пускаємо» (див. запобіжник 1 у gate.ts).
+ *
+ * Повертає готову відповідь-гейт, коли пускати не можна, і `null`, коли можна.
+ */
+async function subscriptionGate(
+  token: string,
+  userId: number | undefined,
+): Promise<{ text: string; keyboard: unknown } | null> {
+  const url = channelUrl(process.env["TELEGRAM_CHANNEL_ID"]);
+  // Без публічного посилання гейт неможливий по суті: ми не можемо показати
+  // людині, КУДИ підписуватись. Замкнути її в цьому стані було б знущанням.
+  if (!url || typeof userId !== "number") return null;
+  const ok = await checkSubscription(token, userId);
+  if (ok === null || ok) return null;
+  return { text: renderGate(url), keyboard: gateKeyboard(url) };
+}
+
+/** Натискання «Я підписався». `false` — кнопка не наша. */
+async function handleGatePress(
+  token: string,
+  press: NonNullable<ReturnType<typeof parseCallback>>,
+): Promise<boolean> {
+  if (press.data !== GATE_ACTION) return false;
+  const userId = press.userId;
+  if (typeof userId === "number") gateCache.delete(userId); // перевіряємо наново
+  const gate = await subscriptionGate(token, userId);
+  if (gate) {
+    await telegramAnswerCallback(token, press.callbackId, "Поки не бачу підписки");
+    await telegramSend(token, press.chatId, renderStillNotSubscribed());
+    return true;
+  }
+  await telegramAnswerCallback(token, press.callbackId, "Дякуємо! Радар відкрито");
+  await telegramSend(token, press.chatId, renderAskPoint(), askPointKeyboard());
+  return true;
+}
+
 /* ─── Персональний радар: «чи летить на мене» ───────────────────────────── */
 
 /**
@@ -1203,6 +1289,7 @@ async function savePoint(
 async function personalCommand(
   token: string,
   parsed: BotCommand,
+  userId: number | undefined,
 ): Promise<{ text: string; keyboard?: unknown } | null | "handled"> {
   const { command, args, chatId, chatType } = parsed;
   const personalCommands = new Set([
@@ -1230,6 +1317,13 @@ async function personalCommand(
         ? `Персональний радар працює в особистому чаті: <a href="https://t.me/${name}?start=ch">відкрити бота</a>.`
         : "Персональний радар працює в особистому чаті з ботом.",
     };
+  }
+
+  // Гейт підписки. `/stop` навмисно поза ним: можливість вимкнути сповіщення
+  // не може залежати ні від чого — людина має право замовкнути бота будь-коли.
+  if (GATED_COMMANDS.has(command)) {
+    const gate = await subscriptionGate(token, userId);
+    if (gate) return gate;
   }
 
   if (command === "start") {
@@ -1390,6 +1484,24 @@ async function circleCommand(
 }
 
 /**
+ * Команди за гейтом.
+ *
+ * `/stop` тут НЕМАЄ і бути не може (запобіжник 2 у gate.ts), як і `/help`,
+ * `/status`, `/start` — людина має спершу зрозуміти, про що взагалі мова.
+ * `/start` показує гейт окремо, коли доходить до прохання точки.
+ */
+const GATED_COMMANDS = new Set([
+  "my",
+  "radar",
+  "me",
+  "settings",
+  "налаштування",
+  "circle",
+  "коло",
+  "invite",
+]);
+
+/**
  * Клавіатура прохання точки.
  *
  * ІНЛАЙН, а не reply з `request_location`. Причина в тому, що reply-кнопка
@@ -1412,6 +1524,12 @@ async function handlePickerPress(
 ): Promise<boolean> {
   const action = parsePickerAction(press.data);
   if (!action) return false;
+  const gate = await subscriptionGate(token, press.userId);
+  if (gate) {
+    await telegramAnswerCallback(token, press.callbackId, "Спершу підпишіться на канал");
+    await telegramSend(token, press.chatId, gate.text, gate.keyboard);
+    return true;
+  }
   if (press.chatId < 0) {
     await telegramAnswerCallback(token, press.callbackId, "Радар працює в особистому чаті");
     return true;
@@ -1443,6 +1561,15 @@ async function handlePersonalPress(
 ): Promise<boolean> {
   const action = parsePersonalAction(press.data);
   if (!action) return false;
+  // Пауза сповіщень поза гейтом — з тієї ж причини, що й `/stop`.
+  if (action.kind !== "mute") {
+    const gate = await subscriptionGate(token, press.userId);
+    if (gate) {
+      await telegramAnswerCallback(token, press.callbackId, "Спершу підпишіться на канал");
+      await telegramSend(token, press.chatId, gate.text, gate.keyboard);
+      return true;
+    }
+  }
   // Кнопки радара можуть доїхати в групу разом із пересланим повідомленням —
   // і там `press.chatId` уже не людина. Підписника з цього не робимо.
   if (press.chatId < 0) {
@@ -2147,8 +2274,10 @@ async function telegramWebhook(request: Request): Promise<Response> {
   if (press) {
     // Наборів кнопок тепер три. Персональні й вибір області перевіряються
     // першими, бо їх тиснуть усі, а адмінські — одна людина.
-    if (!(await handlePickerPress(token, press))) {
-      if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+    if (!(await handleGatePress(token, press))) {
+      if (!(await handlePickerPress(token, press))) {
+        if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+      }
     }
     return new Response("ok", { status: 200 });
   }
@@ -2156,6 +2285,11 @@ async function telegramWebhook(request: Request): Promise<Response> {
   // Геолокація приходить повідомленням БЕЗ тексту — parseCommand її не бачить.
   const location = parseLocation(update);
   if (location && location.chatType === "private") {
+    const gate = await subscriptionGate(token, location.userId);
+    if (gate) {
+      await telegramSend(token, location.chatId, gate.text, gate.keyboard);
+      return new Response("ok", { status: 200 });
+    }
     await savePoint(
       token,
       location.chatId,
@@ -2178,7 +2312,7 @@ async function telegramWebhook(request: Request): Promise<Response> {
   const ownerOk = isOwner(senderId(update), process.env["TELEGRAM_OWNER_ID"]);
 
   // Персональний радар — головне, заради чого бота тримають. Йде першим.
-  const personal = await personalCommand(token, parsed);
+  const personal = await personalCommand(token, parsed, senderId(update));
   if (personal === "handled") return new Response("ok", { status: 200 });
   if (personal) {
     await telegramSend(token, parsed.chatId, personal.text, personal.keyboard);

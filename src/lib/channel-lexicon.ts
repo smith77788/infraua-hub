@@ -37,7 +37,15 @@ export interface Lexicon {
   /** «🧭 хвиля йде на північ — на черзі: …» */
   wave(courseIndex: number, next: string[]): string;
   footer(targets: number, tail: string): string;
-  /** Рядок «що змінилось» — частини вже зібрані. */
+  /**
+   * «Що змінилось» — КОЖНА частина окремим рядком.
+   *
+   * Раніше вони зліплювались в один рядок через «·», і читалось це навпаки до
+   * змісту: «🆕 Вінниччина, Полтавщина · ✅ цілей не бачимо: Дніпропетровщина»
+   * люди розуміли як «Вінниччина й Полтавщина чисті» — зелена позначка стояла
+   * поруч із їхніми назвами. Плюс сам «🆕» Telegram малює бейджем NEW, який
+   * нічого не каже українською.
+   */
   delta: {
     escalated(types: string[]): string;
     appeared(oblasts: string[]): string;
@@ -131,11 +139,17 @@ export const UK: Lexicon = {
   wave: (i, next) => `🧭 хвиля йде ${UK_COURSE[i % 8]} — на черзі: ${next.join(", ")}`,
   footer: (targets, tail) => `<i>всього в небі: ${targets} · за даними OSINT · ${tail}</i>`,
   delta: {
-    escalated: (types) => `⚠️ додались ${types.join(", ")}`,
-    appeared: (o) => `🆕 ${o.join(", ")}`,
-    cleared: (o) => `✅ цілей не бачимо: ${o.join(", ")}`,
-    grew: (from, to) => `📈 цілей більшає (${from}→${to})`,
-    shrank: (from, to) => `📉 цілей меншає (${from}→${to})`,
+    escalated: (types) => `⚠️ <b>Додались:</b> ${types.join(", ")}`,
+    // Словами, а не значком: Telegram малює «🆕» бейджем NEW, який нічого не
+    // каже українською, — люди просто не розуміли, що він означає.
+    appeared: (o) => `🔺 <b>Зʼявились цілі:</b> ${o.join(", ")}`,
+    // «Відбій» тут не вживаємо НІ В ЯКІЙ формі: відбій дає офіційне
+    // оголошення, а не те, що ми перестали бачити цілі над областю. І не
+    // зеленою галочкою — вона читається як «чисто, все гаразд», тобто як
+    // відбій, ще й для сусіднього рядка.
+    cleared: (o) => `🔻 <b>Цілей більше не бачимо:</b> ${o.join(", ")}`,
+    grew: (from, to) => `📈 Цілей більшає: ${from} → ${to}`,
+    shrank: (from, to) => `📉 Цілей меншає: ${from} → ${to}`,
   },
   unverified: "❓ одне джерело",
   typeTag: (t) => UK_TAG[t],
@@ -205,11 +219,11 @@ export const EN: Lexicon = {
   wave: (i, next) => `🧭 swarm moving ${EN_COURSE[i % 8]} — next: ${next.join(", ")}`,
   footer: (targets, tail) => `<i>${targets} in the air · OSINT data · ${tail}</i>`,
   delta: {
-    escalated: (types) => `⚠️ added: ${types.join(", ")}`,
-    appeared: (o) => `🆕 ${o.join(", ")}`,
-    cleared: (o) => `✅ no longer tracked: ${o.join(", ")}`,
-    grew: (from, to) => `📈 count rising (${from}→${to})`,
-    shrank: (from, to) => `📉 count falling (${from}→${to})`,
+    escalated: (types) => `⚠️ <b>Added:</b> ${types.join(", ")}`,
+    appeared: (o) => `🔺 <b>Targets appeared:</b> ${o.join(", ")}`,
+    cleared: (o) => `🔻 <b>No longer tracked:</b> ${o.join(", ")}`,
+    grew: (from, to) => `📈 Count rising: ${from} → ${to}`,
+    shrank: (from, to) => `📉 Count falling: ${from} → ${to}`,
   },
   unverified: "❓ single source",
   typeTag: (t) => EN_TAG[t],
