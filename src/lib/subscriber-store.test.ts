@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +8,14 @@ import {
   allSubscribers,
   createCircle,
   creditInvite,
+  dataDirSource,
   getCircle,
   joinCircle,
   leaveCircle,
   ensureSubscriber,
   flushNow,
   isDurable,
+  probeWritable,
   putSubscriber,
   resetStoreForTests,
   stats,
@@ -152,5 +154,51 @@ describe("негайний запис", () => {
     resetStoreForTests();
     // Створення вже записалось негайно, а службова зміна — ще ні.
     expect((await allSubscribers())[0]?.lastAlertAt).toBe(0);
+  });
+});
+
+describe("де лежить сховище", () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env["BOT_DATA_DIR"] = saved["BOT_DATA_DIR"];
+    delete process.env["RAILWAY_VOLUME_MOUNT_PATH"];
+    delete process.env["PLATFORM_DATA_DIR"];
+  });
+
+  it("том Railway підхоплюється САМ — власнику не треба задавати змінну", async () => {
+    // Railway виставляє RAILWAY_VOLUME_MOUNT_PATH автоматично, щойно том
+    // підключено. Вимога задати ще й BOT_DATA_DIR була тим зайвим кроком,
+    // через який том міг бути, а підписники все одно зникали.
+    delete process.env["BOT_DATA_DIR"];
+    process.env["RAILWAY_VOLUME_MOUNT_PATH"] = join(dir, "vol");
+    expect(dataDirSource()).toBe("RAILWAY_VOLUME_MOUNT_PATH");
+    expect(isDurable()).toBe(true);
+    resetStoreForTests();
+    await ensureSubscriber(77, "2026-01-01T00:00:00Z");
+    resetStoreForTests();
+    expect((await allSubscribers()).map((s) => s.chatId)).toEqual([77]);
+  });
+
+  it("явний BOT_DATA_DIR перекриває автовизначення", () => {
+    process.env["BOT_DATA_DIR"] = "/explicit";
+    process.env["RAILWAY_VOLUME_MOUNT_PATH"] = "/volume";
+    expect(dataDirSource()).toBe("BOT_DATA_DIR");
+  });
+
+  it("без жодного тому сховище чесно зветься ефемерним", () => {
+    delete process.env["BOT_DATA_DIR"];
+    expect(dataDirSource()).toBe("default");
+    expect(isDurable()).toBe(false);
+  });
+
+  it("запис МІРЯЄТЬСЯ, а не виводиться з наявності змінної", async () => {
+    // Том можна підключити не в ту теку або лише для читання — конфігурація
+    // виглядатиме правильною, поки дані зникають.
+    process.env["BOT_DATA_DIR"] = join(dir, "probe-ok");
+    expect((await probeWritable()).ok).toBe(true);
+    process.env["BOT_DATA_DIR"] = "/proc/nonexistent-for-sure/nested";
+    const bad = await probeWritable();
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toBeTruthy();
   });
 });
