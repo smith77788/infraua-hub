@@ -241,3 +241,62 @@ describe("радіус застосовується до переліку, а н
     expect(a.nearestBeyondKm).toBeNull();
   });
 });
+
+/*
+ * Невизначеність, яку джерело заявляє саме, ріже в обидва боки: ціль може бути
+ * вже ближче, ніж її позначка. Рівень тривоги мусить читати нижній край вилки,
+ * інакше він систематично запізнюється рівно на половину невизначеності.
+ */
+describe("особиста оцінка — невизначеність джерела доходить до рівня", () => {
+  const point = { lat: 50, lon: 30 };
+  const q = (uncertaintyKm: number, speedKmh: number | null = null) => ({
+    uncertaintyKm,
+    position: "approx" as const,
+    lifecycle: "tracking" as const,
+    presumptiveCourse: false,
+    speedKmh,
+  });
+
+  /** Ціль на північ від точки, курсом строго на південь — тобто просто на нас. */
+  const inbound = (lat: number, quality: ReturnType<typeof q>) =>
+    threat({ lat, lon: 30, heading: 180, type: "shahed", quality });
+
+  it("вилка часу ширшає разом із заявленим радіусом", () => {
+    const tight = personalAssessment([inbound(51, q(4))], point);
+    const loose = personalAssessment([inbound(51, q(45))], point);
+    const w = (a: typeof tight) => {
+      const r = a.nearest[0]!.etaRangeMin!;
+      return r[1] - r[0];
+    };
+    expect(w(loose)).toBeGreaterThan(w(tight));
+  });
+
+  it("найбезпечніше прочитання ніколи не пізніше за середнє", () => {
+    const a = personalAssessment([inbound(51, q(45))], point);
+    expect(a.minutesToNearestLow).not.toBeNull();
+    expect(a.minutesToNearestLow!).toBeLessThanOrEqual(a.minutesToNearest!);
+  });
+
+  it("широка невизначеність піднімає рівень, а не занижує його", () => {
+    const tight = dangerIndex(personalAssessment([inbound(51, q(4))], point));
+    const loose = dangerIndex(personalAssessment([inbound(51, q(45))], point));
+    expect(loose.percent).toBeGreaterThanOrEqual(tight.percent);
+  });
+
+  it("заміряна швидкість використовується замість типової", () => {
+    const measured = personalAssessment([inbound(51, q(4, 99.4))], point);
+    const typical = personalAssessment([inbound(51, q(4))], point);
+    expect(measured.nearest[0]!.speedMeasured).toBe(true);
+    expect(typical.nearest[0]!.speedMeasured).toBe(false);
+    // 99 км/год проти типових 180 для шахеда — летить довше.
+    expect(measured.nearest[0]!.etaMin!).toBeGreaterThan(typical.nearest[0]!.etaMin!);
+  });
+
+  it("ціль, що не йде на точку, вилки не отримує", () => {
+    const away = threat({ lat: 51, lon: 30, heading: 0, type: "shahed", quality: q(10) });
+    const a = personalAssessment([away], point);
+    expect(a.nearest[0]!.inbound).toBe(false);
+    expect(a.nearest[0]!.etaRangeMin).toBeNull();
+    expect(a.minutesToNearestLow).toBeNull();
+  });
+});

@@ -21,6 +21,7 @@ import { escapeHtml } from "./telegram";
 import { preAlertFooter, preAlertHeader } from "./pre-alert";
 import type { SoundKind } from "./acoustic";
 import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
+import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
 
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
@@ -195,10 +196,37 @@ export function renderAlert(
 
   const lines = [`${head} — ${escapeHtml(placeLabel)}`, ""];
   if (lead) {
+    /*
+     * Час подається вилкою, коли вона широка.
+     *
+     * Джерело саме каже, з якою точністю знає позицію — від 4 до 45 км. На
+     * швидкості шахеда сорок пʼять кілометрів це чверть години, і «~7 хв» у
+     * такому разі не оцінка, а випадкове число з інтервалу, подане людині як
+     * вимір. Коли вилка вузька, показуємо одне число: зайва точність у тексті,
+     * який читають о третій ночі, коштує дорожче за свою користь.
+     */
+    const r = lead.etaRangeMin;
+    const timePart =
+      r && r[1] - r[0] >= 3
+        ? ` · <b>${r[0]}–${r[1]} хв</b>`
+        : lead.etaMin != null
+          ? ` · <b>~${lead.etaMin} хв</b>`
+          : "";
     lines.push(
       `${TYPE_EMOJI[type]} ${TYPE_NAME[type]}: ${lead.distanceKm} км на ${compass(lead.bearingToThreat)}` +
-        (lead.etaMin != null ? ` · <b>~${lead.etaMin} хв</b>` : ""),
+        timePart,
     );
+    /*
+     * Чим підкріплений цей рядок — словами джерела, а не нашими.
+     *
+     * «Підтверджена, ±4 км» і «не підтверджена, ±45 км, курс припущений» — це
+     * два різні рішення для людини, і досі вони виглядали однаково. Мовчання
+     * джерела лишається мовчанням: порожній рядок не друкуємо.
+     */
+    const quality = qualityLine(lead.threat.quality ?? EMPTY_QUALITY);
+    const speed = lead.speedMeasured ? "швидкість заміряна" : "";
+    const detail = [quality, speed].filter(Boolean).join(" · ");
+    if (detail) lines.push(`<i>${escapeHtml(detail)}</i>`);
   }
   if (assess.inboundCount > 1) lines.push(`Усього на вашу точку: ${assess.inboundCount}`);
   // Наскільки цьому вірити — у самому сповіщенні, а не в довідці. Людина, яку

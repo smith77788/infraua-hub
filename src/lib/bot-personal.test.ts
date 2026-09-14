@@ -226,3 +226,65 @@ describe("картка не повторює застереження двічі
     expect(text).toContain("поза вашим радіусом");
   });
 });
+
+/*
+ * Людину підняли о третій ночі. Вона мусить бачити не лише «за скільки», а й
+ * наскільки цьому взагалі можна вірити: «підтверджена, ±4 км» і «не
+ * підтверджена, ±45 км, курс припущений» — це два різні рішення, і досі вони
+ * виглядали в повідомленні однаково.
+ */
+describe("renderAlert — якість даних видно людині", () => {
+  const withQuality = (kmSouth: number, quality: NonNullable<Threat["quality"]>): Threat => ({
+    ...inbound("q", "shahed", kmSouth),
+    quality,
+  });
+
+  it("широка невизначеність подається вилкою, а не одним числом", () => {
+    const t = withQuality(120, {
+      uncertaintyKm: 45,
+      position: "approx",
+      lifecycle: "uncertain",
+      presumptiveCourse: true,
+      speedKmh: null,
+    });
+    const assess = personalAssessment([t], KYIV);
+    const text = renderAlert(assess, dangerIndex(assess), "моя точка");
+    expect(text).toMatch(/\d+–\d+ хв/);
+    expect(text).toContain("не підтверджена");
+    expect(text).toContain("±45 км");
+    expect(text).toContain("курс припущений");
+  });
+
+  it("підтверджена ціль не обвішується застереженнями", () => {
+    const t = withQuality(40, {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "confirmed",
+      presumptiveCourse: false,
+      speedKmh: null,
+    });
+    const assess = personalAssessment([t], KYIV);
+    const text = renderAlert(assess, dangerIndex(assess), "моя точка");
+    expect(text).toContain("підтверджена");
+    expect(text).not.toContain("припущений");
+  });
+
+  it("заміряна швидкість називається заміряною", () => {
+    const t = withQuality(60, {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "tracking",
+      presumptiveCourse: false,
+      speedKmh: 99.4,
+    });
+    const assess = personalAssessment([t], KYIV);
+    expect(renderAlert(assess, dangerIndex(assess), "моя точка")).toContain("швидкість заміряна");
+  });
+
+  it("мовчання джерела не друкується як «дані відсутні»", () => {
+    const assess = personalAssessment([inbound("a", "shahed", 40)], KYIV);
+    const text = renderAlert(assess, dangerIndex(assess), "моя точка");
+    expect(text).not.toContain("±");
+    expect(text).not.toContain("не підтверджена");
+  });
+});
