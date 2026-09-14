@@ -1,0 +1,219 @@
+/**
+ * Мова каналу як дані, а не як вкраплення в коді.
+ *
+ * Навіщо. Найбільша аудиторія цієї ніші, до якої ніхто не дотягується, — не
+ * всередині країни, а поза нею: кореспонденти, аналітики, діаспора. Вони
+ * цитують українські монітори щодня й читають їх через машинний переклад, який
+ * плутає «крилаті» з «крилами», а «КАБ» — з таксі.
+ *
+ * Перекладати готовий пост не можна: він уже текст. Але наш пост будується не
+ * з тексту, а зі СТРУКТУРИ (область → тип → кількість, курс, ETA), і саме тому
+ * другу мову тут можна зробити чесно — не переклавши, а СКЛАВШИ заново з тих
+ * самих чисел. Жодного машинного перекладу, жодного шансу, що англійський
+ * канал скаже те, чого не казав український.
+ *
+ * Кожна мова — це об'єкт-словник. Додати третю означає дописати один об'єкт,
+ * не торкаючись генератора.
+ */
+
+import type { ThreatType } from "./air";
+
+export type LangCode = "uk" | "en";
+
+export interface Lexicon {
+  code: LangCode;
+  /** Назва типу з числом: «3 шахеди» / «3 Shahed drones». */
+  typeName(type: ThreatType, n: number): string;
+  /** Румб курсу за індексом 0..7 (0 = Пн, далі за годинниковою). */
+  course(index: number): string;
+  headline(kind: HeadlineKind, seed: number): string;
+  tail(serious: boolean, seed: number): string;
+  /** «— у бік: Полтава (~11 хв), уважно!» */
+  towards(parts: string[]): string;
+  /** «…і ще 4 області» */
+  more(n: number): string;
+  /** «Полтава (~11 хв)» */
+  eta(city: string, minutes: number): string;
+  /** «🧭 хвиля йде на північ — на черзі: …» */
+  wave(courseIndex: number, next: string[]): string;
+  footer(targets: number, tail: string): string;
+  /** Рядок «що змінилось» — частини вже зібрані. */
+  delta: {
+    escalated(types: string[]): string;
+    appeared(oblasts: string[]): string;
+    cleared(oblasts: string[]): string;
+    grew(from: number, to: number): string;
+    shrank(from: number, to: number): string;
+  };
+  /** Позначка «за це ручатись ніхто не може». */
+  unverified: string;
+  typeTag(type: ThreatType): string | undefined;
+  alwaysTag: string;
+}
+
+export type HeadlineKind = "rocket" | "kab" | "swarm" | "few" | "calm";
+
+function pick<T>(arr: readonly T[], seed: number): T {
+  return arr[seed % arr.length]!;
+}
+
+/* ─── Українська ────────────────────────────────────────────────────────── */
+
+// Множина за українськими правилами (ті самі 3 форми: 1 / 2-4 / 5+).
+export function pluralUk(n: number, one: string, few: string, many: string): string {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return one;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
+  return many;
+}
+
+const UK_TYPE: Record<ThreatType, [string, string, string]> = {
+  shahed: ["шахед", "шахеди", "шахедів"],
+  reactive: ["реактивний шахед", "реактивні шахеди", "реактивних шахедів"],
+  cruise: ["крилата", "крилаті", "крилатих"],
+  missile: ["ракета", "ракети", "ракет"],
+  ballistic: ["балістична ціль", "балістичні цілі", "балістичних цілей"],
+  kab: ["КАБ", "КАБи", "КАБів"],
+  recon: ["розвідник", "розвідники", "розвідників"],
+  aircraft: ["борт", "борти", "бортів"],
+  unknown: ["ціль", "цілі", "цілей"],
+};
+
+const UK_COURSE = [
+  "на північ",
+  "на північний схід",
+  "на схід",
+  "на південний схід",
+  "на південь",
+  "на південний захід",
+  "на захід",
+  "на північний захід",
+];
+
+const UK_HEAD: Record<HeadlineKind, string[]> = {
+  rocket: ["🚀 <b>Ракетна небезпека!</b>", "🚀 <b>Увага, ракети!</b>"],
+  kab: ["💥 <b>КАБи в повітрі</b>", "💥 <b>Працюють КАБи</b>"],
+  swarm: ["🛸 <b>Шахеди роєм</b>", "🛸 <b>Шахеди пачками</b>", "🛸 <b>Нічна зміна шахедів</b>"],
+  few: ["🛸 <b>Шахеди в небі</b>", "🛸 <b>Знову шахеди</b>", "🛸 <b>Дзижчать шахеди</b>"],
+  calm: ["🛰 <b>Рух у небі</b>", "🛰 <b>Щось літає</b>"],
+};
+
+const UK_TAIL_SERIOUS = ["бережіть себе 🙏", "не ігноруйте тривогу", "укриття — не зайве 🛡"];
+const UK_TAIL_LIGHT = [
+  "бережіть себе 🙏",
+  "ППО не спить — і ви пильнуйте 👀",
+  "тримаємо на олівці ✍️",
+  "павербанк на зарядку 🔋",
+];
+
+const UK_TAG: Partial<Record<ThreatType, string>> = {
+  shahed: "шахеди",
+  reactive: "шахеди",
+  cruise: "ракети",
+  missile: "ракети",
+  ballistic: "балістика",
+  kab: "КАБ",
+};
+
+export const UK: Lexicon = {
+  code: "uk",
+  typeName(type, n) {
+    const [one, few, many] = UK_TYPE[type];
+    return pluralUk(n, one, few, many);
+  },
+  course: (i) => `курсом ${UK_COURSE[i % 8]}`,
+  headline: (kind, seed) => pick(UK_HEAD[kind], seed),
+  tail: (serious, seed) => pick(serious ? UK_TAIL_SERIOUS : UK_TAIL_LIGHT, seed),
+  towards: (parts) => ` — у бік: ${parts.join(", ")}, уважно!`,
+  more: (n) => `…і ще ${n} ${pluralUk(n, "область", "області", "областей")}`,
+  eta: (city, minutes) => `${city} (~${minutes} хв)`,
+  wave: (i, next) => `🧭 хвиля йде ${UK_COURSE[i % 8]} — на черзі: ${next.join(", ")}`,
+  footer: (targets, tail) => `<i>всього в небі: ${targets} · за даними OSINT · ${tail}</i>`,
+  delta: {
+    escalated: (types) => `⚠️ додались ${types.join(", ")}`,
+    appeared: (o) => `🆕 ${o.join(", ")}`,
+    cleared: (o) => `✅ цілей не бачимо: ${o.join(", ")}`,
+    grew: (from, to) => `📈 цілей більшає (${from}→${to})`,
+    shrank: (from, to) => `📉 цілей меншає (${from}→${to})`,
+  },
+  unverified: "❓ одне джерело",
+  typeTag: (t) => UK_TAG[t],
+  alwaysTag: "повітрянатривога",
+};
+
+/* ─── English ───────────────────────────────────────────────────────────── */
+
+const EN_TYPE: Record<ThreatType, [string, string]> = {
+  shahed: ["Shahed drone", "Shahed drones"],
+  reactive: ["jet-powered Shahed", "jet-powered Shaheds"],
+  cruise: ["cruise missile", "cruise missiles"],
+  missile: ["missile", "missiles"],
+  ballistic: ["ballistic target", "ballistic targets"],
+  kab: ["glide bomb", "glide bombs"],
+  recon: ["recon drone", "recon drones"],
+  aircraft: ["aircraft", "aircraft"],
+  unknown: ["target", "targets"],
+};
+
+const EN_COURSE = [
+  "north",
+  "north-east",
+  "east",
+  "south-east",
+  "south",
+  "south-west",
+  "west",
+  "north-west",
+];
+
+const EN_HEAD: Record<HeadlineKind, string[]> = {
+  rocket: ["🚀 <b>Missile threat</b>", "🚀 <b>Missiles inbound</b>"],
+  kab: ["💥 <b>Glide bombs in the air</b>"],
+  swarm: ["🛸 <b>Shahed swarm</b>", "🛸 <b>Mass drone attack</b>"],
+  few: ["🛸 <b>Drones in the air</b>", "🛸 <b>Shaheds over Ukraine</b>"],
+  calm: ["🛰 <b>Air activity</b>"],
+};
+
+// Англійський канал читають не ті, кому треба в укриття, а ті, хто про це
+// пише. Тон стриманий, без «бережіть себе»: побажання незнайомій аудиторії за
+// тисячу кілометрів звучало б фальшиво, а не тепло.
+const EN_TAIL_SERIOUS = ["take shelter if you are in the area", "do not ignore local sirens"];
+const EN_TAIL_LIGHT = ["tracking", "updates follow"];
+
+const EN_TAG: Partial<Record<ThreatType, string>> = {
+  shahed: "Shahed",
+  reactive: "Shahed",
+  cruise: "missiles",
+  missile: "missiles",
+  ballistic: "ballistic",
+  kab: "glidebombs",
+};
+
+export const EN: Lexicon = {
+  code: "en",
+  typeName(type, n) {
+    const [one, many] = EN_TYPE[type];
+    return n === 1 ? one : many;
+  },
+  course: (i) => `heading ${EN_COURSE[i % 8]}`,
+  headline: (kind, seed) => pick(EN_HEAD[kind], seed),
+  tail: (serious, seed) => pick(serious ? EN_TAIL_SERIOUS : EN_TAIL_LIGHT, seed),
+  towards: (parts) => ` — heading for ${parts.join(", ")}`,
+  more: (n) => `…and ${n} more ${n === 1 ? "region" : "regions"}`,
+  eta: (city, minutes) => `${city} (~${minutes} min)`,
+  wave: (i, next) => `🧭 swarm moving ${EN_COURSE[i % 8]} — next: ${next.join(", ")}`,
+  footer: (targets, tail) => `<i>${targets} in the air · OSINT data · ${tail}</i>`,
+  delta: {
+    escalated: (types) => `⚠️ added: ${types.join(", ")}`,
+    appeared: (o) => `🆕 ${o.join(", ")}`,
+    cleared: (o) => `✅ no longer tracked: ${o.join(", ")}`,
+    grew: (from, to) => `📈 count rising (${from}→${to})`,
+    shrank: (from, to) => `📉 count falling (${from}→${to})`,
+  },
+  unverified: "❓ single source",
+  typeTag: (t) => EN_TAG[t],
+  alwaysTag: "Ukraine",
+};
+
+export const LEXICONS: Record<LangCode, Lexicon> = { uk: UK, en: EN };

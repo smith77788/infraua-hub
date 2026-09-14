@@ -8,9 +8,11 @@
  * пост. Щоб цьому можна було вірити й це можна було перевірити тестами,
  * генерація тексту не торкається ні мережі, ні годинника — лише вхідні цілі.
  *
- * Мова — українська, жива й тепла, як у народних моніторів (RADAR.RIVNE,
- * monitoring захід): «шахеди в небі», «у бік міста — уважно», «відбій».
- * Уся лексика зібрана тут, в одному місці, а не розсипана по коду.
+ * Мова — жива й тепла, як у народних моніторів (RADAR.RIVNE, monitoring
+ * захід): «шахеди в небі», «у бік міста — уважно». Сама лексика винесена в
+ * `channel-lexicon.ts`: пост будується не з тексту, а зі структури, тож той
+ * самий генератор складає українську й англійську версію з тих самих чисел —
+ * не перекладаючи, а складаючи заново.
  *
  * Дедуп. Ситуація в небі змінюється повільно; без дедупу канал спамив би той
  * самий пост щохвилини. Тому разом із текстом повертається `signature` —
@@ -23,47 +25,14 @@ import { OBLASTS } from "./alerts";
 import { distanceKm } from "./infra-types";
 import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
 import { swarmForecast } from "./swarm";
+import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
+import { verifyThreat } from "./advisory";
+import { roleOfSource } from "./osint-sources";
 
-// Множина за українськими правилами (ті самі 3 форми: 1 / 2-4 / 5+).
-function plural(n: number, one: string, few: string, many: string): string {
-  const n10 = n % 10;
-  const n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return one;
-  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
-  return many;
-}
-
-const TYPE_PLURAL: Record<ThreatType, [string, string, string]> = {
-  shahed: ["шахед", "шахеди", "шахедів"],
-  reactive: ["реактивний шахед", "реактивні шахеди", "реактивних шахедів"],
-  cruise: ["крилата", "крилаті", "крилатих"],
-  missile: ["ракета", "ракети", "ракет"],
-  ballistic: ["балістична ціль", "балістичні цілі", "балістичних цілей"],
-  kab: ["КАБ", "КАБи", "КАБів"],
-  recon: ["розвідник", "розвідники", "розвідників"],
-  aircraft: ["борт", "борти", "бортів"],
-  unknown: ["ціль", "цілі", "цілей"],
-};
-
-function typePlural(type: ThreatType, n: number): string {
-  const [one, few, many] = TYPE_PLURAL[type];
-  return plural(n, one, few, many);
-}
-
-// Румб курсу українською: «курсом на північний захід».
-const COURSE_8 = [
-  "на північ",
-  "на північний схід",
-  "на схід",
-  "на південний схід",
-  "на південь",
-  "на південний захід",
-  "на захід",
-  "на північний захід",
-];
-function coursePhrase(heading: number | undefined): string | null {
+/** Індекс румба 0..7 за курсом. Слова дає словник — вони різні в різних мовах. */
+function courseIndex(heading: number | undefined): number | null {
   if (typeof heading !== "number" || !Number.isFinite(heading)) return null;
-  return COURSE_8[Math.round((((heading % 360) + 360) % 360) / 45) % 8]!;
+  return Math.round((((heading % 360) + 360) % 360) / 45) % 8;
 }
 
 interface CityRef {
@@ -136,46 +105,18 @@ function seedFrom(s: string): number {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
-function pick<T>(arr: readonly T[], seed: number): T {
-  return arr[seed % arr.length]!;
-}
-
-// Заголовки за найгострішим типом. Для ракет — серйозно, без жартів; для
-// «мопедів» дозволена жива подача. Формулювання чесні: це OSINT, не гарантія.
-const HEAD_ROCKET = ["🚀 <b>Ракетна небезпека!</b>", "🚀 <b>Увага, ракети!</b>"];
-const HEAD_KAB = ["💥 <b>КАБи в повітрі</b>", "💥 <b>Працюють КАБи</b>"];
-const HEAD_SWARM = [
-  "🛸 <b>Шахеди роєм</b>",
-  "🛸 <b>Шахеди пачками</b>",
-  "🛸 <b>Нічна зміна шахедів</b>",
-];
-const HEAD_FEW = ["🛸 <b>Шахеди в небі</b>", "🛸 <b>Знову шахеди</b>", "🛸 <b>Дзижчать шахеди</b>"];
-const HEAD_CALM = ["🛰 <b>Рух у небі</b>", "🛰 <b>Щось літає</b>"];
-
-// Кінцівка. Для небезпечних типів — стримано; для решти — теплий, живий тон
-// (не глузування з небезпеки, а «свій» голос монітора, що звертається до людей).
-const TAIL_SERIOUS = ["бережіть себе 🙏", "не ігноруйте тривогу", "укриття — не зайве 🛡"];
-const TAIL_LIGHT = [
-  "бережіть себе 🙏",
-  "ППО не спить — і ви пильнуйте 👀",
-  "тримаємо на олівці ✍️",
-  "павербанк на зарядку 🔋",
-];
 
 function isRocketish(types: ReadonlySet<ThreatType>): boolean {
   return types.has("missile") || types.has("ballistic") || types.has("cruise");
 }
-function headline(types: ReadonlySet<ThreatType>, shaheds: number, seed: number): string {
-  if (isRocketish(types)) return pick(HEAD_ROCKET, seed);
-  if (types.has("kab")) return pick(HEAD_KAB, seed);
-  if (types.has("shahed") || types.has("reactive")) {
-    return pick(shaheds >= 8 ? HEAD_SWARM : HEAD_FEW, seed);
-  }
-  return pick(HEAD_CALM, seed);
-}
-function tail(types: ReadonlySet<ThreatType>, seed: number): string {
-  const serious = isRocketish(types) || types.has("kab");
-  return pick(serious ? TAIL_SERIOUS : TAIL_LIGHT, seed);
+function headlineKind(
+  types: ReadonlySet<ThreatType>,
+  shaheds: number,
+): "rocket" | "kab" | "swarm" | "few" | "calm" {
+  if (isRocketish(types)) return "rocket";
+  if (types.has("kab")) return "kab";
+  if (types.has("shahed") || types.has("reactive")) return shaheds >= 8 ? "swarm" : "few";
+  return "calm";
 }
 
 /**
@@ -189,16 +130,11 @@ function tail(types: ReadonlySet<ThreatType>, seed: number): string {
  * Тег складається лише з літер: Telegram обриває хештег на першому ж не-літері,
  * тож «#м. Київ» став би «#м» — марним тегом, який ще й ламає пошук.
  */
-const TYPE_TAG: Partial<Record<ThreatType, string>> = {
-  shahed: "шахеди",
-  reactive: "шахеди",
-  cruise: "ракети",
-  missile: "ракети",
-  ballistic: "балістика",
-  kab: "КАБ",
-};
-
-export function hashtags(oblasts: readonly string[], types: ReadonlySet<ThreatType>): string {
+export function hashtags(
+  oblasts: readonly string[],
+  types: ReadonlySet<ThreatType>,
+  lex: Lexicon = UK,
+): string {
   const tags: string[] = [];
   const seen = new Set<string>();
   const push = (raw: string) => {
@@ -210,10 +146,10 @@ export function hashtags(oblasts: readonly string[], types: ReadonlySet<ThreatTy
   // Області йдуть першими: саме їх шукають («що в мене в області»).
   for (const o of oblasts.slice(0, 6)) push(o);
   for (const t of types) {
-    const tag = TYPE_TAG[t];
+    const tag = lex.typeTag(t);
     if (tag) push(tag);
   }
-  push("повітрянатривога");
+  push(lex.alwaysTag);
   return tags.join(" ");
 }
 
@@ -264,6 +200,7 @@ function snapshotOf(groups: Iterable<Group>): AirSnapshot {
 function describeDelta(
   prev: AirSnapshot | undefined,
   cur: AirSnapshot,
+  lex: Lexicon,
 ): { line: string | null; material: boolean } {
   if (!prev) return { line: null, material: true };
 
@@ -289,15 +226,18 @@ function describeDelta(
     appeared.length > 0 || cleared.length > 0 || escalated.length > 0 || Math.abs(totalDelta) >= 2;
 
   const bits: string[] = [];
-  if (escalated.length)
-    bits.push(`⚠️ додались ${escalated.map((t) => typePlural(t, 2)).join(", ")}`);
-  if (appeared.length) bits.push(`🆕 ${appeared.join(", ")}`);
-  if (cleared.length) bits.push(`✅ відбій: ${cleared.join(", ")}`);
+  if (escalated.length) {
+    bits.push(lex.delta.escalated(escalated.map((t) => lex.typeName(t, 2))));
+  }
+  if (appeared.length) bits.push(lex.delta.appeared(appeared));
+  // «Відбій» тут не вживаємо НІ В ЯКІЙ формі: відбій дає офіційне оголошення,
+  // а не те, що ми перестали бачити цілі над областю.
+  if (cleared.length) bits.push(lex.delta.cleared(cleared));
   if (!bits.length && totalDelta !== 0) {
     bits.push(
       totalDelta > 0
-        ? `📈 цілей більшає (${prev.targets}→${cur.targets})`
-        : `📉 цілей меншає (${prev.targets}→${cur.targets})`,
+        ? lex.delta.grew(prev.targets, cur.targets)
+        : lex.delta.shrank(prev.targets, cur.targets),
     );
   }
   return { line: bits.length ? bits.join(" · ") : null, material };
@@ -322,7 +262,11 @@ interface Group {
   byType: Map<ThreatType, number>;
   /** Місто на курсі → мінімальна ETA (хв). */
   loud: Map<string, number>;
-  courses: Map<ThreatType, string>;
+  /** Тип → індекс румба 0..7 (слова дає словник). */
+  courses: Map<ThreatType, number>;
+  /** Скільки цілей області спираються лише на одне непідтверджене джерело. */
+  weak: number;
+  total: number;
 }
 
 /**
@@ -336,10 +280,13 @@ export function renderChannelPost(
     maxOblasts?: number;
     /** Рядок прогнозу («за курсом далі…») — готує channel-wave. */
     forecast?: string | null;
+    /** Мова поста. Усталено українська; англійська — для дзеркального каналу. */
+    lang?: LangCode;
   } = {},
 ): ChannelPost | null {
   if (!threats.length) return null;
   const maxOblasts = opts.maxOblasts ?? 12;
+  const lex = LEXICONS[opts.lang ?? "uk"];
 
   const groups = new Map<string, Group>();
   for (const t of threats) {
@@ -347,7 +294,7 @@ export function renderChannelPost(
     const oblast = oblastOf(t.lat, t.lon);
     let g = groups.get(oblast);
     if (!g) {
-      g = { oblast, byType: new Map(), loud: new Map(), courses: new Map() };
+      g = { oblast, byType: new Map(), loud: new Map(), courses: new Map(), weak: 0, total: 0 };
       groups.set(oblast, g);
     }
     // Рахуємо ОБ'ЄКТИ (1 ціль = 1), а не поле count. count — це кількість
@@ -355,8 +302,15 @@ export function renderChannelPost(
     // додавати його означало б писати «17 мопедів» там, де ціль одна. Карта
     // теж рахує об'єкти — так канал і карта показують одне число.
     g.byType.set(type, (g.byType.get(type) ?? 0) + 1);
-    const course = coursePhrase(t.heading);
-    if (course && !g.courses.has(type)) g.courses.set(type, course);
+    // Наскільки цій позначці можна вірити. Модулі верифікації в проєкті вже
+    // були, але жоден пост їх не показував — тож читач не міг відрізнити
+    // «три незалежні канали» від «одна людина щось написала». Саме на цій
+    // різниці й живуть паніка та фейки в ніші.
+    const level = verifyThreat(t, roleOfSource).level;
+    g.total += 1;
+    if (level === "unverified" || level === "single") g.weak += 1;
+    const course = courseIndex(t.heading);
+    if (course !== null && !g.courses.has(type)) g.courses.set(type, course);
     const loud = loudCity(t);
     if (loud) {
       const prev = g.loud.get(loud.name);
@@ -370,7 +324,7 @@ export function renderChannelPost(
   );
 
   const snapshot = snapshotOf(ordered);
-  const { line: deltaLine, material } = describeDelta(opts.previous, snapshot);
+  const { line: deltaLine, material } = describeDelta(opts.previous, snapshot, lex);
 
   const allTypes = new Set<ThreatType>();
   const sigParts: string[] = [];
@@ -390,20 +344,24 @@ export function renderChannelPost(
     const parts = entries.map(([type, n]) => {
       const course = g.courses.get(type);
       // Значок веде тип, далі — кількість словом у «ванёк»-регістрі й курс.
-      return `${TYPE_EMOJI[type]} ${n} ${typePlural(type, n)}${course ? ` курсом ${course}` : ""}`;
+      const dir = course === undefined ? "" : ` ${lex.course(course)}`;
+      return `${TYPE_EMOJI[type]} ${n} ${lex.typeName(type, n)}${dir}`;
     });
     let line = `📍 <b>${g.oblast}</b>: ${parts.join(", ")}`;
     // Без прийменника, щоб уникнути відмінка: назви в даних — у називному
     // («Харківщина», «Запоріжжя»), і «громко в Запоріжжя» різало б слух.
     if (g.loud.size) {
-      const near = [...g.loud.entries()].map(([n, e]) => `${n} (~${e} хв)`);
-      line += ` — у бік: ${near.join(", ")}, уважно!`;
+      line += lex.towards([...g.loud.entries()].map(([n, e]) => lex.eta(n, e)));
     }
+    // Позначка стоїть ЛИШЕ коли підтвердження немає в жодної цілі області:
+    // часткова слабкість тут не повідомляється, бо «частково непідтверджено»
+    // читач однаково прочитає як «непідтверджено» і знеціниться вся позначка.
+    if (g.total > 0 && g.weak === g.total) line += ` ${lex.unverified}`;
     bodyLines.push(line);
   });
   const hidden = ordered.length - Math.min(ordered.length, maxOblasts);
   if (hidden > 0) {
-    bodyLines.push(`…і ще ${hidden} ${plural(hidden, "область", "області", "областей")}`);
+    bodyLines.push(lex.more(hidden));
   }
 
   const targets = threats.length;
@@ -414,23 +372,22 @@ export function renderChannelPost(
   // Даємо лише коли напрямок виражений (див. swarmForecast), інакше мовчимо.
   const wave = swarmForecast(threats, CITY_REFS);
   const waveLine =
-    wave && wave.next.length
-      ? `🧭 хвиля йде ${wave.course} — на черзі: ${wave.next.join(", ")}`
-      : null;
+    wave && wave.next.length ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) : null;
 
   const tags = hashtags(
     ordered.map((g) => g.oblast),
     allTypes,
+    lex,
   );
   const lines = [
-    headline(allTypes, shaheds, seed),
+    lex.headline(headlineKind(allTypes, shaheds), seed),
     ...(deltaLine ? ["", deltaLine] : []),
     "",
     ...bodyLines,
     ...(waveLine ? ["", waveLine] : []),
     ...(opts.forecast ? ["", opts.forecast] : []),
     "",
-    `<i>всього в небі: ${targets} · за даними OSINT · ${tail(allTypes, seed)}</i>`,
+    lex.footer(targets, lex.tail(isRocketish(allTypes) || allTypes.has("kab"), seed)),
     ...(tags ? [tags] : []),
   ];
 

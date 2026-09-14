@@ -17,6 +17,8 @@ import {
   parseCommand,
   parseLayersArg,
   parseLocation,
+  webhookUpdatesOk,
+  WEBHOOK_UPDATES,
   publicCommands,
   renderHelp,
   renderNoPlatform,
@@ -35,15 +37,21 @@ import {
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { publicOrigin } from "./lib/request-origin";
-import type { Threat } from "./lib/air";
+import type { Threat, ThreatType } from "./lib/air";
 import type { AirSnapshot } from "./lib/channel-post";
 import { channelKeyboard, oblastOf } from "./lib/channel-post";
 import { distanceKm } from "./lib/infra-types";
-import { dangerIndex, personalAssessment } from "./lib/advisory";
+import {
+  dangerIndex,
+  type PersonalAssessment,
+  personalAssessment,
+  verifyThreat,
+} from "./lib/advisory";
 import { inlineResults, matchOblast, parseInlineQuery } from "./lib/bot-inline";
 import {
   locationKeyboard,
   parsePersonalAction,
+  soundKeyboard,
   renderAlert,
   renderAskPoint,
   renderPersonal,
@@ -70,6 +78,25 @@ import {
   type WaveState,
 } from "./lib/channel-wave";
 import { kyivDate, kyivHour } from "./lib/kyiv";
+import {
+  canReport,
+  corroborate,
+  pruneReports,
+  renderClusters,
+  renderReportAccepted,
+  type SoundReport,
+} from "./lib/acoustic";
+import {
+  type Circle,
+  makeCircleCode,
+  normalizeCircleCode,
+  renderCircle,
+  renderCircleHelp,
+  renderPeerOk,
+} from "./lib/circle";
+import { alertPhase, leadMinutes, renderOfficialConfirmed } from "./lib/pre-alert";
+import { roleOfSource } from "./lib/osint-sources";
+import { updateHistory, type FixPoint } from "./lib/track-history";
 import { parseOfficialAlerts, stillAlerting } from "./lib/official-alerts";
 import { channelLink, inviteLink, parseStartPayload, renderInvite } from "./lib/referral";
 import {
@@ -81,8 +108,14 @@ import {
 } from "./lib/subscribers";
 import {
   allSubscribers,
+  createCircle,
   creditInvite,
   ensureSubscriber,
+  getCircle,
+  getSubscriber,
+  joinCircle,
+  leaveCircle,
+  putCircle,
   putSubscriber,
   stats as subscriberStats,
 } from "./lib/subscriber-store";
@@ -440,6 +473,7 @@ async function sendChannelUpdate(
   targets: number,
   png: Buffer | null,
   keyboard?: unknown,
+  silent = false,
 ): Promise<SentPost> {
   let res: Response;
   if (png) {
@@ -447,6 +481,7 @@ async function sendChannelUpdate(
     form.append("chat_id", channel);
     form.append("caption", captionFor(text, targets));
     form.append("parse_mode", "HTML");
+    if (silent) form.append("disable_notification", "true");
     if (keyboard) form.append("reply_markup", JSON.stringify(keyboard));
     form.append("photo", new Blob([new Uint8Array(png)], { type: "image/png" }), "situation.png");
     res = await fetch(`${TELEGRAM_API}/bot${token}/sendPhoto`, { method: "POST", body: form });
@@ -459,6 +494,7 @@ async function sendChannelUpdate(
         text,
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
+        ...(silent ? { disable_notification: true } : {}),
         ...(keyboard ? { reply_markup: keyboard } : {}),
       }),
     });
@@ -567,6 +603,51 @@ const LIVE_POST_MAX_MS = 45 * 60 * 1000;
 /** Година за Києвом, коли виходить підсумок доби. */
 const DIGEST_HOUR = 9;
 
+/**
+ * Уночі дзвенить лише те, заради чого варто прокинутись.
+ *
+ * Канали цієї ніші будять читача сімдесят разів за ніч — і людина вимикає
+ * сповіщення назавжди, після чого не почує й ракетного поста. Тому оновлення
+ * по шахедах уночі приходять БЕЗ звуку (пост є, значок у списку є, дзвінка
+ * немає), а ракети, балістика й КАБи дзвенять завжди. Це не косметика: це
+ * різниця між каналом, у якого ввімкнені сповіщення, і каналом, у якого їх
+ * вимкнули всі.
+ */
+function shouldPostSilently(types: ReadonlySet<ThreatType>, now: number): boolean {
+  const loud =
+    types.has("missile") || types.has("ballistic") || types.has("cruise") || types.has("kab");
+  if (loud) return false;
+  const hour = kyivHour(new Date(now));
+  return hour >= 23 || hour < 7;
+}
+
+/**
+ * Спостережені треки цілей для картинки каналу.
+ *
+ * Джерело віддає лише поточну позицію; історію складає `updateHistory` з
+ * послідовних опитувань — той самий модуль, що вже малює сліди на карті.
+ */
+let channelTracks = new Map<string, FixPoint[]>();
+/**
+ * Тип кожного треку окремо від точок.
+ *
+ * Колір лінії має відповідати тому, що летіло. Малювати всі шляхи як шахедні
+ * означало б показати ракетний удар кольором «мопеда» — і це вже не помилка
+ * оформлення, а неправда про те, що було.
+ */
+let channelTrackTypes = new Map<string, ThreatType>();
+
+function trackLines(threats: readonly Threat[]): { type: ThreatType; points: FixPoint[] }[] {
+  const byId = new Map(threats.map((t) => [t.id, t] as const));
+  const out: { type: ThreatType; points: FixPoint[] }[] = [];
+  for (const [id, points] of channelTracks) {
+    const t = byId.get(id);
+    if (!t || points.length < 2) continue;
+    out.push({ type: t.type ?? "unknown", points });
+  }
+  return out;
+}
+
 let wave: WaveState | null = null;
 let liveWithPhoto = false;
 let currentDay: DayStats = emptyDay(kyivDate(new Date()));
@@ -596,6 +677,50 @@ async function maybeDigest(token: string, channel: string, now: number): Promise
   const text = renderDigest(day);
   if (!text) return; // тиха доба не потребує поста
   await sendChannelUpdate(token, channel, text, day.peakTargets, null, await channelButtons(token));
+}
+
+/**
+ * Дзеркальний англомовний канал.
+ *
+ * Найбільша аудиторія цієї ніші, до якої ніхто не дотягується, — поза країною:
+ * кореспонденти, аналітики, діаспора. Вони цитують українські монітори щодня й
+ * читають їх машинним перекладом, який плутає «крилаті» з крилами.
+ *
+ * Тут другої мови не ПЕРЕКЛАДАЮТЬ: той самий генератор складає англійський
+ * пост із тих самих чисел. Тому англійський канал не може сказати іншу
+ * кількість цілей чи інші області — розбіжність між мовами тут неможлива за
+ * побудовою, а не за домовленістю.
+ *
+ * Дедуп йому не потрібен: він постить рівно тоді, коли постить український.
+ * Без `TELEGRAM_CHANNEL_ID_EN` — no-op, і це штатний стан.
+ */
+let lastEnglishSignature = "";
+async function mirrorEnglish(
+  token: string,
+  threats: readonly Threat[],
+  png: Buffer | null,
+  silent: boolean,
+): Promise<void> {
+  const channel = process.env["TELEGRAM_CHANNEL_ID_EN"]?.trim();
+  if (!channel) return;
+  try {
+    const { renderChannelPost } = await import("./lib/channel-post");
+    const post = renderChannelPost(threats, { lang: "en" });
+    if (!post || post.signature === lastEnglishSignature) return;
+    lastEnglishSignature = post.signature;
+    await sendChannelUpdate(
+      token,
+      channel,
+      post.text,
+      post.targets,
+      png,
+      await channelButtons(token),
+      silent,
+    );
+  } catch (error) {
+    // Збій дзеркала не має чіпати основний канал: українська версія вже пішла.
+    console.error("english mirror failed", error);
+  }
 }
 
 /**
@@ -646,14 +771,21 @@ async function closeWave(
   // вийшло жодного поста, то й закривати нема чого — «все скінчилось» без
   // «щось почалось» читається як збій.
   if (ended.messageId === null) return false;
-  // Чиста карта під відбоєм — видно, що порожньо, а не тільки написано.
+  // Картинка під відбоєм — не порожня карта, а РЕКОНСТРУКЦІЯ ночі: позначок
+  // немає (нічого не летить), але видно всі шляхи, якими хвиля пройшла. Це те,
+  // чого вранці не дає жоден монітор: одна картинка замість сімдесяти постів.
   const { renderSituationPng } = await import("./lib/situation-image");
+  const routeLines = [...channelTracks.entries()]
+    .filter(([, points]) => points.length >= 2)
+    .map(([id, points]) => ({ type: channelTrackTypes.get(id) ?? "unknown", points }));
+  channelTracks = new Map();
+  channelTrackTypes = new Map();
   const sent = await sendChannelUpdate(
     token,
     channel,
     renderAllClear(ended, now),
     ended.peakTargets,
-    await renderSituationPng([]),
+    await renderSituationPng([], routeLines),
     await channelButtons(token),
   );
   if (sent.ok) lastChannelPost = { signature: "", at: now, snapshot: undefined };
@@ -720,6 +852,15 @@ async function runChannelTick(
   // Згладжуємо картину в часі, щоб сусідні пости не «стрибали» через блимання
   // OSINT-набору. Пам'ять оновлюється щотику (навіть коли не постимо).
   const smoothed = smoothChannelThreats(threats, now);
+  // Трек складається з послідовних опитувань — тому історію оновлюємо щотику,
+  // навіть коли не постимо: пропущений тик — це розрив у лінії.
+  // Довший строк і більше точок, ніж на карті: тут трек має пережити цілу
+  // нічну хвилю, бо з нього складається картинка під відбоєм.
+  channelTracks = updateHistory(channelTracks, smoothed, now, {
+    maxAgeMs: 12 * 60 * 60 * 1000,
+    maxPoints: 60,
+  });
+  for (const t of smoothed) channelTrackTypes.set(t.id, t.type ?? "unknown");
   const forecast = renderForecast(forecastWave(smoothed));
   const post = renderChannelPost(smoothed, {
     previous: lastChannelPost.snapshot,
@@ -801,8 +942,10 @@ async function runChannelTick(
   // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
   // текст: якщо не вийшла, шлемо текст без неї.
   const { renderSituationPng } = await import("./lib/situation-image");
-  const png = await renderSituationPng(smoothed);
+  const png = await renderSituationPng(smoothed, trackLines(smoothed));
   const keyboard = await channelButtons(token);
+  const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
+  const silent = shouldPostSilently(types, now);
 
   const liveStale = now - lastChannelPost.at > LIVE_POST_MAX_MS;
   const canEdit = !opts.force && wave.messageId !== null && !liveStale && escalation.length === 0;
@@ -833,7 +976,15 @@ async function runChannelTick(
     wave = { ...wave, messageId: null };
   }
 
-  const sent = await sendChannelUpdate(token, channel, post.text, post.targets, png, keyboard);
+  const sent = await sendChannelUpdate(
+    token,
+    channel,
+    post.text,
+    post.targets,
+    png,
+    keyboard,
+    silent,
+  );
   if (!sent.ok) {
     return { posted: false, reason: `Telegram відхилив: ${sent.status}`, status: 502 };
   }
@@ -841,6 +992,7 @@ async function runChannelTick(
   liveWithPhoto = sent.withPhoto;
   lastChannelTouch = now;
   lastChannelPost = { signature: post.signature, at: now, snapshot: post.snapshot };
+  await mirrorEnglish(token, smoothed, png, silent);
   return { posted: true, targets: post.targets };
 }
 
@@ -892,7 +1044,36 @@ startChannelScheduler();
  * бути той самий: три різні шляхи до трьох трохи різних відповідей — це те, як
  * зʼявляються розбіжності, яких потім ніхто не може відтворити.
  */
-async function personalCard(sub: Subscriber): Promise<{ text: string; keyboard: unknown } | null> {
+/**
+ * Акустичні доклади — у памʼяті процесу, і це свідомо.
+ *
+ * Доклад живе пів години й після цього нічого не означає. Класти таке на диск
+ * означало б платити записом за дані, які застаріють раніше, ніж їх прочитають;
+ * втрата при редеплої коштує рівно тих кількох хвилин, які вони й мали жити.
+ */
+let soundReports: SoundReport[] = [];
+
+function recordSound(report: SoundReport): void {
+  soundReports = pruneReports([...soundReports, report], report.at);
+}
+
+/**
+ * Наскільки вірити провідній цілі — рядком, який читається без словника.
+ *
+ * Модулі верифікації в проєкті були давно, але жодна відповідь бота їх не
+ * показувала: людина бачила «шахед за 12 км» і не могла знати, чи це три
+ * незалежні канали, чи одне непідтверджене повідомлення.
+ */
+function trustLine(assess: PersonalAssessment): string | null {
+  const lead = assess.nearest.find((n) => n.inbound) ?? assess.nearest[0];
+  if (!lead) return null;
+  return `джерела: ${verifyThreat(lead.threat, roleOfSource).label}`;
+}
+
+async function personalCard(
+  sub: Subscriber,
+  opts: { withOk?: boolean } = {},
+): Promise<{ text: string; keyboard: unknown } | null> {
   if (!sub.point) return null;
   const threats = await fetchThreatsCached(60_000);
   const assess = personalAssessment(threats, sub.point, { radiusKm: sub.radiusKm });
@@ -902,9 +1083,16 @@ async function personalCard(sub: Subscriber): Promise<{ text: string; keyboard: 
   const active = await fetchOfficialAlerts();
   const officialAlert =
     active === null ? null : active.includes(oblastOf(sub.point.lat, sub.point.lon));
+  const now = Date.now();
+  const heard = renderClusters(corroborate(soundReports, sub.point, now));
+  const live = Boolean(sub.liveUntil && sub.liveUntil > now);
   return {
-    text: renderPersonal(assess, danger, sub.point.label, sub.radiusKm, { officialAlert }),
-    keyboard: personalKeyboard(),
+    text: renderPersonal(assess, danger, sub.point.label, sub.radiusKm, {
+      officialAlert,
+      heard,
+      live,
+    }),
+    keyboard: personalKeyboard(opts.withOk ? { withOk: true } : {}),
   };
 }
 
@@ -915,19 +1103,40 @@ async function savePoint(
   lat: number,
   lon: number,
   label: string,
+  live: { livePeriod: number; isUpdate: boolean } = { livePeriod: 0, isUpdate: false },
 ): Promise<void> {
   const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+  const now = Date.now();
+  const liveUntil = live.livePeriod > 0 ? now + live.livePeriod * 1000 : (sub.liveUntil ?? null);
   const updated: Subscriber = {
     ...sub,
     point: { lat, lon, label },
     muted: false,
+    liveUntil,
     // Нова точка — нова історія: сповіщення про цілі, пораховані для старої
     // точки, до нової стосунку не мають.
     lastAlertIds: [],
     lastLevel: null,
   };
   await putSubscriber(updated);
-  await telegramSend(token, chatId, renderPointSaved(label, updated.radiusKm));
+
+  // Оновлення живої точки приходить щохвилини. Писати на кожне «ви переїхали
+  // на 300 метрів» означало б зробити з радара балакучого пасажира — тому
+  // оновлення зберігаємо мовчки, а говоримо лише коли точку задали.
+  if (live.isUpdate) return;
+
+  await telegramSend(
+    token,
+    chatId,
+    live.livePeriod > 0
+      ? renderPointSaved(label, updated.radiusKm) +
+          "\n\n📍 <b>Точка жива</b> — вона їде за вами, поки Telegram ділиться нею."
+      : renderPointSaved(label, updated.radiusKm),
+    // Знімаємо клавіатуру запиту точки. Без цього кнопка «Надіслати мою точку»
+    // лишалась висіти внизу чату назавжди — навіть коли точку вже прийнято, і
+    // читалась як «не спрацювало, тисни ще».
+    { remove_keyboard: true },
+  );
   const card = await personalCard(updated);
   if (card) await telegramSend(token, chatId, card.text, card.keyboard);
 }
@@ -951,6 +1160,8 @@ async function personalCommand(
     "stop",
     "pause",
     "invite",
+    "circle",
+    "коло",
   ]);
 
   // У групі chatId спільний: завести там «підписника» означало б слати
@@ -1023,6 +1234,10 @@ async function personalCommand(
     };
   }
 
+  if (command === "circle" || command === "коло") {
+    return circleCommand(chatId, args, Date.now());
+  }
+
   if (command === "invite") {
     const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
     const link = inviteLink((await botUsername(token)) ?? undefined, sub.code);
@@ -1030,6 +1245,94 @@ async function personalCommand(
   }
 
   return null;
+}
+
+/**
+ * Розсилає решті кола «X у порядку».
+ *
+ * Один рядок кожному, і жодних координат: коло існує, щоб зняти тривогу за
+ * людину, а не щоб показати, де вона. Пост із чужим місцем можна переслати —
+ * і тоді він працює вже проти неї.
+ */
+async function broadcastOk(token: string, sub: Subscriber): Promise<void> {
+  if (!sub.circle) return;
+  const circle = await getCircle(sub.circle);
+  if (!circle) return;
+  const name = sub.displayName ?? "Хтось";
+  for (const chatId of circle.members) {
+    if (chatId === sub.chatId) continue;
+    await telegramSend(token, chatId, renderPeerOk(name, circle.name));
+    await new Promise((r) => setTimeout(r, ALERT_SEND_GAP_MS));
+  }
+}
+
+/** Показує коло людини: хто відмітився, хто ще ні. */
+async function circleView(sub: Subscriber, now: number): Promise<string | null> {
+  if (!sub.circle) return null;
+  const circle = await getCircle(sub.circle);
+  if (!circle) return null;
+  const views = [];
+  for (const chatId of circle.members) {
+    // Саме читання, без ensureSubscriber: перегляд кола не має заводити
+    // підписників — інакше лічильник підписників рахував би перегляди.
+    const member = await getSubscriber(chatId);
+    views.push({
+      chatId,
+      name: member?.displayName ?? (chatId === circle.ownerChatId ? "Власник кола" : "Учасник"),
+      okAt: member?.okAt ?? null,
+    });
+  }
+  return renderCircle(circle, views, now);
+}
+
+/**
+ * Команда `/circle`: створити коло, приєднатись, подивитись стан.
+ *
+ * Імʼя людини береться з того, що вона сама написала при вступі, а не з
+ * Telegram-профілю: у колі рідних «@vasya_2007» нічого не каже, а «Мама» —
+ * каже все. І це єдине, що коло взагалі про людину зберігає.
+ */
+async function circleCommand(
+  chatId: number,
+  args: string,
+  now: number,
+): Promise<{ text: string; keyboard?: unknown }> {
+  const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+  const [verb, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+  const tail = rest.join(" ").trim();
+
+  if (verb === "нова" || verb === "new" || verb === "створити") {
+    const name = tail || "Моє коло";
+    if (sub.circle) await leaveCircle(sub.circle, chatId);
+    const circle = await createCircle(name, chatId, makeCircleCode);
+    await putSubscriber({ ...sub, circle: circle.code, displayName: sub.displayName ?? "Я" });
+    return { text: (await circleView({ ...sub, circle: circle.code }, now)) ?? renderCircleHelp() };
+  }
+
+  if (verb === "код" || verb === "join" || verb === "приєднатись") {
+    const code = normalizeCircleCode(tail);
+    if (!code)
+      return { text: "Код кола — шість літер і цифр. Приклад: <code>/circle код ABC234</code>" };
+    if (sub.circle && sub.circle !== code) await leaveCircle(sub.circle, chatId);
+    const circle = await joinCircle(code, chatId);
+    if (!circle) return { text: "Такого коду немає. Перепитайте того, хто створив коло." };
+    const name = sub.displayName ?? "Учасник";
+    await putSubscriber({ ...sub, circle: circle.code, displayName: name });
+    return {
+      text:
+        `✅ Ви в колі <b>${circle.name}</b>.\n\n` +
+        "Підпишіться, щоб вас упізнавали: <code>/circle імʼя Мама</code>",
+    };
+  }
+
+  if (verb === "імʼя" || verb === "имя" || verb === "name" || verb === "ім'я") {
+    if (!tail) return { text: "Напишіть, як вас підписати: <code>/circle імʼя Мама</code>" };
+    await putSubscriber({ ...sub, displayName: tail.slice(0, 40) });
+    return { text: `Записано: <b>${escapeHtml(tail.slice(0, 40))}</b>` };
+  }
+
+  const view = await circleView(sub, now);
+  return { text: view ?? renderCircleHelp() };
 }
 
 /** Натискання кнопок персонального радара. `false` — кнопка не наша. */
@@ -1047,6 +1350,51 @@ async function handlePersonalPress(
   }
 
   const { sub } = await ensureSubscriber(press.chatId, new Date().toISOString());
+
+  // Меню «що чути» — окремою гілкою: воно лише перемальовує клавіатуру.
+  if (action.kind === "soundMenu") {
+    await telegramAnswerCallback(token, press.callbackId, "Що саме чути?");
+    await telegramEditMessage(
+      token,
+      press.chatId,
+      press.messageId,
+      "👂 <b>Що чути у вас зараз?</b>\n\n<i>Один доклад нічого не піднімає — " +
+        "потрібен збіг кількох людей поруч. Саме тому це працює.</i>",
+      soundKeyboard(),
+    );
+    return true;
+  }
+
+  if (action.kind === "sound") {
+    const now = Date.now();
+    if (!sub.point) {
+      await telegramAnswerCallback(token, press.callbackId, "Спершу задайте точку: /my");
+      return true;
+    }
+    if (!canReport(sub.lastSoundAt ?? undefined, now)) {
+      await telegramAnswerCallback(token, press.callbackId, "Щойно записали ваш доклад");
+      return true;
+    }
+    recordSound({ chatId: press.chatId, ...sub.point, kind: action.value, at: now });
+    await putSubscriber({ ...sub, lastSoundAt: now });
+    const clusters = corroborate(soundReports, sub.point, now);
+    await telegramAnswerCallback(token, press.callbackId, "Дякуємо, записано");
+    await telegramSend(token, press.chatId, renderReportAccepted(action.value, clusters));
+    const card = await personalCard({ ...sub, lastSoundAt: now });
+    if (card) {
+      await telegramEditMessage(token, press.chatId, press.messageId, card.text, card.keyboard);
+    }
+    return true;
+  }
+
+  if (action.kind === "imOk") {
+    const now = Date.now();
+    await putSubscriber({ ...sub, okAt: now });
+    await telegramAnswerCallback(token, press.callbackId, "Передали вашим");
+    await broadcastOk(token, { ...sub, okAt: now });
+    return true;
+  }
+
   let updated = sub;
   let toast = "Оновлено";
 
@@ -1069,13 +1417,15 @@ async function handlePersonalPress(
 
   if (action.kind === "refresh") {
     const card = await personalCard(updated);
-    await telegramEditMessage(
-      token,
-      press.chatId,
-      press.messageId,
-      card?.text ?? renderAskPoint(),
-      card ? card.keyboard : undefined,
-    );
+    if (!card) {
+      // Точки ще немає. Клавіатуру із запитом геолокації НЕМОЖЛИВО вкласти в
+      // редагування повідомлення — Telegram приймає там лише inline-кнопки.
+      // Раніше через це людина бачила «натисніть кнопку нижче» рівно без
+      // кнопки: сам текст ні на що не вказував, і далі йти не було куди.
+      await telegramSend(token, press.chatId, renderAskPoint(), locationKeyboard("private"));
+      return true;
+    }
+    await telegramEditMessage(token, press.chatId, press.messageId, card.text, card.keyboard);
     return true;
   }
 
@@ -1104,6 +1454,8 @@ const ALERT_TICK_EVERY_MS = 90 * 1000;
 const ALERT_SEND_GAP_MS = 40;
 /** Стеля на один обхід — щоб один наліт не зʼїв увесь такт. */
 const ALERT_MAX_PER_SWEEP = 400;
+/** Скільки передтривога чекає на сирену, перш ніж перестати рахуватись. */
+const PRE_ALERT_TTL_MS = 60 * 60 * 1000;
 
 let alertTimer: ReturnType<typeof setInterval> | null = null;
 let alertSweepRunning = false;
@@ -1130,6 +1482,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   if (subs.length === 0) return empty;
 
   const threats = await fetchThreatsCached(60_000);
+  const official = await fetchOfficialAlerts();
   const now = Date.now();
   const hour = kyivHour(new Date(now));
   let sent = 0;
@@ -1144,6 +1497,28 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     const point = sub.point;
     if (!point) continue;
 
+    const oblast = oblastOf(point.lat, point.lon);
+    const phase = alertPhase(official, oblast);
+
+    // Передтривога, за якою сирена так і не пролунала, застаріває. Інакше
+    // через півдня перша-ліпша офіційна тривога зарахувалась би як «ми
+    // попередили» — звіт про випередження, якого не було.
+    if (sub.preAlert && now - sub.preAlert.at > PRE_ALERT_TTL_MS) {
+      await putSubscriber({ ...sub, preAlert: null });
+      continue;
+    }
+
+    // Офіційну оголосили після НАШОЇ передтривоги — кажемо, на скільки
+    // випередили. Це єдине місце, де бот звітує про власну швидкість, і воно
+    // звітує заміряним числом, а не обіцянкою.
+    if (phase === "official" && sub.preAlert && sub.preAlert.oblast === oblast) {
+      const lead = leadMinutes(sub.preAlert.at, now);
+      await telegramSend(token, sub.chatId, renderOfficialConfirmed(oblast, lead));
+      await putSubscriber({ ...sub, preAlert: null });
+      await new Promise((r) => setTimeout(r, ALERT_SEND_GAP_MS));
+      continue;
+    }
+
     const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm });
     const danger = dangerIndex(assess);
     const decision = decideAlert(sub, assess, danger, now, hour);
@@ -1152,15 +1527,19 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       continue;
     }
 
+    // Поспішити з попередженням безпечно — поспішити з відбоєм смертельно.
+    // Тому сирени ми НЕ чекаємо, але й не вдаємо, що вона вже пролунала.
+    const pre = phase === "pre";
     const res = await telegramSend(
       token,
       sub.chatId,
-      renderAlert(assess, danger, point.label),
-      personalKeyboard(),
+      renderAlert(assess, danger, point.label, { pre, trust: trustLine(assess) }),
+      personalKeyboard(danger.level === "shelter" && sub.circle ? { withOk: true } : {}),
     );
     if (res.ok) {
       sent += 1;
-      await putSubscriber(markAlerted(sub, decision, now));
+      const marked = markAlerted(sub, decision, now);
+      await putSubscriber(pre ? { ...marked, preAlert: { at: now, oblast } } : marked);
     } else if (res.status === 403) {
       // Бота заблокували або видалили чат. Далі слати — марно витрачати квоту
       // на кожному обході; ставимо на паузу, налаштування лишаються.
@@ -1633,6 +2012,7 @@ async function telegramWebhook(request: Request): Promise<Response> {
       location.lat,
       location.lon,
       `моя точка · ${oblastOf(location.lat, location.lon)}`,
+      { livePeriod: location.livePeriod, isUpdate: location.isUpdate },
     );
     return new Response("ok", { status: 200 });
   }
@@ -1744,7 +2124,7 @@ async function registerWebhook(token: string, secret: string | undefined, reques
     body: JSON.stringify({
       url: hookUrl,
       ...(secret ? { secret_token: secret } : {}),
-      allowed_updates: ["message", "callback_query", "inline_query"],
+      allowed_updates: [...WEBHOOK_UPDATES],
       drop_pending_updates: true,
     }),
   });
@@ -1761,6 +2141,9 @@ async function registerWebhook(token: string, secret: string | undefined, reques
     telegram: {
       url: result["url"],
       pendingUpdates: result["pending_update_count"],
+      // Видно в /setup і /repair: саме через цей перелік бот може мовчати на
+      // цілий клас оновлень, не повідомляючи про жодну помилку.
+      allowedUpdates: result["allowed_updates"] ?? "(усталене Telegram)",
       lastError: result["last_error_message"] ?? null,
       lastErrorAt: result["last_error_date"] ?? null,
     },
@@ -1852,21 +2235,29 @@ async function ensureWebhook(request: Request): Promise<void> {
   const target = `${origin}/api/telegram/webhook`;
   try {
     const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
-    const current = (info as { result?: { url?: string } } | null)?.result?.url ?? "";
+    const result = (info as { result?: { url?: string; allowed_updates?: unknown } } | null)
+      ?.result;
+    const current = result?.url ?? "";
     // Команди реєструємо навіть коли вебхук уже на місці: перелік міг
     // зʼявитися (ця функція) вже після того, як вебхук став правильним, тож
     // прив'язувати їх до зміни адреси не можна — інакше /admin так і не
     // зʼявиться в меню на вже налаштованому боті.
     void setBotCommands(token, process.env["TELEGRAM_OWNER_ID"]);
-    if (current === target) return; // адреса вже там — лишається тільки команди вище
+    // Звіряємо НЕ ЛИШЕ адресу, а й перелік типів оновлень. Збіг самої адреси
+    // раніше означав «нічого не робимо» — і бот роками лишався підписаним на
+    // той набір, з яким його зареєстрували вперше.
+    if (current === target && webhookUpdatesOk(result?.allowed_updates)) return;
     await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         url: target,
         ...(secret ? { secret_token: secret } : {}),
-        allowed_updates: ["message", "callback_query", "inline_query"],
-        drop_pending_updates: true,
+        allowed_updates: [...WEBHOOK_UPDATES],
+        // Не скидаємо чергу: сюди ми потрапляємо й тоді, коли адреса вже
+        // правильна, а бракує лише типів оновлень. Викинути в цей момент усе,
+        // що люди написали, поки сервіс перезапускався, — не полагодити, а
+        // додати другу поломку.
       }),
     });
   } catch (error) {

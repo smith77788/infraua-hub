@@ -3,9 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { makeCircleCode } from "./circle";
 import {
   allSubscribers,
+  createCircle,
   creditInvite,
+  getCircle,
+  joinCircle,
+  leaveCircle,
   ensureSubscriber,
   flushNow,
   isDurable,
@@ -77,5 +82,49 @@ describe("сховище підписників", () => {
     expect(st.total).toBe(2);
     expect(st.withPoint).toBe(1);
     expect(st.active).toBe(0);
+  });
+});
+
+describe("кола", () => {
+  it("коло переживає перезапуск разом із підписниками", async () => {
+    const circle = await createCircle("Родина", 1, makeCircleCode);
+    await joinCircle(circle.code, 2);
+    await flushNow();
+
+    resetStoreForTests();
+    const back = await getCircle(circle.code);
+    expect(back?.name).toBe("Родина");
+    expect(back?.members).toEqual([1, 2]);
+  });
+
+  it("код кола не видається двом різним колам", async () => {
+    // Колізія тут означала б, що чужа людина мовчки бачить відмітки рідних.
+    const a = await createCircle("Перше", 1, makeCircleCode);
+    const b = await createCircle("Друге", 1, makeCircleCode);
+    expect(a.code).not.toBe(b.code);
+  });
+
+  it("повторний вступ не дублює учасника", async () => {
+    const circle = await createCircle("Родина", 1, makeCircleCode);
+    await joinCircle(circle.code, 2);
+    const again = await joinCircle(circle.code, 2);
+    expect(again?.members).toEqual([1, 2]);
+  });
+
+  it("вихід прибирає зі старого кола, а не лишає відмітку чужим", async () => {
+    const circle = await createCircle("Родина", 1, makeCircleCode);
+    await joinCircle(circle.code, 2);
+    await leaveCircle(circle.code, 2);
+    expect((await getCircle(circle.code))?.members).toEqual([1]);
+  });
+
+  it("порожнє коло зникає — воно вже нічиє", async () => {
+    const circle = await createCircle("Родина", 1, makeCircleCode);
+    await leaveCircle(circle.code, 1);
+    expect(await getCircle(circle.code)).toBeUndefined();
+  });
+
+  it("невідомий код не створює кола на льоту", async () => {
+    expect(await joinCircle("ZZZZZZ", 9)).toBeNull();
   });
 });
