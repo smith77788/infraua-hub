@@ -32,19 +32,73 @@ let dirty = false;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let lastError: string | null = null;
 
+/** Звідки взявся шлях до сховища — це головне, що треба знати при діагностиці. */
+export type DataDirSource =
+  "BOT_DATA_DIR" | "RAILWAY_VOLUME_MOUNT_PATH" | "PLATFORM_DATA_DIR" | "default";
+
+/**
+ * Де лежать підписки.
+ *
+ * `RAILWAY_VOLUME_MOUNT_PATH` тут — головний додаток. Railway виставляє цю
+ * змінну САМ, щойно до сервісу підключено том (перевірено в документації
+ * Railway, розділ Volumes). Тобто власникові достатньо підключити том — і
+ * нічого більше налаштовувати не треба. Раніше ми вимагали ще й вручну задати
+ * `BOT_DATA_DIR`, і саме цей зайвий крок означав, що підписники зникали при
+ * кожному редеплої: том міг бути, а змінна — ні.
+ *
+ * Явний `BOT_DATA_DIR` лишається першим: він перекриває автовизначення там, де
+ * том мають ділити з чимось іще.
+ */
+export function dataDirSource(): DataDirSource {
+  if (process.env["BOT_DATA_DIR"]?.trim()) return "BOT_DATA_DIR";
+  if (process.env["RAILWAY_VOLUME_MOUNT_PATH"]?.trim()) return "RAILWAY_VOLUME_MOUNT_PATH";
+  if (process.env["PLATFORM_DATA_DIR"]?.trim()) return "PLATFORM_DATA_DIR";
+  return "default";
+}
+
 function dataDir(): string {
-  return (
-    process.env["BOT_DATA_DIR"]?.trim() || process.env["PLATFORM_DATA_DIR"]?.trim() || "./data"
-  );
+  const source = dataDirSource();
+  if (source === "default") return "./data";
+  return process.env[source]!.trim();
 }
 
 function filePath(): string {
   return `${dataDir().replace(/\/$/, "")}/subscribers.json`;
 }
 
-/** Чи лежить сховище на явно заданому томі (а не в ефемерному контейнері). */
+/**
+ * Чи переживуть підписки редеплой.
+ *
+ * `default` — ні: файл ляже в ефемерну файлову систему контейнера. Решта
+ * джерел вказує на том. Це висновок із конфігурації, а не замір: том можна
+ * відмонтувати й не сказати нам. Тому поруч є `probeWritable`, який саме
+ * МІРЯЄ, чи туди взагалі можна писати.
+ */
 export function isDurable(): boolean {
-  return Boolean(process.env["BOT_DATA_DIR"]?.trim() || process.env["PLATFORM_DATA_DIR"]?.trim());
+  return dataDirSource() !== "default";
+}
+
+/**
+ * Реальна перевірка запису — пише й прибирає пробний файл.
+ *
+ * Потрібна тому, що всі попередні висновки про сховище були висновками з
+ * НАЯВНОСТІ ЗМІННОЇ, а не з того, що на диск справді щось лягає. Том можна
+ * підключити не в ту теку, змонтувати лише для читання або впертись у квоту —
+ * і в кожному з цих випадків налаштування виглядає правильним, а підписники
+ * все одно зникають.
+ */
+export async function probeWritable(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { mkdir, rm, writeFile } = await import("node:fs/promises");
+    const dir = dataDir().replace(/\/$/, "");
+    await mkdir(dir, { recursive: true });
+    const probe = `${dir}/.write-probe`;
+    await writeFile(probe, "ok", "utf8");
+    await rm(probe, { force: true });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function load(): Promise<void> {
@@ -291,7 +345,12 @@ export interface StoreStats {
   withPoint: number;
   active: number;
   durable: boolean;
+  /** Звідки взявся шлях — без цього «ефемерне» не підказує, що робити. */
+  source: DataDirSource;
   path: string;
+  /** Чи можна туди писати НАСПРАВДІ (замір, не висновок із конфігурації). */
+  writable: boolean;
+  writeError?: string;
   lastError: string | null;
   circles: number;
 }
@@ -299,12 +358,16 @@ export interface StoreStats {
 export async function stats(): Promise<StoreStats> {
   await load();
   const list = [...MEMORY.values()];
+  const probe = await probeWritable();
   return {
     total: list.length,
     withPoint: list.filter((s) => s.point).length,
     active: list.filter((s) => s.point && !s.muted).length,
     durable: isDurable(),
+    source: dataDirSource(),
     path: filePath(),
+    writable: probe.ok,
+    ...(probe.error ? { writeError: probe.error } : {}),
     lastError,
     circles: CIRCLES.size,
   };

@@ -1945,6 +1945,51 @@ async function situationBrief(request: Request) {
 }
 
 /**
+ * Стан сховища людською мовою — з конкретним наступним кроком.
+ *
+ * «Ефемерне» без інструкції — це діагноз без лікування: власник бачить
+ * попередження, не знає, що робити, і підписники далі зникають при кожному
+ * редеплої. Тому тут не лише що не так, а й що саме натиснути.
+ *
+ * Окремо показано ЗАМІР запису. Усі попередні висновки про сховище були
+ * висновками з наявності змінної: том можна підключити не в ту теку або лише
+ * для читання, і конфігурація виглядатиме правильною, поки дані зникають.
+ */
+function storageLines(st: Awaited<ReturnType<typeof subscriberStats>>): string[] {
+  const where = `<code>${escapeHtml(st.path)}</code>`;
+  const lines: string[] = [];
+
+  if (!st.durable) {
+    lines.push(
+      `⚠️ Сховище: <b>ефемерне</b> — ${where}`,
+      "Підписки зникають при кожному редеплої.",
+      "",
+      "<b>Як полагодити (Railway, один крок):</b>",
+      "1. Відкрийте сервіс консолі → вкладка <b>Variables</b> поруч є <b>Volumes</b>;",
+      "2. <b>+ New Volume</b>, шлях монтування — <code>/data</code>;",
+      "3. дочекайтесь перезапуску.",
+      "",
+      "Більше нічого робити не треба: Railway сам виставляє <code>RAILWAY_VOLUME_MOUNT_PATH</code>, і бот його підхоплює. Окремо задавати <code>BOT_DATA_DIR</code> потрібно лише тоді, коли том ділять із чимось іще.",
+    );
+  } else {
+    const from =
+      st.source === "RAILWAY_VOLUME_MOUNT_PATH"
+        ? "том Railway (визначено автоматично)"
+        : st.source === "BOT_DATA_DIR"
+          ? "задано <code>BOT_DATA_DIR</code>"
+          : "задано <code>PLATFORM_DATA_DIR</code>";
+    lines.push(`Сховище: <b>постійний том</b> — ${where}`, `Джерело шляху: ${from}`);
+  }
+
+  lines.push(
+    st.writable
+      ? "Запис: <b>перевірено щойно — працює</b>"
+      : `❌ Запис: <b>НЕ ПРАЦЮЄ</b>${st.writeError ? ` — ${escapeHtml(st.writeError)}` : ""}`,
+  );
+  return lines;
+}
+
+/**
  * Адміністративні команди бота.
  *
  * Живуть тут, а не в `lib/telegram.ts`, бо потребують мережі: вимикач і граф
@@ -1992,9 +2037,7 @@ async function adminCommand(
         `З точкою: <b>${st.withPoint}</b>`,
         `Отримують сповіщення: <b>${st.active}</b>`,
         "",
-        st.durable
-          ? `Сховище: <b>постійний том</b> (<code>${escapeHtml(st.path)}</code>)`
-          : `⚠️ Сховище: <b>ефемерне</b> (<code>${escapeHtml(st.path)}</code>) — підписки не переживуть редеплой. Задайте <code>BOT_DATA_DIR</code> на постійному томі.`,
+        ...storageLines(st),
         ...(st.lastError ? ["", `Остання помилка запису: ${escapeHtml(st.lastError)}`] : []),
         "",
         "🔌 <b>Вебхук</b>",
