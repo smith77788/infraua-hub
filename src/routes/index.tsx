@@ -48,6 +48,7 @@ import StatusStrip from "@/components/StatusStrip";
 import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
+import RaidReplay from "@/components/RaidReplay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -65,6 +66,7 @@ import { useInitData } from "@/hooks/use-telegram";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import { projectThreats } from "@/lib/threat-eta";
+import { type RaidFrame, frameAt, recordFrame } from "@/lib/raid-replay";
 import {
   buildThreatGraph,
   correlateAirThreats,
@@ -345,6 +347,9 @@ function Console() {
   const [eventKind, setEventKind] = useState<keyof typeof EVENT_KINDS | null>(null);
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
+  // Реплей нальоту: буфер знімків повітряної картини + курсор перемотки.
+  const [raidFrames, setRaidFrames] = useState<readonly RaidFrame[]>([]);
+  const [raidCursor, setRaidCursor] = useState<number | null>(null);
 
   /*
    * Вимикач шарів інфраструктури. Рішення ухвалює сервер (`infra-gate.ts`),
@@ -375,6 +380,17 @@ function Console() {
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
   const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
+  // Пишемо знімок повітряної картини в буфер реплею при кожному оновленні фіду
+  // (recordFrame сам відсіює незмінні кадри й тримає вікно/стелю).
+  useEffect(() => {
+    setRaidFrames((buf) => recordFrame(buf, threats, Date.now()));
+  }, [threats]);
+  // Під час перемотки карта показує кадр цього моменту; наживо — сам фід.
+  const mapThreats = useMemo(() => {
+    if (raidCursor === null) return threats;
+    const frame = frameAt(raidFrames, raidCursor);
+    return frame ? [...frame.threats] : threats;
+  }, [raidCursor, raidFrames, threats]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
   const frontline = feeds.frontline;
   const fires = feeds.fires;
@@ -1191,7 +1207,7 @@ function Console() {
                     edges={edges}
                     alerts={regions}
                     zones={zones}
-                    threats={threats}
+                    threats={mapThreats}
                     frontline={frontline}
                     showFrontline={showFrontline}
                     fires={fires}
@@ -1236,6 +1252,7 @@ function Console() {
               <PersonalThreatPanel threats={threats} weather={feeds.weather} />
               <HotOblasts threats={threats} />
 
+              <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
               <TimelinePlayer onCursor={setPlayCursor} />
               <MapLayers
                 layers={
