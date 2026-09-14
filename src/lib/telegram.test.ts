@@ -12,6 +12,7 @@ import {
   parseCallback,
   parseCommand,
   parseLayersArg,
+  parseLocation,
   publicCommands,
   purgeKeyboard,
   renderAdminPanel,
@@ -398,6 +399,46 @@ describe("перелік команд для меню Telegram", () => {
       expect(c.command).toMatch(/^[a-z_]+$/); // Telegram вимагає a-z0-9_
       expect(c.description.length).toBeGreaterThan(0);
       expect(c.description.length).toBeLessThanOrEqual(256);
+    }
+  });
+});
+
+describe("parseLocation", () => {
+  it("дістає точку з повідомлення без тексту", () => {
+    // Саме цей випадок раніше тихо відкидався: кнопка «надіслати точку» шле
+    // повідомлення БЕЗ поля text, а parseCommand вимагає рядка з «/».
+    expect(
+      parseLocation({
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 7 },
+          location: { latitude: 50.45, longitude: 30.52 },
+        },
+      }),
+    ).toEqual({ chatId: 42, userId: 7, chatType: "private", lat: 50.45, lon: 30.52 });
+  });
+
+  it("звичайна команда — не геолокація", () => {
+    expect(parseLocation({ message: { chat: { id: 1 }, text: "/my" } })).toBeNull();
+  });
+
+  it("координати поза межами глобуса відкидаються", () => {
+    expect(
+      parseLocation({
+        message: { chat: { id: 1 }, location: { latitude: 999, longitude: 30 } },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("перелік команд", () => {
+  it("персональний радар стоїть першим у меню — це головне, заради чого бот", () => {
+    expect(publicCommands()[0]!.command).toBe("my");
+  });
+  it("описи вкладаються в 256 символів, які дозволяє setMyCommands", () => {
+    for (const c of ownerCommands()) {
+      expect(c.description.length).toBeLessThanOrEqual(256);
+      expect(c.command).toMatch(/^[a-z0-9_]{1,32}$/);
     }
   });
 });

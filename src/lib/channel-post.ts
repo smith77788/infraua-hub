@@ -177,6 +177,63 @@ function tail(types: ReadonlySet<ThreatType>, seed: number): string {
   return pick(serious ? TAIL_SERIOUS : TAIL_LIGHT, seed);
 }
 
+/**
+ * Хештеги під постом.
+ *
+ * Не прикраса. Telegram шукає по хештегах усередині каналу й індексує їх у
+ * глобальному пошуку — тобто людина, яка вперше в житті шукає «#Сумщина», може
+ * знайти цей канал, ніколи про нього не чувши. Це єдиний безкоштовний спосіб
+ * потрапити в чужий пошук, і він коштує нам один рядок.
+ *
+ * Тег складається лише з літер: Telegram обриває хештег на першому ж не-літері,
+ * тож «#м. Київ» став би «#м» — марним тегом, який ще й ламає пошук.
+ */
+const TYPE_TAG: Partial<Record<ThreatType, string>> = {
+  shahed: "шахеди",
+  reactive: "шахеди",
+  cruise: "ракети",
+  missile: "ракети",
+  ballistic: "балістика",
+  kab: "КАБ",
+};
+
+export function hashtags(oblasts: readonly string[], types: ReadonlySet<ThreatType>): string {
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const clean = raw.replace(/[^\p{L}\p{N}]/gu, "");
+    if (clean.length < 3 || seen.has(clean)) return;
+    seen.add(clean);
+    tags.push(`#${clean}`);
+  };
+  // Області йдуть першими: саме їх шукають («що в мене в області»).
+  for (const o of oblasts.slice(0, 6)) push(o);
+  for (const t of types) {
+    const tag = TYPE_TAG[t];
+    if (tag) push(tag);
+  }
+  push("повітрянатривога");
+  return tags.join(" ");
+}
+
+/**
+ * Кнопки під постом каналу — місток «читач каналу → власний радар».
+ *
+ * Канал відповідає на «що в небі над країною»; людині потрібне «чи летить це
+ * на мене». Кнопка під кожним постом веде саме туди, і — головне — вона
+ * їде разом із пересланим постом: хто б куди не переслав зведення, кнопка
+ * лишається робочою. Це і є та петля, заради якої все інше.
+ */
+export function channelKeyboard(
+  botLink: string | null,
+  mapUrl: string | null,
+): { inline_keyboard: { text: string; url: string }[][] } | undefined {
+  const row: { text: string; url: string }[] = [];
+  if (botLink) row.push({ text: "🎯 Чи летить на мене?", url: botLink });
+  if (mapUrl) row.push({ text: "🗺 Карта", url: mapUrl });
+  return row.length ? { inline_keyboard: [row] } : undefined;
+}
+
 /** Структурований зріз обстановки — область → тип → кількість ОБ'ЄКТІВ. */
 export interface AirSnapshot {
   oblasts: Record<string, Partial<Record<ThreatType, number>>>;
@@ -255,6 +312,8 @@ export interface ChannelPost {
   snapshot: AirSnapshot;
   /** Чи змінилось суттєво від previous — сигнал постити чи промовчати. */
   material: boolean;
+  /** Рядок хештегів, уже вкладений у текст (порожній — тегувати не було чим). */
+  hashtags: string;
 }
 
 interface Group {
@@ -271,7 +330,12 @@ interface Group {
  */
 export function renderChannelPost(
   threats: readonly Threat[],
-  opts: { previous?: AirSnapshot | undefined; maxOblasts?: number } = {},
+  opts: {
+    previous?: AirSnapshot | undefined;
+    maxOblasts?: number;
+    /** Рядок прогнозу («за курсом далі…») — готує channel-wave. */
+    forecast?: string | null;
+  } = {},
 ): ChannelPost | null {
   if (!threats.length) return null;
   const maxOblasts = opts.maxOblasts ?? 12;
@@ -344,16 +408,22 @@ export function renderChannelPost(
   const targets = threats.length;
   const signature = sigParts.sort().join("|");
   const seed = seedFrom(signature);
+  const tags = hashtags(
+    ordered.map((g) => g.oblast),
+    allTypes,
+  );
   const lines = [
     headline(allTypes, shaheds, seed),
     ...(deltaLine ? ["", deltaLine] : []),
     "",
     ...bodyLines,
+    ...(opts.forecast ? ["", opts.forecast] : []),
     "",
     `<i>всього в небі: ${targets} · за даними OSINT · ${tail(allTypes, seed)}</i>`,
+    ...(tags ? [tags] : []),
   ];
 
-  return { text: lines.join("\n"), signature, targets, snapshot, material };
+  return { text: lines.join("\n"), signature, targets, snapshot, material, hashtags: tags };
 }
 
 function total(m: Map<ThreatType, number>): number {
