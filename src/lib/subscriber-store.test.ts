@@ -128,3 +128,29 @@ describe("кола", () => {
     expect(await joinCircle("ZZZZZZ", 9)).toBeNull();
   });
 });
+
+describe("негайний запис", () => {
+  it("поява підписника не чекає на відкладений запис", async () => {
+    // Вікно між дотиком і записом стирав редеплой: людина задала точку, за
+    // хвилину бот про неї не знав. `/stats` показував «Усього: 0» посеред
+    // активного користування.
+    await ensureSubscriber(1, "2026-01-01T00:00:00Z");
+    resetStoreForTests();
+    expect((await allSubscribers()).map((s) => s.chatId)).toEqual([1]);
+  });
+
+  it("нова точка пишеться негайно, без очікування", async () => {
+    const { sub } = await ensureSubscriber(2, "2026-01-01T00:00:00Z");
+    await putSubscriber({ ...sub, point: { lat: 50, lon: 30, label: "дім" } }, true);
+    resetStoreForTests();
+    expect((await allSubscribers())[0]?.point?.label).toBe("дім");
+  });
+
+  it("службові зміни лишаються відкладеними — інакше обхід переписував би файл сотні разів", async () => {
+    const { sub } = await ensureSubscriber(3, "2026-01-01T00:00:00Z");
+    await putSubscriber({ ...sub, lastAlertAt: 123 });
+    resetStoreForTests();
+    // Створення вже записалось негайно, а службова зміна — ще ні.
+    expect((await allSubscribers())[0]?.lastAlertAt).toBe(0);
+  });
+});

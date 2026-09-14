@@ -249,9 +249,24 @@ export interface PersonalThreat {
 
 export interface PersonalAssessment {
   point: { lat: number; lon: number };
+  /**
+   * Найближчі цілі **в межах радіуса**.
+   *
+   * Радіус тут не косметика. Без нього сюди потрапляли цілі за 600–700 км —
+   * тобто над іншою країною — і кожна, чий курс випадково дивився в бік точки,
+   * підписувалась «іде на вас, ~240 хв». Особистий радар, який о третій ночі
+   * каже таке, не просто марний: він навчає не вірити, і справжнє сповіщення
+   * потім теж прочитають як шум.
+   */
   nearest: PersonalThreat[];
   inboundCount: number;
   minutesToNearest: number | null;
+  /**
+   * Відстань до найближчої цілі ПОЗА радіусом, км. `null` — поза радіусом
+   * порожньо теж. Потрібне, щоб «у радіусі нічого» не читалось як «у країні
+   * нічого»: різниця між тишею і далеким рухом варта одного рядка.
+   */
+  nearestBeyondKm: number | null;
   sky: SkyState;
 }
 
@@ -293,12 +308,18 @@ export function personalAssessment(
   });
 
   const inboundList = scored.filter((s) => s.inbound && s.distanceKm <= radiusKm);
-  const nearest = [...scored]
+  // Радіус застосовується й до переліку, а не лише до лічильника вхідних.
+  // Раніше `nearest` бралося з УСІХ цілей країни, і картка показувала те, що
+  // за сотні кілометрів, поруч із тим, що за двадцять.
+  const inside = scored.filter((s) => s.distanceKm <= radiusKm);
+  const nearest = [...inside]
     .sort((a, b) => {
       if (a.inbound !== b.inbound) return a.inbound ? -1 : 1;
       return a.distanceKm - b.distanceKm;
     })
     .slice(0, limit);
+  const beyond = scored.filter((s) => s.distanceKm > radiusKm);
+  const nearestBeyondKm = beyond.length ? Math.min(...beyond.map((s) => s.distanceKm)) : null;
   const minutesToNearest = inboundList.length
     ? Math.min(...inboundList.map((s) => s.etaMin ?? Infinity))
     : null;
@@ -308,6 +329,7 @@ export function personalAssessment(
     nearest,
     inboundCount: inboundList.length,
     minutesToNearest: minutesToNearest === Infinity ? null : minutesToNearest,
+    nearestBeyondKm,
     sky: skyState(threats, point, radiusKm),
   };
 }
