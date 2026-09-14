@@ -217,6 +217,43 @@ export function renderHelp(consoleUrl: string): string {
   ].join("\n");
 }
 
+/**
+ * Типи оновлень, без яких бот німий у половині своїх можливостей.
+ *
+ * `message` — команди й геолокація; `edited_message` — оновлення ЖИВОЇ
+ * геолокації (Telegram переписує те саме повідомлення); `callback_query` —
+ * усі кнопки; `inline_query` — робота в чужих чатах.
+ */
+export const WEBHOOK_UPDATES = [
+  "message",
+  "edited_message",
+  "callback_query",
+  "inline_query",
+] as const;
+
+/**
+ * Чи підписаний уже зареєстрований вебхук на все, що нам потрібно.
+ *
+ * Це виправлення тихої поломки, яка коштувала двох готових можливостей.
+ * Самозцілення вебхука звіряло ЛИШЕ адресу: якщо вона збігалася, `setWebhook`
+ * не викликався ніколи — а разом із ним не оновлювався й перелік типів. Тому
+ * бот, зареєстрований колись на `["message","callback_query"]`, після
+ * додавання inline-режиму та живої геолокації не отримував ні `inline_query`,
+ * ні `edited_message` — і жодної помилки при цьому не було: Telegram просто
+ * не доставляв те, на що ніхто не підписувався.
+ *
+ * Відсутнє поле означає усталений набір Telegram (усе, крім кількох типів про
+ * учасників чату) — він ширший за наш, тож це «все гаразд», а не «нічого
+ * немає». Прирівняти одне до одного означало б переоформлювати вебхук на
+ * кожному старті процесу.
+ */
+export function webhookUpdatesOk(current: unknown): boolean {
+  if (current === undefined || current === null) return true;
+  if (!Array.isArray(current)) return false;
+  const have = new Set(current.map((v) => String(v)));
+  return WEBHOOK_UPDATES.every((u) => have.has(u));
+}
+
 /** Відповідь на невідому команду. Мовчати — гірше: виглядає як поломка. */
 export function renderUnknown(command: string): string {
   return `Не знаю команди <code>/${escapeHtml(command)}</code>. Спробуйте /help`;

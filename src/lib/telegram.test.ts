@@ -13,6 +13,8 @@ import {
   parseCommand,
   parseLayersArg,
   parseLocation,
+  webhookUpdatesOk,
+  WEBHOOK_UPDATES,
   publicCommands,
   purgeKeyboard,
   renderAdminPanel,
@@ -478,5 +480,34 @@ describe("жива геолокація", () => {
 
   it("редаговане повідомлення БЕЗ геолокації не вважається точкою", () => {
     expect(parseLocation({ edited_message: { chat: { id: 1 }, text: "виправив" } })).toBeNull();
+  });
+});
+
+describe("webhookUpdatesOk", () => {
+  it("старий перелік без inline_query і edited_message треба переоформити", () => {
+    // Саме через це inline-режим і жива геолокація були мертві в продакшні:
+    // самозцілення звіряло лише адресу вебхука, тож бот лишався підписаним на
+    // набір, з яким його зареєстрували вперше, і Telegram мовчки не доставляв
+    // решту — без жодної помилки.
+    expect(webhookUpdatesOk(["message", "callback_query"])).toBe(false);
+  });
+
+  it("повний перелік переоформлювати не треба", () => {
+    expect(webhookUpdatesOk([...WEBHOOK_UPDATES])).toBe(true);
+  });
+
+  it("ширший перелік теж годиться", () => {
+    expect(webhookUpdatesOk([...WEBHOOK_UPDATES, "poll"])).toBe(true);
+  });
+
+  it("відсутнє поле — це усталене Telegram, ширше за наш перелік", () => {
+    // Прирівняти його до «нічого немає» означало б переоформлювати вебхук на
+    // кожному старті процесу.
+    expect(webhookUpdatesOk(undefined)).toBe(true);
+    expect(webhookUpdatesOk(null)).toBe(true);
+  });
+
+  it("сміття замість переліку — краще переоформити", () => {
+    expect(webhookUpdatesOk("message")).toBe(false);
   });
 });

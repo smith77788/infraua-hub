@@ -13,6 +13,16 @@ import {
   type WindowSide,
 } from "@/lib/advisory";
 import { newInboundIds, notify, playBeep, vibrate } from "@/lib/alarm";
+import {
+  locationErrorText,
+  requestBrowserLocation,
+  requestTelegramLocation,
+  type LocationOutcome,
+  type TelegramWebApp,
+} from "@/lib/telegram-webapp";
+
+/** Причина, з якої точку не вдалося дізнатись. */
+type LocationFailure = Extract<LocationOutcome, { ok: false }>["reason"];
 
 /*
  * «Я тут» — обстановка для точки користувача.
@@ -111,7 +121,8 @@ export default function PersonalThreatPanel({
   const [point, setPoint] = useState<Point | null>(null);
   const [side, setSide] = useState<WindowSide | "">("");
   const [locating, setLocating] = useState(false);
-  const [geoError, setGeoError] = useState(false);
+  const [geoError, setGeoError] = useState<LocationFailure | null>(null);
+  const [canOpenSettings, setCanOpenSettings] = useState(false);
   const [sound, setSound] = useState(false);
   const audioRef = useRef<AudioContext | null>(null);
   const prevInboundRef = useRef<string[]>([]);
@@ -147,24 +158,45 @@ export default function PersonalThreatPanel({
     }
   }
 
-  function locate() {
-    setGeoError(false);
-    if (!navigator.geolocation) {
-      setGeoError(true);
+  /**
+   * Визначення точки — спершу через Telegram, і лише потім через браузер.
+   *
+   * Порядок саме такий, бо всередині вікна Telegram `navigator.geolocation`
+   * НЕ ПРАЦЮЄ: у власному WebView немає браузерного діалогу дозволу, тож
+   * виклик мовчки відхиляється, а часом не кличе жодного зворотного виклику
+   * взагалі. Саме це й виглядало як «натиснув кнопку — нічого не сталося»:
+   * ні точки, ні помилки, ні пояснення, а кнопка лишалась у стані «визначення…»
+   * до перезавантаження сторінки.
+   */
+  async function locate() {
+    setGeoError(null);
+    setLocating(true);
+    const webApp = (window as unknown as { Telegram?: { WebApp?: TelegramWebApp } }).Telegram
+      ?.WebApp;
+    const manager = webApp?.LocationManager;
+
+    let outcome = await requestTelegramLocation(manager);
+    // Поза Telegram (звичайна вкладка) менеджера немає — там питає браузер.
+    if (!outcome.ok && outcome.reason === "unsupported") {
+      outcome = await requestBrowserLocation(navigator.geolocation);
+    }
+
+    setLocating(false);
+    if (outcome.ok) {
+      persistPoint({ lat: outcome.lat, lon: outcome.lon });
       return;
     }
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocating(false);
-        persistPoint({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-      },
-      () => {
-        setLocating(false);
-        setGeoError(true);
-      },
-      { timeout: 8000, maximumAge: 60000 },
-    );
+    // Показуємо ПРИЧИНУ: «доступ закрито» і «пристрій не дає координат» —
+    // це різні дії людини, і спільне «не вдалося» не підказує жодної.
+    setGeoError(outcome.reason);
+    setCanOpenSettings(outcome.reason === "denied" && typeof manager?.openSettings === "function");
+  }
+
+  /** Відкриває налаштування доступу Telegram — лише у відповідь на дотик. */
+  function openLocationSettings() {
+    const webApp = (window as unknown as { Telegram?: { WebApp?: TelegramWebApp } }).Telegram
+      ?.WebApp;
+    webApp?.LocationManager?.openSettings?.();
   }
 
   const assessment = useMemo(
@@ -294,9 +326,20 @@ export default function PersonalThreatPanel({
             {locating ? "визначення…" : "Визначити за геолокацією"}
           </button>
           {geoError ? (
-            <p className="font-mono text-[9px] leading-relaxed text-muted-foreground">
-              Доступ до геолокації закрито. Оберіть місто:
-            </p>
+            <>
+              <p className="font-mono text-[9px] leading-relaxed text-muted-foreground">
+                {locationErrorText(geoError)}
+              </p>
+              {canOpenSettings ? (
+                <button
+                  type="button"
+                  onClick={openLocationSettings}
+                  className="w-full rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-amber-300 hover:border-amber-400"
+                >
+                  Відкрити налаштування доступу
+                </button>
+              ) : null}
+            </>
           ) : null}
           <select
             className="w-full rounded border border-border bg-card px-1.5 py-1 font-mono text-[10px] text-foreground"

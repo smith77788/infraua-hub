@@ -17,6 +17,8 @@ import {
   parseCommand,
   parseLayersArg,
   parseLocation,
+  webhookUpdatesOk,
+  WEBHOOK_UPDATES,
   publicCommands,
   renderHelp,
   renderNoPlatform,
@@ -1130,6 +1132,10 @@ async function savePoint(
       ? renderPointSaved(label, updated.radiusKm) +
           "\n\n📍 <b>Точка жива</b> — вона їде за вами, поки Telegram ділиться нею."
       : renderPointSaved(label, updated.radiusKm),
+    // Знімаємо клавіатуру запиту точки. Без цього кнопка «Надіслати мою точку»
+    // лишалась висіти внизу чату назавжди — навіть коли точку вже прийнято, і
+    // читалась як «не спрацювало, тисни ще».
+    { remove_keyboard: true },
   );
   const card = await personalCard(updated);
   if (card) await telegramSend(token, chatId, card.text, card.keyboard);
@@ -1411,13 +1417,15 @@ async function handlePersonalPress(
 
   if (action.kind === "refresh") {
     const card = await personalCard(updated);
-    await telegramEditMessage(
-      token,
-      press.chatId,
-      press.messageId,
-      card?.text ?? renderAskPoint(),
-      card ? card.keyboard : undefined,
-    );
+    if (!card) {
+      // Точки ще немає. Клавіатуру із запитом геолокації НЕМОЖЛИВО вкласти в
+      // редагування повідомлення — Telegram приймає там лише inline-кнопки.
+      // Раніше через це людина бачила «натисніть кнопку нижче» рівно без
+      // кнопки: сам текст ні на що не вказував, і далі йти не було куди.
+      await telegramSend(token, press.chatId, renderAskPoint(), locationKeyboard("private"));
+      return true;
+    }
+    await telegramEditMessage(token, press.chatId, press.messageId, card.text, card.keyboard);
     return true;
   }
 
@@ -2116,7 +2124,7 @@ async function registerWebhook(token: string, secret: string | undefined, reques
     body: JSON.stringify({
       url: hookUrl,
       ...(secret ? { secret_token: secret } : {}),
-      allowed_updates: ["message", "edited_message", "callback_query", "inline_query"],
+      allowed_updates: [...WEBHOOK_UPDATES],
       drop_pending_updates: true,
     }),
   });
@@ -2133,6 +2141,9 @@ async function registerWebhook(token: string, secret: string | undefined, reques
     telegram: {
       url: result["url"],
       pendingUpdates: result["pending_update_count"],
+      // Видно в /setup і /repair: саме через цей перелік бот може мовчати на
+      // цілий клас оновлень, не повідомляючи про жодну помилку.
+      allowedUpdates: result["allowed_updates"] ?? "(усталене Telegram)",
       lastError: result["last_error_message"] ?? null,
       lastErrorAt: result["last_error_date"] ?? null,
     },
@@ -2224,21 +2235,29 @@ async function ensureWebhook(request: Request): Promise<void> {
   const target = `${origin}/api/telegram/webhook`;
   try {
     const info = await fetch(`${TELEGRAM_API}/bot${token}/getWebhookInfo`).then((r) => r.json());
-    const current = (info as { result?: { url?: string } } | null)?.result?.url ?? "";
+    const result = (info as { result?: { url?: string; allowed_updates?: unknown } } | null)
+      ?.result;
+    const current = result?.url ?? "";
     // Команди реєструємо навіть коли вебхук уже на місці: перелік міг
     // зʼявитися (ця функція) вже після того, як вебхук став правильним, тож
     // прив'язувати їх до зміни адреси не можна — інакше /admin так і не
     // зʼявиться в меню на вже налаштованому боті.
     void setBotCommands(token, process.env["TELEGRAM_OWNER_ID"]);
-    if (current === target) return; // адреса вже там — лишається тільки команди вище
+    // Звіряємо НЕ ЛИШЕ адресу, а й перелік типів оновлень. Збіг самої адреси
+    // раніше означав «нічого не робимо» — і бот роками лишався підписаним на
+    // той набір, з яким його зареєстрували вперше.
+    if (current === target && webhookUpdatesOk(result?.allowed_updates)) return;
     await fetch(`${TELEGRAM_API}/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         url: target,
         ...(secret ? { secret_token: secret } : {}),
-        allowed_updates: ["message", "edited_message", "callback_query", "inline_query"],
-        drop_pending_updates: true,
+        allowed_updates: [...WEBHOOK_UPDATES],
+        // Не скидаємо чергу: сюди ми потрапляємо й тоді, коли адреса вже
+        // правильна, а бракує лише типів оновлень. Викинути в цей момент усе,
+        // що люди написали, поки сервіс перезапускався, — не полагодити, а
+        // додати другу поломку.
       }),
     });
   } catch (error) {
