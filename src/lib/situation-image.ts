@@ -54,9 +54,15 @@ const COLOR: Record<ThreatType, string> = {
 // Дельтакрилий силует дрона навколо початку координат, вістрям на північ.
 const DRONE = "M0,-9 L8,7.5 L0,3.5 L-8,7.5 Z";
 
+type Proj = (lat: number, lon: number) => [number, number];
+
 function marker(t: Threat): string {
+  return markerWith(t, project);
+}
+
+function markerWith(t: Threat, proj: Proj): string {
   const type: ThreatType = t.type ?? "unknown";
-  const [x, y] = project(t.lat, t.lon);
+  const [x, y] = proj(t.lat, t.lon);
   const color = COLOR[type];
   const glow = `<circle cx="${x}" cy="${y}" r="11" fill="${color}" opacity="0.28"/>`;
   const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
@@ -138,6 +144,91 @@ export async function renderSituationPng(threats: readonly Threat[]): Promise<Bu
     return png;
   } catch (err) {
     console.error("situation image failed", err);
+    return null;
+  }
+}
+
+/**
+ * Зумована локальна карта навколо міста — для поста «ціль підходить до X».
+ *
+ * Власна проєкція на квадрат радіусом radiusKm довкола центра; ті самі позначки
+ * цілей (лише ті, що у в'юпорті), межі областей і приціл на самому місті. Чиста
+ * функція, як і situationSvg.
+ */
+const ZW = 800;
+export function situationSvgZoom(
+  threats: readonly Threat[],
+  center: { lat: number; lon: number },
+  radiusKm = 70,
+): string {
+  const dLat = radiusKm / 111.32;
+  const dLon = radiusKm / (111.32 * Math.cos((center.lat * Math.PI) / 180));
+  const latMin = center.lat - dLat;
+  const latMax = center.lat + dLat;
+  const lonMin = center.lon - dLon;
+  const kk = Math.cos((center.lat * Math.PI) / 180);
+  const worldW = 2 * dLon * kk;
+  const scale = ZW / worldW;
+  const zh = Math.round(2 * dLat * scale);
+  const pr: Proj = (lat, lon) => [
+    Math.round((lon - lonMin) * kk * scale * 10) / 10,
+    Math.round((latMax - lat) * scale * 10) / 10,
+  ];
+  const inView = (lat: number, lon: number) =>
+    lat >= latMin - 0.3 &&
+    lat <= latMax + 0.3 &&
+    lon >= lonMin - 0.4 &&
+    lon <= lonMin + 2 * dLon + 0.4;
+
+  const borders = UA_OBLASTS.map((ring) => {
+    return (
+      ring
+        .map(([lat, lon], i) => {
+          const [x, y] = pr(lat, lon);
+          return `${i === 0 ? "M" : "L"}${x},${y}`;
+        })
+        .join(" ") + " Z"
+    );
+  }).join(" ");
+
+  const markers = threats
+    .filter((t) => inView(t.lat, t.lon))
+    .map((t) => markerWith(t, pr))
+    .join("");
+
+  const [cx, cy] = pr(center.lat, center.lon);
+  const crosshair =
+    `<circle cx="${cx}" cy="${cy}" r="9" fill="none" stroke="#67e8f9" stroke-width="1.6"/>` +
+    `<line x1="${cx - 13}" y1="${cy}" x2="${cx + 13}" y2="${cy}" stroke="#67e8f9" stroke-width="1.2"/>` +
+    `<line x1="${cx}" y1="${cy - 13}" x2="${cx}" y2="${cy + 13}" stroke="#67e8f9" stroke-width="1.2"/>`;
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +
+    `<rect width="${ZW}" height="${zh}" fill="#0b0f16"/>` +
+    `<path d="${borders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
+    crosshair +
+    markers +
+    `</svg>`
+  );
+}
+
+/** Растеризує зумовану карту в PNG; null за будь-якої похибки (як renderSituationPng). */
+export async function renderZoomPng(
+  threats: readonly Threat[],
+  center: { lat: number; lon: number },
+  radiusKm = 70,
+): Promise<Buffer | null> {
+  try {
+    const mod = "@resvg/resvg-js";
+    const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
+    return new Resvg(situationSvgZoom(threats, center, radiusKm), {
+      background: "#0b0f16",
+      fitTo: { mode: "width", value: ZW },
+    })
+      .render()
+      .asPng();
+  } catch (err) {
+    console.error("zoom image failed", err);
     return null;
   }
 }
