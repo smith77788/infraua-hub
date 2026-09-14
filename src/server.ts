@@ -51,6 +51,8 @@ import { inlineResults, matchOblast, parseInlineQuery } from "./lib/bot-inline";
 import {
   locationKeyboard,
   parsePersonalAction,
+  preciseButton,
+  renderOblastPicked,
   soundKeyboard,
   renderAlert,
   renderAskPoint,
@@ -78,6 +80,7 @@ import {
   type WaveState,
 } from "./lib/channel-wave";
 import { kyivDate, kyivHour } from "./lib/kyiv";
+import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
 import {
   canReport,
   corroborate,
@@ -218,6 +221,7 @@ async function webhookStatus(): Promise<Record<string, unknown>> {
     const hasUrl = typeof r["url"] === "string" && (r["url"] as string).length > 0;
     return {
       registered: hasUrl,
+      url: r["url"] ?? null,
       // Чи веде вебхук на цей самий сервіс (порівнюємо лише хост, не шлях).
       pendingUpdates: r["pending_update_count"] ?? 0,
       lastError: r["last_error_message"] ?? null,
@@ -1186,7 +1190,7 @@ async function personalCommand(
     if (created && sub.point === null && chatType === "private") {
       // Нового вітаємо не текстом про систему, а проханням точки: цінність
       // бота починається рівно там, і зайвий крок між ними коштує підписника.
-      return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
+      return { text: renderAskPoint(), keyboard: askPointKeyboard() };
     }
     return null; // далі спрацює звичайний renderStart
   }
@@ -1210,7 +1214,7 @@ async function personalCommand(
     const resumed = sub.muted ? { ...sub, muted: false } : sub;
     if (sub.muted) await putSubscriber(resumed);
     const card = await personalCard(resumed);
-    if (!card) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
+    if (!card) return { text: renderAskPoint(), keyboard: askPointKeyboard() };
     return {
       text: sub.muted ? `🔔 Сповіщення знову увімкнені.\n\n${card.text}` : card.text,
       keyboard: card.keyboard,
@@ -1335,6 +1339,53 @@ async function circleCommand(
   return { text: view ?? renderCircleHelp() };
 }
 
+/**
+ * Клавіатура прохання точки.
+ *
+ * ІНЛАЙН, а не reply з `request_location`. Причина в тому, що reply-кнопка
+ * запиту місця показується на всіх клієнтах, але на компʼютері натискання не
+ * робить нічого — джерела координат там немає. Єдина видима кнопка, яка на
+ * половині пристроїв мовчки не працює, — це не «менш зручно», це глухий кут.
+ *
+ * Тому основним шляхом стали області (працюють скрізь, без дозволів), а запит
+ * геолокації сховано за кнопкою «Точніше»: хто її натисне, отримає окремим
+ * повідомленням reply-клавіатуру — там, де вона взагалі щось робить.
+ */
+function askPointKeyboard(): { inline_keyboard: { text: string; callback_data: string }[][] } {
+  return oblastKeyboard(0, [preciseButton()]);
+}
+
+/** Натискання кнопок вибору області. `false` — кнопка не наша. */
+async function handlePickerPress(
+  token: string,
+  press: NonNullable<ReturnType<typeof parseCallback>>,
+): Promise<boolean> {
+  const action = parsePickerAction(press.data);
+  if (!action) return false;
+  if (press.chatId < 0) {
+    await telegramAnswerCallback(token, press.callbackId, "Радар працює в особистому чаті");
+    return true;
+  }
+
+  if (action.kind === "page") {
+    await telegramAnswerCallback(token, press.callbackId, "");
+    await telegramEditMessage(
+      token,
+      press.chatId,
+      press.messageId,
+      renderAskPoint(),
+      oblastKeyboard(action.page, [preciseButton()]),
+    );
+    return true;
+  }
+
+  const { oblast } = action;
+  await telegramAnswerCallback(token, press.callbackId, oblast.name);
+  await telegramEditMessage(token, press.chatId, press.messageId, renderOblastPicked(oblast.name));
+  await savePoint(token, press.chatId, oblast.lat, oblast.lon, `${oblast.name} (центр області)`);
+  return true;
+}
+
 /** Натискання кнопок персонального радара. `false` — кнопка не наша. */
 async function handlePersonalPress(
   token: string,
@@ -1350,6 +1401,26 @@ async function handlePersonalPress(
   }
 
   const { sub } = await ensureSubscriber(press.chatId, new Date().toISOString());
+
+  // «Точніше» — окремим повідомленням, бо reply-клавіатуру з запитом місця
+  // НЕМОЖЛИВО вкласти в редагування: Telegram приймає там лише inline-кнопки.
+  if (action.kind === "wantGeo") {
+    await telegramAnswerCallback(token, press.callbackId, "Надішліть геолокацію");
+    await telegramSend(
+      token,
+      press.chatId,
+      [
+        "📍 <b>Точна точка</b>",
+        "",
+        "📱 <b>Телефон</b> — кнопка «Надіслати мою точку» внизу екрана.",
+        "💻 <b>Компʼютер</b> — кнопка внизу там не працює (джерела координат немає). Зробіть так: 📎 → <b>Локація</b> → вибрати точку на карті → надіслати.",
+        "",
+        "<i>Можна надіслати й живу геолокацію — тоді точка їхатиме за вами.</i>",
+      ].join("\n"),
+      locationKeyboard("private"),
+    );
+    return true;
+  }
 
   // Меню «що чути» — окремою гілкою: воно лише перемальовує клавіатуру.
   if (action.kind === "soundMenu") {
@@ -1418,11 +1489,15 @@ async function handlePersonalPress(
   if (action.kind === "refresh") {
     const card = await personalCard(updated);
     if (!card) {
-      // Точки ще немає. Клавіатуру із запитом геолокації НЕМОЖЛИВО вкласти в
-      // редагування повідомлення — Telegram приймає там лише inline-кнопки.
-      // Раніше через це людина бачила «натисніть кнопку нижче» рівно без
-      // кнопки: сам текст ні на що не вказував, і далі йти не було куди.
-      await telegramSend(token, press.chatId, renderAskPoint(), locationKeyboard("private"));
+      // Точки ще немає. Вибір області — inline, тож його МОЖНА вкласти в
+      // редагування: саме тому він і став основним шляхом.
+      await telegramEditMessage(
+        token,
+        press.chatId,
+        press.messageId,
+        renderAskPoint(),
+        askPointKeyboard(),
+      );
       return true;
     }
     await telegramEditMessage(token, press.chatId, press.messageId, card.text, card.keyboard);
@@ -1721,6 +1796,14 @@ async function adminCommand(
   // обваленого лічильника через тиждень.
   if (parsed.command === "stats") {
     const st = await subscriberStats();
+    // Стан вебхука — прямо тут. Саме через нього бот може мовчати на цілий
+    // клас оновлень, не повідомляючи про жодну помилку, і перевіряти це з
+    // телефона має бути можна без секрету в адресному рядку.
+    const hook = await webhookStatus();
+    const updates = hook["allowedUpdates"];
+    const missing = Array.isArray(updates)
+      ? WEBHOOK_UPDATES.filter((u) => !updates.map(String).includes(u))
+      : [];
     return {
       text: [
         "📈 <b>Підписники персонального радара</b>",
@@ -1733,6 +1816,21 @@ async function adminCommand(
           ? `Сховище: <b>постійний том</b> (<code>${escapeHtml(st.path)}</code>)`
           : `⚠️ Сховище: <b>ефемерне</b> (<code>${escapeHtml(st.path)}</code>) — підписки не переживуть редеплой. Задайте <code>BOT_DATA_DIR</code> на постійному томі.`,
         ...(st.lastError ? ["", `Остання помилка запису: ${escapeHtml(st.lastError)}`] : []),
+        "",
+        "🔌 <b>Вебхук</b>",
+        `Адреса: <code>${escapeHtml(String(hook["url"] ?? "—"))}</code>`,
+        `Типи оновлень: <code>${escapeHtml(
+          Array.isArray(updates) ? updates.join(", ") : String(updates ?? "усталене Telegram"),
+        )}</code>`,
+        ...(missing.length
+          ? [
+              `⚠️ Бракує: <b>${missing.join(", ")}</b> — ці оновлення Telegram НЕ доставляє, і помилки при цьому немає.`,
+            ]
+          : []),
+        `У черзі: ${String(hook["pendingUpdates"] ?? 0)}`,
+        ...(hook["lastError"]
+          ? [`Остання помилка доставки: ${escapeHtml(String(hook["lastError"]))}`]
+          : []),
       ].join("\n"),
     };
   }
@@ -1997,9 +2095,11 @@ async function telegramWebhook(request: Request): Promise<Response> {
   // Натискання кнопки приходить окремим типом оновлення, не повідомленням.
   const press = parseCallback(update);
   if (press) {
-    // Наборів кнопок тепер два. Персональні перевіряються першими, бо їх
-    // тиснуть усі, а адмінські — одна людина.
-    if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+    // Наборів кнопок тепер три. Персональні й вибір області перевіряються
+    // першими, бо їх тиснуть усі, а адмінські — одна людина.
+    if (!(await handlePickerPress(token, press))) {
+      if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+    }
     return new Response("ok", { status: 200 });
   }
 
