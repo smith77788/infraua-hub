@@ -47,7 +47,8 @@ import {
   personalAssessment,
   verifyThreat,
 } from "./lib/advisory";
-import { inlineResults, matchOblast, parseInlineQuery } from "./lib/bot-inline";
+import { inlineResults, parseInlineQuery } from "./lib/bot-inline";
+import { matchPlace } from "./lib/places";
 import {
   locationKeyboard,
   parsePersonalAction,
@@ -1342,14 +1343,16 @@ async function personalCommand(
   if (command === "my" || command === "radar" || command === "me") {
     const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
 
-    const named = args.trim() ? matchOblast(args.trim()) : null;
+    const named = args.trim() ? matchPlace(args.trim()) : null;
     if (named) {
-      await savePoint(token, chatId, named.lat, named.lon, `${named.name} (центр області)`);
+      // Місто — точка сама по собі; область — лише центр, і це чесно кажемо.
+      const label = named.kind === "city" ? named.name : `${named.name} (центр області)`;
+      await savePoint(token, chatId, named.lat, named.lon, label);
       return "handled";
     }
     if (args.trim() && !named) {
       return {
-        text: "Не впізнав область. Напишіть, наприклад, <code>/my Харків</code> — або надішліть геолокацію кнопкою нижче: так точніше.",
+        text: "Не впізнав місто. Напишіть, наприклад, <code>/my Кременчук</code> чи <code>/my Харків</code> — або надішліть геолокацію кнопкою нижче: так найточніше.",
         keyboard: locationKeyboard(chatType),
       };
     }
@@ -2290,14 +2293,32 @@ async function telegramWebhook(request: Request): Promise<Response> {
       await telegramSend(token, location.chatId, gate.text, gate.keyboard);
       return new Response("ok", { status: 200 });
     }
-    await savePoint(
-      token,
-      location.chatId,
-      location.lat,
-      location.lon,
-      `моя точка · ${oblastOf(location.lat, location.lon)}`,
-      { livePeriod: location.livePeriod, isUpdate: location.isUpdate },
-    );
+    // Провал тут НЕ має лишати людину в тиші: зовнішній catch віддав би 200 і
+    // жодного слова, а для неї це виглядає як «поділився точкою — нічого не
+    // сталося». Тому будь-яку похибку ловимо тут і кажемо про неї прямо.
+    try {
+      await savePoint(
+        token,
+        location.chatId,
+        location.lat,
+        location.lon,
+        `моя точка · ${oblastOf(location.lat, location.lon)}`,
+        { livePeriod: location.livePeriod, isUpdate: location.isUpdate },
+      );
+    } catch (error) {
+      console.error("savePoint from location failed", error);
+      // Оновлення живої точки шле Telegram щохвилини — на його збій відповідати
+      // не варто (завалимо чат), а от разову спробу людини лишати без відповіді
+      // не можна.
+      if (!location.isUpdate) {
+        await telegramSend(
+          token,
+          location.chatId,
+          "Не вдалося зберегти точку зараз. Спробуйте ще раз, або оберіть область кнопками: /my",
+          { remove_keyboard: true },
+        );
+      }
+    }
     return new Response("ok", { status: 200 });
   }
 
