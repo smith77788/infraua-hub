@@ -255,6 +255,38 @@ export async function allSubscribers(): Promise<Subscriber[]> {
   return [...MEMORY.values()];
 }
 
+export async function allCircles(): Promise<Circle[]> {
+  await load();
+  return [...CIRCLES.values()];
+}
+
+/**
+ * Вставляє записи, яких ще немає. Повертає, скільки додалось.
+ *
+ * Саме вставка, а не заміна: відновлення з копії не має відкочувати того, хто
+ * встиг щось змінити вже після неї.
+ */
+export async function insertMissing(
+  subscribers: readonly Subscriber[],
+  circles: readonly Circle[],
+): Promise<{ subscribers: number; circles: number }> {
+  await load();
+  let subs = 0;
+  for (const sub of subscribers) {
+    if (MEMORY.has(sub.chatId)) continue;
+    MEMORY.set(sub.chatId, sub);
+    subs += 1;
+  }
+  let rings = 0;
+  for (const circle of circles) {
+    if (CIRCLES.has(circle.code)) continue;
+    CIRCLES.set(circle.code, circle);
+    rings += 1;
+  }
+  if (subs || rings) await scheduleFlush(true);
+  return { subscribers: subs, circles: rings };
+}
+
 /** Погашення коду запрошення: лічильник зростає в того, чий це код. */
 export async function creditInvite(code: string, invitee: number): Promise<boolean> {
   await load();

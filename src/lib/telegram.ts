@@ -20,6 +20,7 @@ export interface TelegramUpdate {
     from?: { id?: number; first_name?: string; username?: string };
     text?: string;
     location?: { latitude?: number; longitude?: number; live_period?: number };
+    document?: { file_id?: string; file_name?: string };
   };
   /**
    * Редаговане повідомлення. Саме ним Telegram шле оновлення ЖИВОЇ геолокації:
@@ -28,6 +29,28 @@ export interface TelegramUpdate {
    * на словах — і радар їхав би за людиною рівно нікуди.
    */
   edited_message?: TelegramUpdate["message"];
+}
+
+/** Надісланий боту файл — так власник повертає резервну копію підписників. */
+export interface DocumentMessage {
+  chatId: number;
+  userId: number | undefined;
+  fileId: string;
+  fileName: string;
+}
+
+export function parseDocument(update: unknown): DocumentMessage | null {
+  if (typeof update !== "object" || update === null) return null;
+  const message = (update as TelegramUpdate).message;
+  const chatId = message?.chat?.id;
+  const fileId = message?.document?.file_id;
+  if (typeof chatId !== "number" || typeof fileId !== "string") return null;
+  return {
+    chatId,
+    userId: message?.from?.id,
+    fileId,
+    fileName: message?.document?.file_name ?? "",
+  };
 }
 
 /** Точка, надіслана кнопкою «Надіслати мою точку» або вкладенням. */
@@ -293,6 +316,7 @@ export function adminCommands(): TgBotCommand[] {
     { command: "admin", description: "Панель власника з кнопками" },
     { command: "channel", description: "Автоканал: прев'ю; /channel post — надіслати" },
     { command: "stats", description: "Скільки підписників і чи переживуть вони редеплой" },
+    { command: "backup", description: "Надіслати копію підписників собі в чат" },
     { command: "layers", description: "Шари інфраструктури: on / off" },
     { command: "purge", description: "Прибрати завантажені обʼєкти з графа" },
   ];
