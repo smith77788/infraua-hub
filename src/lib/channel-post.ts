@@ -374,8 +374,22 @@ export function renderChannelPost(
   // Напрямок хвилі рою — «куди зміщується маса, які області на черзі».
   // Даємо лише коли напрямок виражений (див. swarmForecast), інакше мовчимо.
   const wave = swarmForecast(threats, CITY_REFS);
+  /*
+   * Прогноз називає, на скількох спостережених курсах він стоїть.
+   *
+   * «Хвиля йде на північний захід, далі Полтавщина» звучить однаково впевнено
+   * і коли під ним дванадцять спостережених курсів, і коли три з дванадцяти, —
+   * а це різні за вагою твердження. Припущені курси в розрахунок уже не
+   * входять (див. swarmForecast), і коли їх відкинуто помітну частину, читач
+   * має право це знати, не питаючи.
+   */
   const waveLine =
-    wave && wave.next.length ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) : null;
+    wave && wave.next.length
+      ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) +
+        (wave.presumed > 0
+          ? ` (за ${wave.count} спостереженими курсами з ${wave.count + wave.presumed})`
+          : "")
+      : null;
 
   const tags = hashtags(
     ordered.map((g) => g.oblast),
