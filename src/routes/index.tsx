@@ -1453,11 +1453,28 @@ function Console() {
                         <span className="block font-mono text-[10px] text-muted-foreground">
                           {AIR_TYPE_LABEL[p.threat.type ?? "unknown"]} · {p.distanceKm} км · відхил.{" "}
                           {p.offAxisDeg}°
+                          {/*
+                            Коридор, побудований із припущеного курсу, — здогадка,
+                            підписана як розрахунок. Позначаємо це там само, де
+                            людина читає час, а не в довідці.
+                          */}
+                          {p.courseObserved ? "" : " · курс припущений"}
+                          {p.speedMeasured ? " · швидкість заміряна" : ""}
                         </span>
                       </span>
                       <span className="shrink-0 text-right font-mono">
                         <span className="block text-[13px] font-semibold text-red-300">
-                          {p.etaMin < 1 ? "<1" : `~${p.etaMin}`}
+                          {/*
+                            Вилка замість одного числа, коли вона широка: позиція
+                            цілі відома з точністю, яку називає саме джерело, і
+                            на швидкості шахеда сорок пʼять кілометрів — це
+                            чверть години різниці.
+                          */}
+                          {p.etaRangeMin[1] - p.etaRangeMin[0] >= 3
+                            ? `${p.etaRangeMin[0]}–${p.etaRangeMin[1]}`
+                            : p.etaMin < 1
+                              ? "<1"
+                              : `~${p.etaMin}`}
                         </span>
                         <span className="block text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
                           хв
