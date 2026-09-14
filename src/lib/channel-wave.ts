@@ -146,6 +146,15 @@ export interface WaveState {
   officialAlertSeen: boolean;
   /** Коли в живому пості вже сказали «цілей не бачимо, тривога триває». */
   quietNoticeAt: number | null;
+  /**
+   * Маршрут хвилі: області в порядку ПЕРШОЇ появи, з часом.
+   *
+   * Те, чого не дає жоден монітор. Уночі читач бачить десяток окремих постів
+   * і не може скласти з них рух: звідки зайшли, куди повернули, де були
+   * найдовше. Ці дані в нас проходять крізь пальці щотику — достатньо
+   * записати момент, коли область з'являється вперше.
+   */
+  route: { oblast: string; at: number }[];
 }
 
 export function beginWave(now: number): WaveState {
@@ -159,6 +168,7 @@ export function beginWave(now: number): WaveState {
     edits: 0,
     officialAlertSeen: false,
     quietNoticeAt: null,
+    route: [],
   };
 }
 
@@ -178,6 +188,15 @@ export function markOfficialAlert(state: WaveState, active: readonly string[]): 
 /** Вбирає черговий зріз у хвилю. Піки — саме максимуми, а не суми за час. */
 export function updateWave(state: WaveState, snapshot: AirSnapshot, now: number): WaveState {
   const oblasts = { ...state.oblasts };
+  const route = [...state.route];
+  const known = new Set(route.map((r) => r.oblast));
+  // Порядок появи — за спаданням кількості в цьому ж зрізі: якщо хвиля зайшла
+  // одразу в кілька областей, першою в маршруті стоїть та, де її більше.
+  const fresh = Object.entries(snapshot.oblasts)
+    .filter(([o]) => !known.has(o))
+    .map(([o, m]) => ({ o, n: Object.values(m).reduce((a: number, b) => a + (b ?? 0), 0) }))
+    .sort((a, b) => b.n - a.n);
+  for (const { o } of fresh) route.push({ oblast: o, at: now });
   const types: Partial<Record<ThreatType, number>> = { ...state.types };
   for (const [oblast, byType] of Object.entries(snapshot.oblasts)) {
     let sum = 0;
@@ -193,6 +212,7 @@ export function updateWave(state: WaveState, snapshot: AirSnapshot, now: number)
     peakTargets: Math.max(state.peakTargets, snapshot.targets),
     oblasts,
     types,
+    route,
   };
 }
 
@@ -248,6 +268,7 @@ export function renderAllClear(state: WaveState, endedAt: number): string {
     .map(([t, n]) => `${TYPE_PLURAL[t]} — до ${n}`);
 
   const regions = Object.keys(state.oblasts).length;
+  const route = renderRoute(state);
   return [
     // Заголовок мусить казати, ЧИЙ це відбій. «У небі чисто» читалося б як
     // наша власна оцінка — а саме її ціна тут і є питанням життя.
@@ -258,6 +279,7 @@ export function renderAllClear(state: WaveState, endedAt: number): string {
     ...(types.length ? ["", `Типи: ${types.join(", ")}`] : []),
     ...(top.length ? ["", "Найгарячіше було:"] : []),
     ...top.map(([name, n]) => `📍 <b>${name}</b> — до ${n} одночасно`),
+    ...(route ? ["", route] : []),
     "",
     "<i>відбій оголошено офіційно в усіх областях, яких торкалася хвиля. Тривога може повернутись — не вимикайте сповіщення.</i>",
   ].join("\n");
@@ -287,6 +309,28 @@ export function renderQuietHold(
     "<b>Це не відбій.</b> Відбій ми дамо лише після офіційного оголошення — " +
       "не виходьте з укриття за цим постом.",
   ].join("\n");
+}
+
+/**
+ * Маршрут хвилі одним рядком: «зайшли з Чернігівщини → Київщина (+35 хв) →
+ * Житомирщина (+1 год 12 хв)».
+ *
+ * Час подається ВІД ПОЧАТКУ хвилі, а не годинником: «+35 хв» читається і через
+ * тиждень, а «22:15» вимагає пам'ятати, коли все почалось.
+ *
+ * `null` — маршруту немає (одна область): стрілка в нікуди гірша за її
+ * відсутність.
+ */
+export function renderRoute(state: WaveState, max = 6): string | null {
+  if (state.route.length < 2) return null;
+  const shown = state.route.slice(0, max);
+  const parts = shown.map((r, i) =>
+    i === 0
+      ? `<b>${r.oblast}</b>`
+      : `<b>${r.oblast}</b> (+${formatDuration(r.at - state.startedAt)})`,
+  );
+  const rest = state.route.length - shown.length;
+  return `🛣 Шлях: ${parts.join(" → ")}${rest > 0 ? ` → …і ще ${rest}` : ""}`;
 }
 
 /* ─── 3. Підсумок доби ──────────────────────────────────────────────────── */

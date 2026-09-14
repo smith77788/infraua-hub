@@ -200,3 +200,74 @@ describe("channelKeyboard", () => {
     expect(channelKeyboard(null, null)).toBeUndefined();
   });
 });
+
+describe("англійська версія поста", () => {
+  const threats = [
+    threat({ lat: 50.91, lon: 34.8, type: "shahed", heading: 180, reports: 4 }),
+    threat({ lat: 50.9, lon: 34.7, type: "shahed", heading: 180, reports: 4 }),
+  ];
+
+  it("складається з тих самих чисел, а не перекладається з українського", () => {
+    const uk = renderChannelPost(threats)!;
+    const en = renderChannelPost(threats, { lang: "en" })!;
+    // Головна гарантія: англійський канал не може сказати іншу кількість.
+    expect(en.targets).toBe(uk.targets);
+    expect(en.signature).toBe(uk.signature);
+    expect(en.text).toContain("2 Shahed drones");
+    expect(en.text).toContain("2 in the air");
+  });
+
+  it("не лишає українських хвостів у тексті", () => {
+    const en = renderChannelPost(threats, { lang: "en" })!;
+    expect(en.text).not.toContain("шахед");
+    expect(en.text).not.toContain("курсом");
+    expect(en.text).not.toContain("OSINT · бережіть");
+  });
+
+  it("назви областей лишаються як є — це власні назви, а не переклад", () => {
+    const en = renderChannelPost(threats, { lang: "en" })!;
+    expect(en.text).toContain("Сумщина");
+  });
+
+  it("хештеги теж англійські — за ними шукає інша аудиторія", () => {
+    const en = renderChannelPost(threats, { lang: "en" })!;
+    expect(en.hashtags).toContain("#Shahed");
+    expect(en.hashtags).toContain("#Ukraine");
+  });
+});
+
+describe("рівень довіри в пості", () => {
+  it("область на одному непідтвердженому повідомленні позначена", () => {
+    const post = renderChannelPost([
+      threat({ lat: 50.91, lon: 34.8, type: "shahed", reports: 1, source: "невідомий" }),
+    ])!;
+    expect(post.text).toContain("❓ одне джерело");
+  });
+
+  it("підтверджене кількома каналами не позначається", () => {
+    const post = renderChannelPost([
+      threat({ lat: 50.91, lon: 34.8, type: "shahed", reports: 5, confidence: "high" }),
+    ])!;
+    expect(post.text).not.toContain("❓");
+  });
+
+  it("часткова слабкість не позначається — інакше позначка знеціниться", () => {
+    // «Частково непідтверджено» читач однаково прочитає як «непідтверджено».
+    const post = renderChannelPost([
+      threat({ lat: 50.91, lon: 34.8, type: "shahed", reports: 1 }),
+      threat({ lat: 50.9, lon: 34.7, type: "shahed", reports: 6, confidence: "high" }),
+    ])!;
+    expect(post.text).not.toContain("❓");
+  });
+});
+
+describe("канал не вживає слова «відбій» для власних спостережень", () => {
+  it("зникнення цілей над областю описується як «не бачимо», не як відбій", () => {
+    const before = renderChannelPost([threat({ lat: 50.91, lon: 34.8, type: "shahed" })])!;
+    const after = renderChannelPost([threat({ lat: 49.99, lon: 36.23, type: "shahed" })], {
+      previous: before.snapshot,
+    })!;
+    expect(after.text).toContain("цілей не бачимо");
+    expect(after.text).not.toContain("відбій");
+  });
+});

@@ -15,6 +15,7 @@ import {
   renderDigest,
   renderForecast,
   renderQuietHold,
+  renderRoute,
   updateWave,
   waveEnded,
 } from "./channel-wave";
@@ -198,5 +199,47 @@ describe("renderAllClear після офіційного оголошення", 
     const text = renderAllClear(w, 60 * 60 * 1000);
     expect(text).toContain("офіційно");
     expect(text).toContain("може повернутись");
+  });
+});
+
+describe("маршрут хвилі", () => {
+  it("області записуються в порядку першої появи", () => {
+    let w = beginWave(0);
+    w = updateWave(w, snap({ Чернігівщина: { shahed: 4 } }), 0);
+    w = updateWave(w, snap({ Чернігівщина: { shahed: 4 }, Київщина: { shahed: 2 } }), 35 * 60e3);
+    expect(w.route.map((r) => r.oblast)).toEqual(["Чернігівщина", "Київщина"]);
+  });
+
+  it("область, що з'явилась одного разу, не додається вдруге", () => {
+    let w = beginWave(0);
+    const s = snap({ Сумщина: { shahed: 3 } });
+    w = updateWave(w, s, 0);
+    w = updateWave(w, s, 60e3);
+    expect(w.route).toHaveLength(1);
+  });
+
+  it("час подається від початку хвилі, а не годинником", () => {
+    // «+35 хв» читається і через тиждень; «22:15» вимагає пам'ятати, коли все
+    // почалось.
+    let w = beginWave(0);
+    w = updateWave(w, snap({ Чернігівщина: { shahed: 4 } }), 0);
+    w = updateWave(w, snap({ Чернігівщина: { shahed: 4 }, Київщина: { shahed: 2 } }), 35 * 60e3);
+    const route = renderRoute(w)!;
+    expect(route).toContain("Чернігівщина");
+    expect(route).toContain("+35 хв");
+    expect(route).toContain("→");
+  });
+
+  it("одна область — маршруту немає: стрілка в нікуди гірша за її відсутність", () => {
+    let w = beginWave(0);
+    w = updateWave(w, snap({ Сумщина: { shahed: 3 } }), 0);
+    expect(renderRoute(w)).toBeNull();
+  });
+
+  it("маршрут потрапляє у зведення відбою", () => {
+    let w = beginWave(0);
+    w = updateWave(w, snap({ Чернігівщина: { shahed: 4 } }), 0);
+    w = updateWave(w, snap({ Київщина: { shahed: 2 } }), 30 * 60e3);
+    expect(renderAllClear(w, 60 * 60e3)).toContain("🛣 Шлях:");
   });
 });

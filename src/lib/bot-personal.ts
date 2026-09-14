@@ -18,6 +18,8 @@ import {
 } from "./advisory";
 import type { ThreatType } from "./air";
 import { escapeHtml } from "./telegram";
+import { preAlertFooter, preAlertHeader } from "./pre-alert";
+import type { SoundKind } from "./acoustic";
 import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
 
 const TYPE_NAME: Record<ThreatType, string> = {
@@ -77,7 +79,13 @@ export function renderPersonal(
    * не вірити, а зведений до «знято» — дав би фальшивий відбій. Обидва
    * спрощення шкідливі, тож невідоме лишається невідомим.
    */
-  opts: { officialAlert?: boolean | null } = {},
+  opts: {
+    officialAlert?: boolean | null;
+    /** Рядок «поруч чують» — готує acoustic.ts. */
+    heard?: string | null;
+    /** Чи їде точка за людиною (жива геолокація). */
+    live?: boolean;
+  } = {},
 ): string {
   // `??` тут був би помилкою: він зводить явний `null` («не знаємо») до
   // `false` («знято») — тобто рівно до того спрощення, якого ми уникаємо.
@@ -119,7 +127,15 @@ export function renderPersonal(
     for (const n of near) lines.push(threatLine(n));
   }
 
+  // Що чують люди навколо. Стоїть ПІСЛЯ цілей і окремим блоком, бо це інший
+  // клас знання: не спостереження джерел, а збіг свідчень сусідів.
+  if (opts.heard) {
+    lines.push("");
+    lines.push(opts.heard);
+  }
+
   lines.push("");
+  if (opts.live) lines.push("<i>📍 точка їде за вами — жива геолокація увімкнена</i>");
   lines.push(
     `<i>оцінка за даними OSINT, не радар · ${escapeHtml(danger.caveat.split(".")[0]!)}</i>`,
   );
@@ -136,11 +152,18 @@ export function renderAlert(
   assess: PersonalAssessment,
   danger: DangerIndex,
   placeLabel: string,
+  opts: {
+    /** Офіційної тривоги ще немає — ми попереджаємо раніше за сирену. */
+    pre?: boolean;
+    /** Наскільки цій цілі можна вірити (рядок готує advisory/verifyThreat). */
+    trust?: string | null;
+  } = {},
 ): string {
   const lead = assess.nearest.find((n) => n.inbound);
   const type = lead?.threat.type ?? "unknown";
-  const head =
-    danger.level === "shelter"
+  const head = opts.pre
+    ? preAlertHeader()
+    : danger.level === "shelter"
       ? "🔴 <b>В УКРИТТЯ</b>"
       : danger.level === "attention"
         ? "🟠 <b>Увага, ціль на вас</b>"
@@ -154,8 +177,14 @@ export function renderAlert(
     );
   }
   if (assess.inboundCount > 1) lines.push(`Усього на вашу точку: ${assess.inboundCount}`);
+  // Наскільки цьому вірити — у самому сповіщенні, а не в довідці. Людина, яку
+  // підняли о третій ночі, має бачити підставу відразу: «три незалежні канали»
+  // і «одне непідтверджене повідомлення» — це різні рішення.
+  if (opts.trust) lines.push(`<i>${escapeHtml(opts.trust)}</i>`);
   lines.push("");
-  lines.push("<i>за даними OSINT · офіційний відбій дають Повітряні Сили</i>");
+  lines.push(
+    opts.pre ? preAlertFooter() : "<i>за даними OSINT · офіційний відбій дають Повітряні Сили</i>",
+  );
   return lines.join("\n");
 }
 
@@ -219,6 +248,9 @@ export function renderSettings(sub: Subscriber): string {
 export const PERSONAL_ACTIONS = {
   refresh: "pv",
   settings: "st",
+  soundMenu: "snd",
+  soundPrefix: "snd:",
+  imOk: "ok",
   tierPrefix: "t:",
   nightPrefix: "n:",
   radiusPrefix: "km:",
@@ -266,6 +298,9 @@ export function parsePersonalAction(
 ):
   | { kind: "refresh" }
   | { kind: "settings" }
+  | { kind: "soundMenu" }
+  | { kind: "sound"; value: SoundKind }
+  | { kind: "imOk" }
   | { kind: "tier"; value: AlertTier }
   | { kind: "night"; value: NightMode }
   | { kind: "radius"; value: number }
@@ -273,6 +308,14 @@ export function parsePersonalAction(
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
+  if (data === PERSONAL_ACTIONS.soundMenu) return { kind: "soundMenu" };
+  if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
+  if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
+    const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
+    return v === "drone" || v === "explosion" || v === "air-defence"
+      ? { kind: "sound", value: v }
+      : null;
+  }
   if (data === PERSONAL_ACTIONS.mute) return { kind: "mute", value: true };
   if (data === PERSONAL_ACTIONS.unmute) return { kind: "mute", value: false };
   if (data.startsWith(PERSONAL_ACTIONS.tierPrefix)) {
@@ -301,14 +344,39 @@ export function renderPointSaved(label: string, radiusKm = DEFAULT_RADIUS_KM): s
   ].join("\n");
 }
 
-/** Кнопки під карткою /my: оновити те саме повідомлення або піти в налаштування. */
-export function personalKeyboard(): { inline_keyboard: PersonalButton[][] } {
+/**
+ * Кнопки під карткою /my.
+ *
+ * «Чую» стоїть у першому ряду навмисно: доклад має коштувати один дотик у ту
+ * саму секунду, коли людина щось почула. Кнопка, заради якої треба згадати
+ * команду, не буде натиснута ніколи — а разом із нею не буде й даних.
+ */
+export function personalKeyboard(opts: { withOk?: boolean } = {}): {
+  inline_keyboard: PersonalButton[][];
+} {
+  const rows: PersonalButton[][] = [
+    [
+      { text: "👂 Чую", callback_data: PERSONAL_ACTIONS.soundMenu },
+      { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
+      { text: "⚙️", callback_data: PERSONAL_ACTIONS.settings },
+    ],
+  ];
+  if (opts.withOk) {
+    rows.unshift([{ text: "✅ Я в порядку", callback_data: PERSONAL_ACTIONS.imOk }]);
+  }
+  return { inline_keyboard: rows };
+}
+
+/** Що саме чути. Три варіанти — більше людина не читатиме під тривогою. */
+export function soundKeyboard(): { inline_keyboard: PersonalButton[][] } {
   return {
     inline_keyboard: [
       [
-        { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
-        { text: "⚙️ Налаштування", callback_data: PERSONAL_ACTIONS.settings },
+        { text: "🛸 Дрон", callback_data: `${PERSONAL_ACTIONS.soundPrefix}drone` },
+        { text: "💥 Вибухи", callback_data: `${PERSONAL_ACTIONS.soundPrefix}explosion` },
+        { text: "🛡 ППО", callback_data: `${PERSONAL_ACTIONS.soundPrefix}air-defence` },
       ],
+      [{ text: "← Назад", callback_data: PERSONAL_ACTIONS.refresh }],
     ],
   };
 }

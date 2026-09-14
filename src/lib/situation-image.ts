@@ -9,6 +9,18 @@
  * `situationSvg` — чиста функція (рядок SVG), тож її видно в тестах. Растер і
  * динамічний імпорт resvg — окремо, і будь-яка їх похибка не валить пост:
  * канал просто відправить текст без картинки.
+ *
+ * ## Шлях, а не крапка
+ *
+ * Усі монітори цієї ніші малюють позначку зі стрілкою — і читач добудовує
+ * пряму лінію на своє місто. Насправді шахед крутить: заходить із півночі,
+ * розвертається на схід, обходить ППО. Стрілка цього не показує, а
+ * СПОСТЕРЕЖЕНИЙ трек показує, і саме він відповідає на питання «звідки воно
+ * взялося й куди насправді йде».
+ *
+ * Трек малюється лише з того, що ми РЕАЛЬНО бачили (послідовні фікси), і
+ * ніколи не добудовується вперед: продовження лінії за останню відому точку
+ * було б вигаданим маршрутом із виглядом заміряного.
  */
 
 import type { Threat, ThreatType } from "./air";
@@ -96,13 +108,44 @@ function ringPath(ring: readonly [number, number][]): string {
   );
 }
 
-export function situationSvg(threats: readonly Threat[]): string {
+/** Спостережений трек однієї цілі: послідовні фікси в часовому порядку. */
+export interface TrackLine {
+  type: ThreatType;
+  points: readonly { lat: number; lon: number }[];
+}
+
+/**
+ * Лінія треку: старіші ділянки бліднуть, тож напрямок руху видно без стрілки —
+ * хвіст тьмяний, голова яскрава. Коротші за два фікси не малюємо: одна точка
+ * це не шлях.
+ */
+function trackPath(track: TrackLine): string {
+  if (track.points.length < 2) return "";
+  const color = COLOR[track.type];
+  const d = track.points
+    .map((p, i) => {
+      const [x, y] = project(p.lat, p.lon);
+      return `${i === 0 ? "M" : "L"}${x},${y}`;
+    })
+    .join(" ");
+  return (
+    `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.2" ` +
+    `stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>`
+  );
+}
+
+export function situationSvg(
+  threats: readonly Threat[],
+  tracks: readonly TrackLine[] = [],
+): string {
   const outline = UA_OUTLINE.map(([lat, lon], i) => {
     const [x, y] = project(lat, lon);
     return `${i === 0 ? "M" : "L"}${x},${y}`;
   }).join(" ");
   const oblastBorders = UA_OBLASTS.map(ringPath).join(" ");
 
+  // Треки — ПІД позначками: свіжа позиція має лишатись найпомітнішою.
+  const lines = tracks.map(trackPath).join("");
   const markers = threats.map(marker).join("");
 
   return (
@@ -112,6 +155,7 @@ export function situationSvg(threats: readonly Threat[]): string {
     `<path d="${outline} Z" fill="#0f1a24" stroke="none"/>` +
     `<path d="${oblastBorders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
     `<path d="${outline} Z" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
+    lines +
     markers +
     `</svg>`
   );
@@ -121,7 +165,10 @@ export function situationSvg(threats: readonly Threat[]): string {
  * Растеризує обстановку в PNG. Повертає `null` за будь-якої похибки (немає
  * бінарника, збій рендера) — тоді канал шле текст без картинки, а не падає.
  */
-export async function renderSituationPng(threats: readonly Threat[]): Promise<Buffer | null> {
+export async function renderSituationPng(
+  threats: readonly Threat[],
+  tracks: readonly TrackLine[] = [],
+): Promise<Buffer | null> {
   try {
     // Змінний специфікатор + @vite-ignore: бандлер (rolldown/nitro, ціль
     // Cloudflare) НЕ намагається затягнути нативний .node у збірку — інакше
@@ -129,7 +176,7 @@ export async function renderSituationPng(threats: readonly Threat[]): Promise<Bu
     // де працює таймер каналу), тож require із node_modules резолвиться.
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
-    const png = new Resvg(situationSvg(threats), {
+    const png = new Resvg(situationSvg(threats, tracks), {
       background: "#0b0f16",
       fitTo: { mode: "width", value: W },
     })

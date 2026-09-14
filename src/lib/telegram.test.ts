@@ -415,7 +415,15 @@ describe("parseLocation", () => {
           location: { latitude: 50.45, longitude: 30.52 },
         },
       }),
-    ).toEqual({ chatId: 42, userId: 7, chatType: "private", lat: 50.45, lon: 30.52 });
+    ).toEqual({
+      chatId: 42,
+      userId: 7,
+      chatType: "private",
+      lat: 50.45,
+      lon: 30.52,
+      livePeriod: 0,
+      isUpdate: false,
+    });
   });
 
   it("звичайна команда — не геолокація", () => {
@@ -440,5 +448,35 @@ describe("перелік команд", () => {
       expect(c.description.length).toBeLessThanOrEqual(256);
       expect(c.command).toMatch(/^[a-z0-9_]{1,32}$/);
     }
+  });
+});
+
+describe("жива геолокація", () => {
+  it("оновлення живої точки приходить edited_message — і його теж треба чути", () => {
+    // Людина ділиться живою точкою ОДИН раз, а далі Telegram переписує те саме
+    // повідомлення. Без цієї гілки радар застиг би там, де його ввімкнули.
+    const loc = parseLocation({
+      edited_message: {
+        chat: { id: 42, type: "private" },
+        from: { id: 7 },
+        location: { latitude: 49.99, longitude: 36.23 },
+      },
+    });
+    expect(loc?.isUpdate).toBe(true);
+    expect(loc?.lat).toBe(49.99);
+  });
+
+  it("live_period відрізняє живу точку від разової", () => {
+    const live = parseLocation({
+      message: {
+        chat: { id: 1, type: "private" },
+        location: { latitude: 50, longitude: 30, live_period: 3600 },
+      },
+    });
+    expect(live?.livePeriod).toBe(3600);
+  });
+
+  it("редаговане повідомлення БЕЗ геолокації не вважається точкою", () => {
+    expect(parseLocation({ edited_message: { chat: { id: 1 }, text: "виправив" } })).toBeNull();
   });
 });

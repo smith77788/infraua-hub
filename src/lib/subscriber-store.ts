@@ -16,14 +16,17 @@
  * змін за хвилину не має означати сотню повних перезаписів.
  */
 
+import type { Circle } from "./circle";
 import { newSubscriber, refCode, type Subscriber } from "./subscribers";
 
 interface StoreFile {
   version: 1;
   subscribers: Subscriber[];
+  circles?: Circle[];
 }
 
 const MEMORY = new Map<number, Subscriber>();
+const CIRCLES = new Map<string, Circle>();
 let loaded = false;
 let dirty = false;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -54,6 +57,9 @@ async function load(): Promise<void> {
     for (const sub of parsed.subscribers ?? []) {
       if (typeof sub?.chatId === "number") MEMORY.set(sub.chatId, sub);
     }
+    for (const circle of parsed.circles ?? []) {
+      if (typeof circle?.code === "string") CIRCLES.set(circle.code, circle);
+    }
   } catch (error) {
     // Файла ще немає — штатний перший запуск. Інша помилка варта логу, але не
     // падіння: бот без історії підписок працює, бот, що не стартує, — ні.
@@ -69,7 +75,11 @@ async function flush(): Promise<void> {
   flushTimer = null;
   if (!dirty) return;
   dirty = false;
-  const body: StoreFile = { version: 1, subscribers: [...MEMORY.values()] };
+  const body: StoreFile = {
+    version: 1,
+    subscribers: [...MEMORY.values()],
+    circles: [...CIRCLES.values()],
+  };
   try {
     const { mkdir, rename, writeFile } = await import("node:fs/promises");
     const dir = dataDir().replace(/\/$/, "");
@@ -139,6 +149,77 @@ export async function creditInvite(code: string, invitee: number): Promise<boole
   return false;
 }
 
+/* ─── Кола ──────────────────────────────────────────────────────────────── */
+
+export async function getCircle(code: string): Promise<Circle | undefined> {
+  await load();
+  return CIRCLES.get(code);
+}
+
+export async function putCircle(circle: Circle): Promise<void> {
+  await load();
+  CIRCLES.set(circle.code, circle);
+  scheduleFlush();
+}
+
+/**
+ * Створює коло з кодом, якого ще немає.
+ *
+ * Колізія коду тут не дрібниця: другий власник того самого коду тихо потрапив
+ * би в чуже коло рідних і бачив би їхні відмітки. Тому код не просто
+ * генерується, а й перевіряється на зайнятість.
+ */
+export async function createCircle(
+  name: string,
+  ownerChatId: number,
+  makeCode: (seed: number) => string,
+): Promise<Circle> {
+  await load();
+  let code = makeCode(ownerChatId);
+  for (let i = 1; CIRCLES.has(code) && i < 50; i++) code = makeCode(ownerChatId + i * 7919);
+  const circle: Circle = {
+    code,
+    name,
+    ownerChatId,
+    members: [ownerChatId],
+    createdAt: new Date().toISOString(),
+  };
+  CIRCLES.set(code, circle);
+  scheduleFlush();
+  return circle;
+}
+
+/**
+ * Прибирає людину з кола.
+ *
+ * Потрібне рівно тоді, коли вона переходить в інше: без цього старе коло й далі
+ * показувало б її серед своїх — з відміткою «у порядку», зробленою вже для
+ * інших людей. Тобто рідні бачили б заспокійливий сигнал, якого їм ніхто не
+ * надсилав.
+ */
+export async function leaveCircle(code: string, chatId: number): Promise<void> {
+  await load();
+  const circle = CIRCLES.get(code);
+  if (!circle || !circle.members.includes(chatId)) return;
+  const members = circle.members.filter((m) => m !== chatId);
+  if (members.length === 0) CIRCLES.delete(code);
+  else CIRCLES.set(code, { ...circle, members });
+  scheduleFlush();
+}
+
+export async function joinCircle(code: string, chatId: number): Promise<Circle | null> {
+  await load();
+  const circle = CIRCLES.get(code);
+  if (!circle) return null;
+  if (!circle.members.includes(chatId)) {
+    const updated = { ...circle, members: [...circle.members, chatId] };
+    CIRCLES.set(code, updated);
+    scheduleFlush();
+    return updated;
+  }
+  return circle;
+}
+
 export interface StoreStats {
   total: number;
   withPoint: number;
@@ -146,6 +227,7 @@ export interface StoreStats {
   durable: boolean;
   path: string;
   lastError: string | null;
+  circles: number;
 }
 
 export async function stats(): Promise<StoreStats> {
@@ -158,6 +240,7 @@ export async function stats(): Promise<StoreStats> {
     durable: isDurable(),
     path: filePath(),
     lastError,
+    circles: CIRCLES.size,
   };
 }
 
@@ -173,6 +256,7 @@ export async function flushNow(): Promise<void> {
 /** Для тестів і адмінських перевірок: скинути памʼять процесу. */
 export function resetStoreForTests(): void {
   MEMORY.clear();
+  CIRCLES.clear();
   loaded = false;
   dirty = false;
   if (flushTimer) clearTimeout(flushTimer);

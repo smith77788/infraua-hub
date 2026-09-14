@@ -19,8 +19,15 @@ export interface TelegramUpdate {
     chat?: { id?: number; type?: string };
     from?: { id?: number; first_name?: string; username?: string };
     text?: string;
-    location?: { latitude?: number; longitude?: number };
+    location?: { latitude?: number; longitude?: number; live_period?: number };
   };
+  /**
+   * Редаговане повідомлення. Саме ним Telegram шле оновлення ЖИВОЇ геолокації:
+   * людина ділиться нею один раз, а далі те саме повідомлення переписується
+   * новими координатами. Без обробки цього типу «жива» точка була б живою лише
+   * на словах — і радар їхав би за людиною рівно нікуди.
+   */
+  edited_message?: TelegramUpdate["message"];
 }
 
 /** Точка, надіслана кнопкою «Надіслати мою точку» або вкладенням. */
@@ -30,6 +37,10 @@ export interface LocationMessage {
   chatType: string;
   lat: number;
   lon: number;
+  /** Скільки секунд точка лишається живою (0 — звичайна, разова). */
+  livePeriod: number;
+  /** Чи це оновлення вже наданої живої точки, а не нова. */
+  isUpdate: boolean;
 }
 
 /**
@@ -41,7 +52,9 @@ export interface LocationMessage {
  */
 export function parseLocation(update: unknown): LocationMessage | null {
   if (typeof update !== "object" || update === null) return null;
-  const message = (update as TelegramUpdate).message;
+  const raw = update as TelegramUpdate;
+  const edited = raw.edited_message?.location ? raw.edited_message : undefined;
+  const message = edited ?? raw.message;
   const chatId = message?.chat?.id;
   const lat = message?.location?.latitude;
   const lon = message?.location?.longitude;
@@ -49,12 +62,15 @@ export function parseLocation(update: unknown): LocationMessage | null {
   if (typeof lat !== "number" || typeof lon !== "number") return null;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const livePeriod = message?.location?.live_period;
   return {
     chatId,
     userId: message?.from?.id,
     chatType: message?.chat?.type ?? "private",
     lat,
     lon,
+    livePeriod: typeof livePeriod === "number" && Number.isFinite(livePeriod) ? livePeriod : 0,
+    isUpdate: Boolean(edited),
   };
 }
 
@@ -165,9 +181,10 @@ export function renderStart(consoleUrl: string): string {
     "",
     "Усі монітори відповідають на питання «що в небі над областю». Цей відповідає на інше: <b>чи йде це на вас</b> — напрямок, відстань, хвилини до підльоту.",
     "",
-    "🎯 /my — надішліть свою точку, і бот сам напише, коли ціль піде на вас",
+    "🎯 /my — надішліть свою точку (можна <b>живу</b> — вона їде за вами), і бот сам напише, коли ціль піде на вас. Часто — <b>раніше за сирену</b>.",
     "⚙️ /settings — на що будити, на якій відстані, що дозволено вночі",
     "🛰 /status — обстановка по країні",
+    "👨‍👩‍👧 /circle — коло рідних: після тривоги одна кнопка замість двадцяти дзвінків",
     "🤝 /invite — покликати своїх",
     "",
     "Бот працює і в чужих чатах: наберіть його @імʼя й назву області — і надішлете живу картку обстановки туди, де його немає.",
@@ -185,6 +202,7 @@ export function renderHelp(consoleUrl: string): string {
     "/my — мій радар: що йде на мою точку (надішліть геолокацію або <code>/my Харків</code>)",
     "/settings — на що будити, радіус, нічний режим",
     "/stop — пауза сповіщень; /my вмикає назад",
+    "/circle — коло рідних: «я в порядку» одним дотиком",
     "/invite — посилання-запрошення й лічильник",
     "/status — тривоги, події за добу, стан джерел",
     "/start — про систему",
@@ -225,6 +243,7 @@ export function publicCommands(): TgBotCommand[] {
     { command: "my", description: "Чи летить на мене: мій радар за моєю точкою" },
     { command: "settings", description: "Налаштування сповіщень: тип, радіус, ніч" },
     { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
+    { command: "circle", description: "Коло: «я в порядку» одним дотиком замість дзвінків" },
     { command: "invite", description: "Покликати своїх: посилання-запрошення" },
     { command: "stop", description: "Пауза сповіщень (налаштування збережуться)" },
     { command: "start", description: "Про систему та посилання на консоль" },
