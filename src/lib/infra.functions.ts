@@ -18,6 +18,7 @@ import {
   type ThreatType,
   type WeatherNow,
 } from "./air";
+import { readQuality } from "./threat-quality";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
 import { INFRA_DISABLED_NOTICE, infraLayersEnabled } from "./infra-gate";
@@ -599,6 +600,42 @@ interface NeptunThreat {
   confirmedAt?: string;
   explanationShort?: string;
   status?: string;
+  /* Заяви джерела про власну точність — розбираються в readQuality. */
+  uncertaintyKm?: unknown;
+  positionQuality?: unknown;
+  lifecycle?: unknown;
+  presumptiveCourse?: unknown;
+  velocity?: unknown;
+  sea?: unknown;
+  trail?: unknown;
+}
+
+/**
+ * Трек із джерела — лише коректні точки.
+ *
+ * Джерело віддає його не завжди й не для всіх цілей, тож усе, що не є парою
+ * скінченних координат із часом, відкидається мовчки: половина треку гірша за
+ * його відсутність лише тоді, коли з неї малюють суцільну лінію, а тут вона до
+ * лінії просто не доходить.
+ */
+function readTrail(raw: unknown): { lat: number; lon: number; t: string }[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: { lat: number; lon: number; t: string }[] = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object") continue;
+    const o = p as { lat?: unknown; lon?: unknown; t?: unknown };
+    if (
+      typeof o.lat === "number" &&
+      Number.isFinite(o.lat) &&
+      typeof o.lon === "number" &&
+      Number.isFinite(o.lon) &&
+      typeof o.t === "string" &&
+      o.t
+    ) {
+      out.push({ lat: o.lat, lon: o.lon, t: o.t });
+    }
+  }
+  return out.length >= 2 ? out : null;
 }
 
 export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null> {
@@ -622,6 +659,7 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
     )
       continue;
     const text = `${t.title ?? ""} ${t.explanationShort ?? ""}`;
+    const trail = readTrail(t.trail);
     out.push({
       id: t.id,
       name: t.locality || t.district || t.region || t.title || "Ціль",
@@ -636,6 +674,11 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
       lastSeen: t.updatedAt ?? t.confirmedAt ?? "",
       ...(typeof t.heading === "number" ? { heading: t.heading } : {}),
       ...(t.confidenceLevel ? { confidence: t.confidenceLevel } : {}),
+      // Те, що джерело каже про власну точність. Без цього позначка ±45 км
+      // малювалась крапкою, а припущений курс — як спостережений.
+      quality: readQuality(t),
+      ...(trail ? { trail } : {}),
+      ...(t.sea === true ? { sea: true } : {}),
     });
   }
   return out;

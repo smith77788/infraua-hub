@@ -100,3 +100,127 @@ describe("citiesOnCourse", () => {
     expect(r.some((c) => c.name === "Львів")).toBe(false);
   });
 });
+
+/*
+ * Те, що джерело каже про власну точність, має доходити до часу підльоту.
+ * Заміри з живої відповіді neptun: радіус невизначеності 4..45 км, а для
+ * цілі із заміряною швидкістю 99 км/год таблиця типових дала б 180 — тобто
+ * майже вдвічі оптимістичніший час.
+ */
+describe("projectThreats — невизначеність доходить до часу", () => {
+  const target: Facility[] = [
+    { id: "pp", name: "ТЕЦ", category: "power_plant", lat: 51, lon: 30, source: "test" },
+  ];
+
+  it("вилка часу ширшає разом із заявленою невизначеністю", () => {
+    const tight = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 4,
+            position: "confirmed",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    const loose = projectThreats(
+      [
+        threat("b", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 45,
+            position: "approx",
+            lifecycle: "uncertain",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(tight).toHaveLength(1);
+    expect(loose).toHaveLength(1);
+    const width = (p: (typeof tight)[number]) => p.etaRangeMin[1] - p.etaRangeMin[0];
+    expect(width(loose[0]!)).toBeGreaterThan(width(tight[0]!));
+    // Середня оцінка при цьому та сама — ширшає саме невпевненість.
+    expect(loose[0]!.etaMin).toBe(tight[0]!.etaMin);
+  });
+
+  it("середня оцінка лежить усередині вилки", () => {
+    const [p] = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 10,
+            position: "approx",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(p!.etaRangeMin[0]).toBeLessThanOrEqual(p!.etaMin);
+    expect(p!.etaRangeMin[1]).toBeGreaterThanOrEqual(p!.etaMin);
+  });
+
+  it("заміряна швидкість б'є таблицю типових", () => {
+    const measured = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 4,
+            position: "confirmed",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: 99.4,
+          },
+        }),
+      ],
+      target,
+    );
+    const typical = projectThreats([threat("b", 50, 30, { heading: 0, type: "shahed" })], target);
+    expect(measured[0]!.speedMeasured).toBe(true);
+    expect(typical[0]!.speedMeasured).toBe(false);
+    // 99 км/год проти типових 180 — ціль іде повільніше, отже часу більше.
+    expect(measured[0]!.etaMin).toBeGreaterThan(typical[0]!.etaMin);
+  });
+
+  it("припущений курс позначається, а не видається за спостережений", () => {
+    const [p] = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 25,
+            position: "approx",
+            lifecycle: "uncertain",
+            presumptiveCourse: true,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(p!.courseObserved).toBe(false);
+  });
+
+  it("без заяв джерела вилка все одно не нульова", () => {
+    const [p] = projectThreats([threat("a", 50, 30, { heading: 0, type: "shahed" })], target);
+    expect(p!.courseObserved).toBe(true);
+    expect(p!.etaRangeMin[1]).toBeGreaterThan(p!.etaRangeMin[0]);
+  });
+});

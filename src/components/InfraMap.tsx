@@ -38,6 +38,13 @@ import {
   type InfraEvent,
 } from "@/lib/infra-types";
 import { roleOfSource } from "@/lib/osint-sources";
+import {
+  courseIsObserved,
+  displayRadiusKm,
+  EMPTY_QUALITY,
+  LIFECYCLE_LABEL,
+  radiusIsStated,
+} from "@/lib/threat-quality";
 
 interface Props {
   facilities: Facility[];
@@ -516,9 +523,47 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         // Спостережений трек (де ціль реально була) — СУЦІЛЬНА лінія; вектор
         // курсу вперед — ПУНКТИР (екстраполяція, а не факт). Це прибирає
         // хибну паніку: пунктир прямо каже «це припущення, не трек».
-        const observed = trackLatLngs(historyRef.current.get(t.id));
+        /*
+         * Трек беремо з двох джерел і саме в такому порядку.
+         *
+         * `neptun` віддає `trail` — уже зафіксовані положення цілі, — і це
+         * краще за накопичене нами: воно є з ПЕРШОГО кадру, а власна історія
+         * набирається хвилинами опитувань, тобто рівно тоді, коли вона вже не
+         * потрібна. Накопичене лишається як доповнення: сесія триває довше за
+         * вікно, яке віддає джерело.
+         */
+        const fromSource = (t.trail ?? []).map((p) => [p.lat, p.lon] as [number, number]);
+        const accumulated = trackLatLngs(historyRef.current.get(t.id));
+        const observed = fromSource.length >= 2 ? fromSource : accumulated;
+
+        /*
+         * Коло невизначеності. Джерело саме каже, з якою точністю знає
+         * позицію — від 4 до 45 км, — і крапка на карті це приховувала:
+         * позначка ±45 км виглядала так само впевнено, як ±4 км.
+         *
+         * Коло не «прикрашає» позначку, воно її виправляє: ціль десь у цьому
+         * колі, і рішення людини має спиратися на коло, а не на його центр.
+         */
+        const q = t.quality ?? EMPTY_QUALITY;
+        const radiusKm = displayRadiusKm(q);
+        const courseObserved = courseIsObserved(q);
         return (
           <Fragment key={t.id}>
+            <Circle
+              center={[t.lat, t.lon]}
+              radius={radiusKm * 1000}
+              pathOptions={{
+                color: style.color,
+                weight: 1,
+                opacity: fresh === "stale" ? 0.18 : 0.35,
+                fillColor: style.color,
+                fillOpacity: fresh === "stale" ? 0.03 : 0.07,
+                // Заявлений джерелом радіус — суцільний контур; наше
+                // консервативне припущення, коли джерело промовчало, —
+                // пунктир. Різницю видно, не читаючи попап.
+                ...(radiusIsStated(q) ? {} : { dashArray: "3 6" }),
+              }}
+            />
             {observed.length >= 2 ? (
               <Polyline
                 positions={observed}
@@ -534,9 +579,13 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 positions={[[t.lat, t.lon], vecEnd]}
                 pathOptions={{
                   color: style.color,
-                  weight: 1.6,
-                  opacity: fresh === "stale" ? 0.3 : 0.6,
-                  dashArray: "5 5",
+                  // Припущений курс джерело позначає окремо, і таких цілей
+                  // більшість: у живій відповіді — вісім із пʼятнадцяти. Досі
+                  // вони малювалися так само впевнено, як спостережені, тож
+                  // половина стрілок на карті була здогадкою без жодної ознаки.
+                  weight: courseObserved ? 1.6 : 1,
+                  opacity: (fresh === "stale" ? 0.3 : 0.6) * (courseObserved ? 1 : 0.6),
+                  dashArray: courseObserved ? "5 5" : "2 7",
                 }}
               />
             ) : null}
@@ -566,8 +615,22 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   {hasCourse ? (
                     <p className="opacity-70">
                       Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
+                      {courseObserved ? "" : " · припущений джерелом"}
                     </p>
                   ) : null}
+                  <p className="opacity-70">
+                    Позиція:{" "}
+                    {radiusIsStated(q)
+                      ? `±${Math.round(radiusKm)} км`
+                      : `±~${radiusKm} км (джерело не вказало)`}
+                    {q.lifecycle ? ` · ${LIFECYCLE_LABEL[q.lifecycle]}` : ""}
+                  </p>
+                  {q.speedKmh !== null ? (
+                    <p className="opacity-70">
+                      Швидкість: {Math.round(q.speedKmh)} км/год (заміряна)
+                    </p>
+                  ) : null}
+                  {t.sea ? <p className="opacity-70">Над морем</p> : null}
                   {hasCourse
                     ? (() => {
                         const onCourse = citiesOnCourse(t, CITY_CENTERS);
@@ -581,7 +644,9 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                     : null}
                   {observed.length >= 2 || vecEnd ? (
                     <p className="opacity-60 text-[11px] leading-snug">
-                      {observed.length >= 2 ? "── трек (де була) · " : ""}
+                      {observed.length >= 2
+                        ? `── трек (де була${fromSource.length >= 2 ? ", з джерела" : ""}) · `
+                        : ""}
                       {vecEnd ? "╌╌ курс (екстраполяція, не факт)" : ""}
                     </p>
                   ) : null}

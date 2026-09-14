@@ -13,6 +13,7 @@
 
 import { distanceKm, type Facility } from "./infra-types";
 import { CRITICAL_CATEGORIES } from "./threat-correlation";
+import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 import type { Threat, ThreatType } from "./air";
 
 /**
@@ -37,10 +38,29 @@ export interface ThreatProjection {
   facility: Facility;
   /** Відстань уздовж лінії погляду до обʼєкта, км. */
   distanceKm: number;
-  /** Оцінка часу підльоту, хв (за типовою швидкістю типу). */
+  /** Середня оцінка часу підльоту, хв. */
   etaMin: number;
+  /**
+   * Вилка часу підльоту, хв: від найранішого до найпізнішого.
+   *
+   * Одне число тут завжди було вигадкою. Позиція цілі відома з точністю, яку
+   * джерело саме й називає — від 4 до 45 км, — і на швидкості шахеда сорок пʼять
+   * кілометрів це чверть години різниці. «~7 хв» у такому разі не оцінка, а
+   * випадкове число з інтервалу, поданe як вимір.
+   */
+  etaRangeMin: [number, number];
   /** Відхилення обʼєкта від курсу цілі, градуси (0 = точно по курсу). */
   offAxisDeg: number;
+  /**
+   * Швидкість заміряна джерелом, а не взята з таблиці типових.
+   *
+   * Різниця велика: типова швидкість шахеда 180 км/год, а джерело для живої
+   * цілі показувало 99 км/год — майже вдвічі менше, тобто оцінка часу з
+   * таблиці помилялась би вдвічі.
+   */
+  speedMeasured: boolean;
+  /** Курс спостережений (true) чи припущений джерелом (false). */
+  courseObserved: boolean;
 }
 
 export interface ProjectOptions {
@@ -96,18 +116,30 @@ export function projectThreats(
   const all: ThreatProjection[] = [];
   for (const t of threats) {
     if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) continue;
-    const speed = SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+    const q = t.quality ?? EMPTY_QUALITY;
+    // Заміряна швидкість б'є типову: таблиця — це орієнтир для класу, а
+    // джерело міряло саме цю ціль.
+    const speed = q.speedKmh ?? SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+    const uncertainty = displayRadiusKm(q);
+    const observed = courseIsObserved(q);
     for (const f of targets) {
       const d = distanceKm(t, f);
       if (d < 1 || d > maxRangeKm) continue;
       const off = angularDiff(t.heading, bearingDeg(t, f));
       if (off > corridorDeg) continue;
+      // Вилка часу — з невизначеності самої позиції: ціль може бути вже на
+      // `uncertainty` км ближче або настільки ж далі.
+      const near = Math.max(0, d - uncertainty);
+      const far = d + uncertainty;
       all.push({
         threat: t,
         facility: f,
         distanceKm: Math.round(d * 10) / 10,
         etaMin: Math.round((d / speed) * 60),
+        etaRangeMin: [Math.round((near / speed) * 60), Math.round((far / speed) * 60)],
         offAxisDeg: Math.round(off),
+        speedMeasured: q.speedKmh !== null,
+        courseObserved: observed,
       });
     }
   }
