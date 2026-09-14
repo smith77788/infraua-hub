@@ -59,12 +59,21 @@ function marker(t: Threat): string {
   const [x, y] = project(t.lat, t.lon);
   const color = COLOR[type];
   const glow = `<circle cx="${x}" cy="${y}" r="11" fill="${color}" opacity="0.28"/>`;
-  if (type === "shahed" || type === "reactive") {
-    const rot = typeof t.heading === "number" && Number.isFinite(t.heading) ? t.heading : 0;
+  const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
+
+  // Дрон зі СТРІЛКОЮ — лише коли курс відомий. Інакше не вигадуємо напрямок
+  // (це й була причина «курс неправильний»): малюємо нейтральну крапку.
+  if ((type === "shahed" || type === "reactive") && hasCourse) {
     return (
       glow +
-      `<g transform="translate(${x} ${y}) rotate(${Math.round(rot)}) scale(0.95)">` +
+      `<g transform="translate(${x} ${y}) rotate(${Math.round(t.heading as number)}) scale(0.95)">` +
       `<path d="${DRONE}" fill="${color}" stroke="#0a0e14" stroke-width="1.4" stroke-linejoin="round"/></g>`
+    );
+  }
+  if (type === "shahed" || type === "reactive") {
+    return (
+      glow +
+      `<circle cx="${x}" cy="${y}" r="5.5" fill="${color}" stroke="#0a0e14" stroke-width="1.4"/>`
     );
   }
   // Ракети/КАБ/інше — компактна позначка-ромб, щоб не плутати з дроном.

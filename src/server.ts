@@ -565,24 +565,28 @@ async function maybeDigest(token: string, channel: string, now: number): Promise
   await sendChannelUpdate(token, channel, text, day.peakTargets, null, await channelButtons(token));
 }
 
-async function closeWave(token: string, channel: string, now: number): Promise<void> {
-  if (!wave) return;
+async function closeWave(token: string, channel: string, now: number): Promise<boolean> {
+  if (!wave) return false;
   const ended = wave;
   wave = null;
   liveWithPhoto = false;
   currentDay = { ...currentDay, waves: currentDay.waves + 1 };
-  // Відбій має сенс лише для хвилі, яка справді була: пара цілей на десять
-  // хвилин не варта окремого поста «все скінчилось».
-  if (ended.peakTargets < 3 && now - ended.startedAt < 30 * 60 * 1000) return;
+  // Відбій винен тим, кому казали про наліт. Якщо про цю хвилю в каналі не
+  // вийшло жодного поста, то й закривати нема чого — «все скінчилось» без
+  // «щось почалось» читається як збій.
+  if (ended.messageId === null) return false;
+  // Чиста карта під відбоєм — видно, що порожньо, а не тільки написано.
+  const { renderSituationPng } = await import("./lib/situation-image");
   const sent = await sendChannelUpdate(
     token,
     channel,
     renderAllClear(ended, now),
     ended.peakTargets,
-    null,
+    await renderSituationPng([]),
     await channelButtons(token),
   );
   if (sent.ok) lastChannelPost = { signature: "", at: now, snapshot: undefined };
+  return sent.ok;
 }
 
 /**
@@ -625,16 +629,25 @@ async function runChannelTick(
   if (!opts.dryRun) rollKyivDay(now);
 
   if (!post) {
-    // Небо чисте. Забуваємо зріз, щоб поява цілей знову була «суттєвою».
+    // Небо чисте. Якщо ЩОЙНО були цілі — один заспокійливий «відбій» (із чистою
+    // картою), далі мовчимо. Забуваємо зріз, щоб поява цілей знову була суттєвою.
+    const hadTargets = (lastChannelPost.snapshot?.targets ?? 0) > 0;
     lastChannelPost = { signature: "", at: lastChannelPost.at, snapshot: undefined };
     if (!opts.dryRun) {
       // Годинник добової статистики йде і в тиші — інакше після кількох тихих
       // годин перший же гучний тик дорахував би їх як гучні.
       lastAccrualAt = now;
-      if (wave && waveEnded(wave, now)) await closeWave(token, channel, now);
+      // Відбій шле closeWave — зі зведенням хвилі й лише після справжньої
+      // тиші. `hadTargets` тут більше не вирішує: одна порожня вибірка не
+      // означає чистого неба, а «відбій», за яким через дві хвилини йде новий
+      // наліт, — гірший за мовчання.
+      if (wave && waveEnded(wave, now)) {
+        const posted = await closeWave(token, channel, now);
+        if (posted) return { posted: true, targets: 0 };
+      }
       await maybeDigest(token, channel, now);
     }
-    return { posted: false, reason: "небо чисте" };
+    return { posted: false, reason: hadTargets ? "чекаємо на справжню тишу" : "небо чисте" };
   }
 
   if (opts.dryRun) return { posted: false, dryRun: true, targets: post.targets, text: post.text };
@@ -663,7 +676,8 @@ async function runChannelTick(
     return { posted: false, reason: "без суттєвих змін" };
   }
 
-  // Картинка обстановки — best-effort: якщо не вийшла, шлемо текст без неї.
+  // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
+  // текст: якщо не вийшла, шлемо текст без неї.
   const { renderSituationPng } = await import("./lib/situation-image");
   const png = await renderSituationPng(smoothed);
   const keyboard = await channelButtons(token);

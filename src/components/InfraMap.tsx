@@ -25,7 +25,8 @@ import {
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { UA_OUTLINE } from "@/lib/ua-outline";
 import { UA_OBLASTS } from "@/lib/ua-oblasts";
-import { type AlertRegion } from "@/lib/alerts";
+import { OBLASTS, type AlertRegion } from "@/lib/alerts";
+import { citiesOnCourse } from "@/lib/threat-eta";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
 import {
@@ -112,6 +113,11 @@ function destPoint(lat: number, lon: number, headingDeg: number, km: number): [n
   const dLon = (km * Math.sin(th)) / (111.32 * Math.cos((lat * Math.PI) / 180));
   return [lat + dLat, lon + dLon];
 }
+// Обласні центри для «на курсі: місто (~N хв)» у вікні цілі.
+const CITY_CENTERS = Object.values(OBLASTS)
+  .filter((o, i, arr) => arr.findIndex((x) => x.code === o.code) === i)
+  .map((o) => ({ name: o.name, lat: o.lat, lon: o.lon }));
+
 const COMPASS = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"];
 const compass = (d: number) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45) % 8];
 
@@ -562,6 +568,17 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                       Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
                     </p>
                   ) : null}
+                  {hasCourse
+                    ? (() => {
+                        const onCourse = citiesOnCourse(t, CITY_CENTERS);
+                        return onCourse.length ? (
+                          <p className="text-amber-300/90">
+                            На курсі:{" "}
+                            {onCourse.map((c) => `${c.name} (~${c.etaMin} хв)`).join(", ")}
+                          </p>
+                        ) : null;
+                      })()
+                    : null}
                   {observed.length >= 2 || vecEnd ? (
                     <p className="opacity-60 text-[11px] leading-snug">
                       {observed.length >= 2 ? "── трек (де була) · " : ""}
