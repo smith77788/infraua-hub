@@ -46,6 +46,7 @@ import OrientationCard, { hasSeenOrientation } from "@/components/OrientationCar
 import SituationBar from "@/components/SituationBar";
 import StatusStrip from "@/components/StatusStrip";
 import PersonalThreatPanel from "@/components/PersonalThreatPanel";
+import HotOblasts from "@/components/HotOblasts";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1233,6 +1234,7 @@ function Console() {
               ) : null}
 
               <PersonalThreatPanel threats={threats} weather={feeds.weather} />
+              <HotOblasts threats={threats} />
 
               <TimelinePlayer onCursor={setPlayCursor} />
               <MapLayers
