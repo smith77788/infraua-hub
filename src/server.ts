@@ -1840,6 +1840,42 @@ function startAlertScheduler(): void {
 }
 startAlertScheduler();
 
+/**
+ * Самоперевірка сховища при старті.
+ *
+ * Досі власник дізнавався про ефемерне сховище лише тоді, коли сам питав
+ * `/stats` — тобто, як правило, вже після втрати підписників. Мовчазна втрата
+ * даних не має бути станом, який треба помітити: якщо після запуску сховище не
+ * переживе редеплой або в нього взагалі не пишеться, бот каже це сам, один раз
+ * на процес.
+ *
+ * Один раз — навмисно: попередження, яке повторюється щогодини, перестає бути
+ * попередженням. І лише власникові: це службова річ, яку більше нікому не
+ * виправити.
+ */
+async function storageSelfCheck(): Promise<void> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
+  if (!token || !owner) return;
+  const st = await subscriberStats();
+  if (st.durable && st.writable) return; // усе гаразд — мовчимо
+  await telegramSend(
+    token,
+    Number(owner),
+    ["⚠️ <b>Сховище підписників</b>", "", ...storageLines(st)].join("\n"),
+  );
+}
+
+function startStorageSelfCheck(): void {
+  // Із затримкою: том Railway монтується при старті контейнера, і перевірка в
+  // першу ж мілісекунду могла б застати його ще не змонтованим.
+  const timer = setTimeout(() => {
+    storageSelfCheck().catch((e) => console.error("storage self-check failed", e));
+  }, 45_000);
+  (timer as unknown as { unref?: () => void }).unref?.();
+}
+startStorageSelfCheck();
+
 /* ─── Inline-режим ──────────────────────────────────────────────────────── */
 
 /**
