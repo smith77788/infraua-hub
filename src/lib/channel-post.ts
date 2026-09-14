@@ -22,6 +22,7 @@ import type { Threat, ThreatType } from "./air";
 import { OBLASTS } from "./alerts";
 import { distanceKm } from "./infra-types";
 import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
+import { swarmForecast } from "./swarm";
 
 // Множина за українськими правилами (ті самі 3 форми: 1 / 2-4 / 5+).
 function plural(n: number, one: string, few: string, many: string): string {
@@ -344,11 +345,21 @@ export function renderChannelPost(
   const targets = threats.length;
   const signature = sigParts.sort().join("|");
   const seed = seedFrom(signature);
+
+  // Напрямок хвилі рою — «куди зміщується маса, які області на черзі».
+  // Даємо лише коли напрямок виражений (див. swarmForecast), інакше мовчимо.
+  const wave = swarmForecast(threats, CITY_REFS);
+  const waveLine =
+    wave && wave.next.length
+      ? `🧭 хвиля йде ${wave.course} — на черзі: ${wave.next.join(", ")}`
+      : null;
+
   const lines = [
     headline(allTypes, shaheds, seed),
     ...(deltaLine ? ["", deltaLine] : []),
     "",
     ...bodyLines,
+    ...(waveLine ? ["", waveLine] : []),
     "",
     `<i>всього в небі: ${targets} · за даними OSINT · ${tail(allTypes, seed)}</i>`,
   ];
