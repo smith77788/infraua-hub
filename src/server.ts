@@ -17,6 +17,7 @@ import {
   parseCommand,
   parseLayersArg,
   parseLocation,
+  parseDocument,
   webhookUpdatesOk,
   WEBHOOK_UPDATES,
   publicCommands,
@@ -83,6 +84,14 @@ import { kyivDate, kyivHour } from "./lib/kyiv";
 import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
 import {
+  buildBackup,
+  mergeCircles,
+  mergeSubscribers,
+  parseBackup,
+  renderBackupNote,
+  renderRestoreResult,
+} from "./lib/backup";
+import {
   channelUrl,
   GATE_ACTION,
   gateKeyboard,
@@ -119,12 +128,14 @@ import {
   type Subscriber,
 } from "./lib/subscribers";
 import {
+  allCircles,
   allSubscribers,
   createCircle,
   creditInvite,
   ensureSubscriber,
   getCircle,
   getSubscriber,
+  insertMissing,
   joinCircle,
   leaveCircle,
   putCircle,
@@ -939,6 +950,7 @@ async function runChannelTick(
     // годин перший же гучний тик дорахував би їх як гучні.
     lastAccrualAt = now;
     await maybeDigest(token, channel, now);
+    await maybeBackup(token, now);
     if (!wave) return { posted: false, reason: "небо чисте" };
 
     const active = await fetchOfficialAlerts();
@@ -985,6 +997,7 @@ async function runChannelTick(
   lastAccrualAt = now;
   currentDay = accrueDay(currentDay, post.snapshot, sinceAccrual);
   await maybeDigest(token, channel, now);
+  await maybeBackup(token, now);
 
   const changed = post.signature !== lastChannelPost.signature;
   // Ознака життя рахується від ОСТАННЬОГО ДОТИКУ (поста чи правки), а не від
@@ -1941,6 +1954,91 @@ async function situationBrief(request: Request) {
   return { alarmRegions: alarms, eventsLastDay, sources, consoleUrl: consoleUrl(request) };
 }
 
+/* ─── Резервна копія підписників ────────────────────────────────────────── */
+
+/**
+ * Надсилає копію власникові файлом.
+ *
+ * Файлом, а не текстом: повідомлення обмежене 4096 символами, і на сотні
+ * підписників копія в текст просто не влізе — а копія, яка мовчки обрізалась,
+ * гірша за її відсутність, бо створює враження, що дані збережені.
+ */
+async function sendBackup(token: string, ownerId: number): Promise<boolean> {
+  const st = await subscriberStats();
+  const file = buildBackup(await allSubscribers(), await allCircles(), new Date().toISOString());
+  if (file.subscribers.length === 0) return false; // порожню копію слати нема сенсу
+
+  const form = new FormData();
+  form.append("chat_id", String(ownerId));
+  form.append("caption", renderBackupNote(file, !st.durable));
+  form.append("parse_mode", "HTML");
+  form.append(
+    "document",
+    new Blob([JSON.stringify(file)], { type: "application/json" }),
+    `subscribers-${kyivDate(new Date())}.json`,
+  );
+  const res = await fetch(`${TELEGRAM_API}/bot${token}/sendDocument`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) console.error("backup failed", res.status, await res.text());
+  return res.ok;
+}
+
+/**
+ * Приймає копію назад.
+ *
+ * Лише від власника й лише з розібраного файлу: мовчки прийняти чужий JSON як
+ * базу підписників — це спосіб втратити її замість відновити.
+ */
+async function restoreBackup(token: string, doc: ReturnType<typeof parseDocument>): Promise<void> {
+  if (!doc) return;
+  if (!isOwner(doc.userId, process.env["TELEGRAM_OWNER_ID"])) return;
+  try {
+    const info = (await fetch(
+      `${TELEGRAM_API}/bot${token}/getFile?file_id=${encodeURIComponent(doc.fileId)}`,
+    ).then((r) => r.json())) as { result?: { file_path?: string } };
+    const path = info.result?.file_path;
+    if (!path) {
+      await telegramSend(token, doc.chatId, "Не вдалося завантажити файл із Telegram.");
+      return;
+    }
+    const raw = await fetch(`${TELEGRAM_API}/file/bot${token}/${path}`).then((r) => r.text());
+    const file = parseBackup(raw);
+    if (!file) {
+      await telegramSend(token, doc.chatId, "Це не схоже на копію підписників — файл не прийнято.");
+      return;
+    }
+    const live = await allSubscribers();
+    const liveCircles = await allCircles();
+    const subs = mergeSubscribers(live, file.subscribers);
+    const circles = mergeCircles(liveCircles, file.circles);
+    await insertMissing(file.subscribers, file.circles);
+    await telegramSend(token, doc.chatId, renderRestoreResult(subs, circles));
+  } catch (error) {
+    console.error("restore failed", error);
+    await telegramSend(token, doc.chatId, "Відновлення не вдалося — подробиці в логах сервісу.");
+  }
+}
+
+/**
+ * Щоденна копія — разом із підсумком доби.
+ *
+ * Окремого розкладу не заводимо: підсумок уже має свою годину й свій захист
+ * від повторів, а друга копія того самого механізму означала б другий спосіб
+ * помилитись.
+ */
+let backupSentFor: string | null = null;
+async function maybeBackup(token: string, now: number): Promise<void> {
+  const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
+  if (!owner) return;
+  const today = kyivDate(new Date(now));
+  if (backupSentFor === today) return;
+  if (kyivHour(new Date(now)) < DIGEST_HOUR) return;
+  backupSentFor = today;
+  await sendBackup(token, Number(owner));
+}
+
 /**
  * Стан сховища людською мовою — з конкретним наступним кроком.
  *
@@ -2006,7 +2104,8 @@ async function adminCommand(
     parsed.command !== "purge" &&
     parsed.command !== "admin" &&
     parsed.command !== "channel" &&
-    parsed.command !== "stats"
+    parsed.command !== "stats" &&
+    parsed.command !== "backup"
   ) {
     return null;
   }
@@ -2016,6 +2115,17 @@ async function adminCommand(
   // Друге важливіше за перше: сховище без постійного тому мовчки втрачає всіх
   // підписників при кожному оновленні, і дізнатись про це треба тут, а не з
   // обваленого лічильника через тиждень.
+  if (parsed.command === "backup") {
+    const token = process.env["TELEGRAM_BOT_TOKEN"];
+    if (!token) return { text: "TELEGRAM_BOT_TOKEN не заданий." };
+    const ok = await sendBackup(token, parsed.chatId);
+    return {
+      text: ok
+        ? "💾 Копію надіслано файлом. Збережіть її — після втрати сховища перешліть боту назад, і підписники повернуться."
+        : "Копіювати нема чого: підписників поки немає.",
+    };
+  }
+
   if (parsed.command === "stats") {
     const st = await subscriberStats();
     // Стан вебхука — прямо тут. Саме через нього бот може мовчати на цілий
@@ -2341,6 +2451,13 @@ async function telegramWebhook(request: Request): Promise<Response> {
       `моя точка · ${oblastOf(location.lat, location.lon)}`,
       { livePeriod: location.livePeriod, isUpdate: location.isUpdate },
     );
+    return new Response("ok", { status: 200 });
+  }
+
+  // Файл від власника — це повернення резервної копії підписників.
+  const document = parseDocument(update);
+  if (document) {
+    await restoreBackup(token, document);
     return new Response("ok", { status: 200 });
   }
 

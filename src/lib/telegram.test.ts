@@ -12,6 +12,7 @@ import {
   parseCallback,
   parseCommand,
   parseLayersArg,
+  parseDocument,
   parseLocation,
   webhookUpdatesOk,
   WEBHOOK_UPDATES,
@@ -509,5 +510,23 @@ describe("webhookUpdatesOk", () => {
 
   it("сміття замість переліку — краще переоформити", () => {
     expect(webhookUpdatesOk("message")).toBe(false);
+  });
+});
+
+describe("parseDocument", () => {
+  it("бачить надісланий файл — так власник повертає копію підписників", () => {
+    expect(
+      parseDocument({
+        message: {
+          chat: { id: 7, type: "private" },
+          from: { id: 7 },
+          document: { file_id: "AgAD", file_name: "subscribers.json" },
+        },
+      }),
+    ).toEqual({ chatId: 7, userId: 7, fileId: "AgAD", fileName: "subscribers.json" });
+  });
+
+  it("звичайне повідомлення файлом не є", () => {
+    expect(parseDocument({ message: { chat: { id: 1 }, text: "/backup" } })).toBeNull();
   });
 });
