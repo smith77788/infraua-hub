@@ -124,3 +124,41 @@ export function projectThreats(
   }
   return out;
 }
+
+export interface CityETA {
+  name: string;
+  /** Оцінка часу підльоту до міста, хв (за типовою швидкістю типу). */
+  etaMin: number;
+  distanceKm: number;
+}
+
+/**
+ * Міста на курсі цілі з оцінкою часу підльоту — «куди летить і за скільки».
+ *
+ * Те саме, що projectThreats, але ціль проєктується не на критичні обʼєкти, а
+ * на МІСТА (обласні центри): відповідь корисна навіть коли шар інфраструктури
+ * вимкнено. Курс невідомий → порожньо (не вигадуємо напрямок). Чиста функція.
+ */
+export function citiesOnCourse(
+  t: Threat,
+  cities: readonly { name: string; lat: number; lon: number }[],
+  opts: { corridorDeg?: number; maxRangeKm?: number; limit?: number } = {},
+): CityETA[] {
+  if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) return [];
+  const corridorDeg = opts.corridorDeg ?? 35;
+  const maxRangeKm = opts.maxRangeKm ?? 160;
+  const speed = SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+  const out: CityETA[] = [];
+  for (const c of cities) {
+    const d = distanceKm(t, c);
+    if (d < 3 || d > maxRangeKm) continue;
+    if (angularDiff(t.heading, bearingDeg(t, c)) > corridorDeg) continue;
+    out.push({
+      name: c.name,
+      distanceKm: Math.round(d),
+      etaMin: Math.max(1, Math.round((d / speed) * 60)),
+    });
+  }
+  out.sort((a, b) => a.etaMin - b.etaMin);
+  return out.slice(0, opts.limit ?? 3);
+}

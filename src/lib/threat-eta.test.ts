@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { angularDiff, bearingDeg, projectThreats } from "./threat-eta";
+import { angularDiff, bearingDeg, citiesOnCourse, projectThreats } from "./threat-eta";
 import type { CategoryId, Facility } from "./infra-types";
 import type { Threat } from "./air";
 
@@ -73,5 +73,30 @@ describe("projectThreats", () => {
     const t = threat("t", 49.55, 30.52, { heading: 0, type: "cruise" });
     expect(projectThreats([t], [shop])).toHaveLength(0);
     expect(projectThreats([t], [shop], { criticalOnly: false })).toHaveLength(1);
+  });
+});
+
+describe("citiesOnCourse", () => {
+  const cities = [
+    { name: "Полтава", lat: 49.59, lon: 34.55 },
+    { name: "Суми", lat: 50.9, lon: 34.8 },
+    { name: "Львів", lat: 49.84, lon: 24.03 },
+  ];
+
+  it("місто по курсу — з ETA за швидкістю типу", () => {
+    // Шахед південніше Полтави, курс 0° (на північ) → Полтава на курсі.
+    const r = citiesOnCourse(threat("s", 49.0, 34.55, { type: "shahed", heading: 0 }), cities);
+    expect(r[0]?.name).toBe("Полтава");
+    expect(r[0]?.etaMin).toBeGreaterThan(0);
+  });
+
+  it("без курсу — порожньо (не вигадуємо напрямок)", () => {
+    expect(citiesOnCourse(threat("s", 49.0, 34.55, { type: "shahed" }), cities)).toHaveLength(0);
+  });
+
+  it("місто збоку від курсу не потрапляє", () => {
+    // Курс на північ, а Львів далеко на захід — не на курсі.
+    const r = citiesOnCourse(threat("s", 49.0, 34.55, { type: "shahed", heading: 0 }), cities);
+    expect(r.some((c) => c.name === "Львів")).toBe(false);
   });
 });
