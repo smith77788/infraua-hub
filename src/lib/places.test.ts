@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
-import { CITIES, matchPlace } from "./places";
+import { matchPlace } from "./places";
+import { CITIES } from "./ua-cities";
 
 describe("matchPlace", () => {
   it("велике місто, що НЕ обласний центр, знаходиться точно", () => {
