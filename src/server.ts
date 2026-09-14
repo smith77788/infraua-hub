@@ -80,6 +80,7 @@ import {
   type WaveState,
 } from "./lib/channel-wave";
 import { kyivDate, kyivHour } from "./lib/kyiv";
+import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
 import {
   canReport,
@@ -606,6 +607,8 @@ async function editChannelUpdate(
 const LIVE_POST_MAX_MS = 45 * 60 * 1000;
 /** Година за Києвом, коли виходить підсумок доби. */
 const DIGEST_HOUR = 9;
+/** Як часто можна давати адресний сигнал по тому самому місту. */
+const CITY_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 
 /**
  * Уночі дзвенить лише те, заради чого варто прокинутись.
@@ -657,6 +660,8 @@ let liveWithPhoto = false;
 let currentDay: DayStats = emptyDay(kyivDate(new Date()));
 let pendingDigest: DayStats | null = null;
 let digestPostedFor: string | null = null;
+/** Коли востаннє давали адресний сигнал по місту (для кулдауна). */
+let cityAlertedAt: Record<string, number> = {};
 /** Коли востаннє додавали час у добову статистику. */
 let lastAccrualAt = 0;
 /** Коли востаннє щось зробили в каналі — надіслали пост або відредагували. */
@@ -681,6 +686,45 @@ async function maybeDigest(token: string, channel: string, now: number): Promise
   const text = renderDigest(day);
   if (!text) return; // тиха доба не потребує поста
   await sendChannelUpdate(token, channel, text, day.peakTargets, null, await channelButtons(token));
+}
+
+/**
+ * Адресний сигнал «ціль підходить до міста» — зумована локальна карта окремим
+ * постом. Це доповнення до загального поста, а не заміна: спрацьовує рідко (лише
+ * на неминуче й із кулдауном по місту), тож не конкурує з живим постом хвилі й
+ * не смітить у стрічці. Дзвенить завжди — заради адресного попередження людину
+ * варто розбудити; в цьому весь сенс.
+ *
+ * Best-effort: збій зума чи Telegram не має валити тік — просто не буде цього
+ * поста, а загальна картина вже пішла своїм шляхом.
+ */
+async function maybeCityAlert(
+  token: string,
+  channel: string,
+  threats: readonly Threat[],
+  now: number,
+): Promise<void> {
+  const candidates = cityAlerts(threats, undefined, { limit: 1 });
+  if (candidates.length === 0) return;
+  const { fresh, lastAlertedAt } = selectFreshCityAlerts(
+    candidates,
+    cityAlertedAt,
+    now,
+    CITY_ALERT_COOLDOWN_MS,
+  );
+  cityAlertedAt = lastAlertedAt;
+  if (fresh.length === 0) return;
+
+  try {
+    const { renderZoomPng } = await import("./lib/situation-image");
+    const keyboard = await channelButtons(token);
+    for (const a of fresh) {
+      const png = await renderZoomPng(threats, { lat: a.lat, lon: a.lon }, 70);
+      await sendChannelUpdate(token, channel, cityAlertCaption(a), a.count, png, keyboard, false);
+    }
+  } catch (error) {
+    console.error("city alert failed", error);
+  }
 }
 
 /**
@@ -865,6 +909,10 @@ async function runChannelTick(
     maxPoints: 60,
   });
   for (const t of smoothed) channelTrackTypes.set(t.id, t.type ?? "unknown");
+  // Адресний сигнал по місту — незалежно від того, чи загальний пост «суттєвий»:
+  // ціль на підльоті варта окремого попередження навіть без зміни оглядової
+  // картини. Власний кулдаун усередині не дає йому смітити.
+  if (!opts.dryRun) await maybeCityAlert(token, channel, smoothed, now);
   const forecast = renderForecast(forecastWave(smoothed));
   const post = renderChannelPost(smoothed, {
     previous: lastChannelPost.snapshot,
