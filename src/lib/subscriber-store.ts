@@ -50,6 +50,7 @@ export function isDurable(): boolean {
 async function load(): Promise<void> {
   if (loaded) return;
   loaded = true;
+  hookShutdown();
   try {
     const { readFile } = await import("node:fs/promises");
     const raw = await readFile(filePath(), "utf8");
@@ -71,8 +72,18 @@ async function load(): Promise<void> {
   }
 }
 
-async function flush(): Promise<void> {
-  flushTimer = null;
+/**
+ * Записи не накладаються один на одний.
+ *
+ * Негайний запис зробив перекриття не теоретичним: два дотики поспіль
+ * запускали два `flush` одночасно, обидва писали ОДИН тимчасовий файл, перший
+ * перейменовував його — і другий падав на `rename` з ENOENT, залишаючи диск
+ * без частини змін. Тому записи стоять у черзі, а тимчасове імʼя унікальне.
+ */
+let flushChain: Promise<void> = Promise.resolve();
+let tmpCounter = 0;
+
+async function writeSnapshot(): Promise<void> {
   if (!dirty) return;
   dirty = false;
   const body: StoreFile = {
@@ -80,13 +91,16 @@ async function flush(): Promise<void> {
     subscribers: [...MEMORY.values()],
     circles: [...CIRCLES.values()],
   };
+  // Шлях беремо ОДИН раз на запис: інакше запис, початий до зміни оточення,
+  // перейменовував би файл уже в іншу теку.
+  const target = filePath();
+  const dir = target.slice(0, target.lastIndexOf("/")) || ".";
+  const tmp = `${target}.${++tmpCounter}.tmp`;
   try {
     const { mkdir, rename, writeFile } = await import("node:fs/promises");
-    const dir = dataDir().replace(/\/$/, "");
     await mkdir(dir, { recursive: true });
-    const tmp = `${filePath()}.tmp`;
     await writeFile(tmp, JSON.stringify(body), "utf8");
-    await rename(tmp, filePath());
+    await rename(tmp, target);
     lastError = null;
   } catch (error) {
     dirty = true; // не втрачаємо намір записати
@@ -95,13 +109,58 @@ async function flush(): Promise<void> {
   }
 }
 
-function scheduleFlush(): void {
+function flush(): Promise<void> {
+  flushTimer = null;
+  flushChain = flushChain.then(writeSnapshot);
+  return flushChain;
+}
+
+/**
+ * Відкладений запис — і коли на нього не можна покладатись.
+ *
+ * Дві секунди затримки економлять сотні перезаписів файлу під час обходу
+ * підписників. Але між дотиком людини й записом на диск утворюється вікно, і
+ * редеплой у цьому вікні стирає рівно те, заради чого людина прийшла: щойно
+ * задану точку. Тому зміни, які варто не втратити ніколи (поява підписника,
+ * нова точка, вступ у коло), пишуться НЕГАЙНО, а решта — як і раніше.
+ */
+function scheduleFlush(urgent = false): Promise<void> {
   dirty = true;
-  if (flushTimer) return;
+  if (urgent) {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    return flush();
+  }
+  // Таймер уже зведено — другий не потрібен, зміна поїде з ним.
+  if (flushTimer) return Promise.resolve();
   flushTimer = setTimeout(() => {
     void flush();
   }, 2000);
   (flushTimer as unknown as { unref?: () => void }).unref?.();
+  return Promise.resolve();
+}
+
+/**
+ * Запис на зупинці процесу.
+ *
+ * Railway зупиняє контейнер сигналом, і все, що лежало в памʼяті, зникає разом
+ * із ним. Без цього гачка кожен редеплой з'їдав останні секунди роботи — а
+ * редеплой тут буває частіше, ніж хотілося б.
+ */
+let shutdownHooked = false;
+function hookShutdown(): void {
+  if (shutdownHooked) return;
+  shutdownHooked = true;
+  const proc = (globalThis as { process?: NodeJS.Process }).process;
+  if (typeof proc?.on !== "function") return; // не Node — гачків немає, і це штатно
+  const save = () => {
+    void flush();
+  };
+  proc.on("SIGTERM", save);
+  proc.on("SIGINT", save);
+  proc.on("beforeExit", save);
 }
 
 export async function getSubscriber(chatId: number): Promise<Subscriber | undefined> {
@@ -120,14 +179,21 @@ export async function ensureSubscriber(
   if (found) return { sub: found, created: false };
   const sub = newSubscriber(chatId, at, ref);
   MEMORY.set(chatId, sub);
-  scheduleFlush();
+  // Поява підписника — негайно: саме її найприкріше втратити. Чекаємо на
+  // завершення запису, інакше «негайно» лишається обіцянкою.
+  await scheduleFlush(true);
   return { sub, created: true };
 }
 
-export async function putSubscriber(sub: Subscriber): Promise<void> {
+/**
+ * `urgent` — для змін, які втратити не можна: нова точка, вступ у коло.
+ * Обхід сповіщень лишається відкладеним: там пишеться службовий стан, і сотня
+ * повних перезаписів файлу за такт коштувала б дорожче за те, що вони бережуть.
+ */
+export async function putSubscriber(sub: Subscriber, urgent = false): Promise<void> {
   await load();
   MEMORY.set(sub.chatId, sub);
-  scheduleFlush();
+  await scheduleFlush(urgent);
 }
 
 export async function allSubscribers(): Promise<Subscriber[]> {
@@ -251,6 +317,11 @@ export async function flushNow(): Promise<void> {
     flushTimer = null;
   }
   await flush();
+}
+
+/** Для тестів: дочекатись, поки черга записів спорожніє. */
+export async function drainFlushes(): Promise<void> {
+  await flushChain;
 }
 
 /** Для тестів і адмінських перевірок: скинути памʼять процесу. */

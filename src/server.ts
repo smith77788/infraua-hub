@@ -1122,7 +1122,9 @@ async function savePoint(
     lastAlertIds: [],
     lastLevel: null,
   };
-  await putSubscriber(updated);
+  // Негайний запис: саме цю зміну найприкріше втратити при перезапуску —
+  // людина щойно задала точку й вважає, що бот її знає.
+  await putSubscriber(updated, true);
 
   // Оновлення живої точки приходить щохвилини. Писати на кожне «ви переїхали
   // на 300 метрів» означало б зробити з радара балакучого пасажира — тому
@@ -1309,7 +1311,7 @@ async function circleCommand(
     const name = tail || "Моє коло";
     if (sub.circle) await leaveCircle(sub.circle, chatId);
     const circle = await createCircle(name, chatId, makeCircleCode);
-    await putSubscriber({ ...sub, circle: circle.code, displayName: sub.displayName ?? "Я" });
+    await putSubscriber({ ...sub, circle: circle.code, displayName: sub.displayName ?? "Я" }, true);
     return { text: (await circleView({ ...sub, circle: circle.code }, now)) ?? renderCircleHelp() };
   }
 
@@ -1321,7 +1323,7 @@ async function circleCommand(
     const circle = await joinCircle(code, chatId);
     if (!circle) return { text: "Такого коду немає. Перепитайте того, хто створив коло." };
     const name = sub.displayName ?? "Учасник";
-    await putSubscriber({ ...sub, circle: circle.code, displayName: name });
+    await putSubscriber({ ...sub, circle: circle.code, displayName: name }, true);
     return {
       text:
         `✅ Ви в колі <b>${circle.name}</b>.\n\n` +
@@ -1331,7 +1333,7 @@ async function circleCommand(
 
   if (verb === "імʼя" || verb === "имя" || verb === "name" || verb === "ім'я") {
     if (!tail) return { text: "Напишіть, як вас підписати: <code>/circle імʼя Мама</code>" };
-    await putSubscriber({ ...sub, displayName: tail.slice(0, 40) });
+    await putSubscriber({ ...sub, displayName: tail.slice(0, 40) }, true);
     return { text: `Записано: <b>${escapeHtml(tail.slice(0, 40))}</b>` };
   }
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { dangerIndex, personalAssessment } from "./advisory";
 import type { Threat, ThreatType } from "./air";
 import {
+  etaPhrase,
   locationKeyboard,
   parsePersonalAction,
   renderAlert,
@@ -191,5 +192,37 @@ describe("прохання точки веде трьома шляхами, а �
     const text = renderOblastPicked("Харківщина");
     expect(text).toContain("центр області");
     expect(text).toContain("десятки кілометрів");
+  });
+});
+
+describe("ETA не вдає точності, якої немає", () => {
+  it("до години — число, бо воно ще щось означає", () => {
+    expect(etaPhrase(12)).toBe(", ~12 хв до вас");
+  });
+
+  it("за годиною число не показуємо взагалі", () => {
+    // «~240 хв до вас» виглядає точніше, ніж будь-що, що ми знаємо: ціль до
+    // того часу кілька разів змінить курс, або її зіб'ють.
+    expect(etaPhrase(240)).toBe(", далеко — понад годину");
+    expect(etaPhrase(240)).not.toContain("240");
+  });
+
+  it("курсу немає — мовчимо, а не пишемо нуль", () => {
+    expect(etaPhrase(null)).toBe("");
+  });
+});
+
+describe("картка не повторює застереження двічі", () => {
+  it("рядок про OSINT один", () => {
+    const { assess, danger } = cards([inbound("a", "shahed", 12)]);
+    const text = renderPersonal(assess, danger, "моя точка", 50);
+    expect(text.split("OSINT")).toHaveLength(2);
+  });
+
+  it("порожній радіус не читається як порожня країна", () => {
+    const assess = personalAssessment([inbound("a", "shahed", 300)], KYIV, { radiusKm: 50 });
+    const text = renderPersonal(assess, dangerIndex(assess), "моя точка", 50);
+    expect(text).toContain("У радіусі 50 км нічого не бачимо");
+    expect(text).toContain("поза вашим радіусом");
   });
 });

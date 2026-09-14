@@ -53,11 +53,31 @@ const LEVEL_BADGE = {
   calm: "🟢 <b>Спокійно</b>",
 } as const;
 
+/**
+ * Час підльоту словами — і межа, за якою число перестає бути числом.
+ *
+ * ETA рахується по прямій за курсом, який джерело оновлює рідко. На двадцятій
+ * хвилині це корисна оцінка; на двохсотій — вигадка з виглядом заміряного:
+ * ціль до того часу кілька разів змінить курс, або її зіб'ють. «~240 хв до
+ * вас» виглядає точніше, ніж будь-що, що ми насправді знаємо.
+ *
+ * Тому за годиною число не показуємо взагалі — лише те, що воно далеко.
+ */
+const ETA_HONEST_LIMIT_MIN = 60;
+
+export function etaPhrase(etaMin: number | null): string {
+  if (etaMin === null) return "";
+  if (etaMin > ETA_HONEST_LIMIT_MIN) return ", далеко — понад годину";
+  return `, ~${etaMin} хв до вас`;
+}
+
 function threatLine(n: PersonalThreat): string {
   const type = n.threat.type ?? "unknown";
   const dir = compass(n.bearingToThreat);
-  const eta = n.etaMin != null ? `, ~${n.etaMin} хв до вас` : "";
-  return `${TYPE_EMOJI[type]} ${TYPE_NAME[type]} — ${n.distanceKm} км на ${dir}${n.inbound ? `, <b>іде на вас</b>${eta}` : ""}`;
+  return (
+    `${TYPE_EMOJI[type]} ${TYPE_NAME[type]} — ${n.distanceKm} км на ${dir}` +
+    (n.inbound ? `, <b>іде на вас</b>${etaPhrase(n.etaMin)}` : "")
+  );
 }
 
 /**
@@ -111,18 +131,22 @@ export function renderPersonal(
   ];
 
   if (assess.inboundCount > 0) {
-    lines.push(
-      `На вашу точку йде: <b>${assess.inboundCount}</b>` +
-        (assess.minutesToNearest != null
-          ? ` · найближча ~<b>${assess.minutesToNearest} хв</b>`
-          : ""),
-    );
+    const eta =
+      assess.minutesToNearest != null && assess.minutesToNearest <= ETA_HONEST_LIMIT_MIN
+        ? ` · найближча ~<b>${assess.minutesToNearest} хв</b>`
+        : "";
+    lines.push(`На вашу точку йде: <b>${assess.inboundCount}</b>${eta}`);
     lines.push("");
   }
 
   const near = assess.nearest.slice(0, 5);
   if (near.length === 0) {
     lines.push(`У радіусі ${radiusKm} км нічого не бачимо.`);
+    // «У радіусі нічого» не те саме, що «в країні нічого». Один рядок
+    // різниці — щоб спокій не читався як сліпота.
+    if (assess.nearestBeyondKm != null) {
+      lines.push(`<i>Найближча ціль — за ${assess.nearestBeyondKm} км, поза вашим радіусом.</i>`);
+    }
   } else {
     for (const n of near) lines.push(threatLine(n));
   }
@@ -136,9 +160,9 @@ export function renderPersonal(
 
   lines.push("");
   if (opts.live) lines.push("<i>📍 точка їде за вами — жива геолокація увімкнена</i>");
-  lines.push(
-    `<i>оцінка за даними OSINT, не радар · ${escapeHtml(danger.caveat.split(".")[0]!)}</i>`,
-  );
+  // Застереження одне. Раніше тут стояли два, і друге майже дослівно повторювало
+  // перше — повтор читається як шаблон і тому не читається взагалі.
+  lines.push("<i>оцінка обстановки за даними OSINT — не радар і не ймовірність влучання</i>");
   return lines.join("\n");
 }
 

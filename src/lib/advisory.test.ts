@@ -199,3 +199,45 @@ describe("dangerIndex — спати чи в укриття", () => {
     expect(dangerIndex(a).caveat).toContain("не радар");
   });
 });
+
+describe("радіус застосовується до переліку, а не лише до лічильника", () => {
+  const point = { lat: 50.45, lon: 30.52 };
+  // Ціль за ~630 км на схід, курсом на захід — тобто «дивиться» на точку.
+  const far: Threat = {
+    id: "far",
+    name: "далека",
+    lat: 50.45,
+    lon: 39.4,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    type: "shahed",
+    heading: 270,
+  };
+
+  it("ціль за сотні кілометрів не потрапляє в перелік", () => {
+    // Саме це бачив користувач: «шахед — 721 км на Сх, іде на вас, ~240 хв».
+    // Особистий радар, який каже таке, навчає не вірити — і справжнє
+    // сповіщення потім теж прочитають як шум.
+    const a = personalAssessment([far], point, { radiusKm: 50 });
+    expect(a.nearest).toHaveLength(0);
+    expect(a.inboundCount).toBe(0);
+  });
+
+  it("але про неї сказано окремо: «поза радіусом», а не замовчано", () => {
+    const a = personalAssessment([far], point, { radiusKm: 50 });
+    expect(a.nearestBeyondKm).toBeGreaterThan(500);
+  });
+
+  it("порожнє небо — і поза радіусом порожньо", () => {
+    expect(personalAssessment([], point, { radiusKm: 50 }).nearestBeyondKm).toBeNull();
+  });
+
+  it("ціль у межах радіуса лишається в переліку", () => {
+    const near: Threat = { ...far, id: "near", lon: 31.2 };
+    const a = personalAssessment([near], point, { radiusKm: 100 });
+    expect(a.nearest).toHaveLength(1);
+    expect(a.nearestBeyondKm).toBeNull();
+  });
+});
