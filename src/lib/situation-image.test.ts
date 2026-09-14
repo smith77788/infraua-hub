@@ -34,4 +34,13 @@ describe("situationSvg", () => {
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).not.toContain("<circle ");
   });
+
+  it("курс на зображенні: стрілка лише коли heading відомий", () => {
+    // Відомий курс → повернутий дрон (rotate).
+    const withCourse = situationSvg([threat({ lat: 49, lon: 32, type: "shahed", heading: 90 })]);
+    expect(withCourse).toContain("rotate(90)");
+    // Невідомий курс → НЕ вигадуємо напрямок (без rotate).
+    const noCourse = situationSvg([threat({ lat: 49, lon: 32, type: "shahed" })]);
+    expect(noCourse).not.toContain("rotate(");
+  });
 });

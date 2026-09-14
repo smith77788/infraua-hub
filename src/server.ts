@@ -334,8 +334,22 @@ async function runChannelTick(
 
   const post = renderChannelPost(smoothed, { previous: lastChannelPost.snapshot });
   if (!post) {
-    // Небо чисте. Забуваємо зріз, щоб поява цілей знову була «суттєвою».
+    // Небо чисте. Якщо ЩОЙНО були цілі — один заспокійливий «відбій» (із чистою
+    // картою), далі мовчимо. Забуваємо зріз, щоб поява цілей знову була суттєвою.
+    const hadTargets = (lastChannelPost.snapshot?.targets ?? 0) > 0;
     lastChannelPost = { signature: "", at: lastChannelPost.at, snapshot: undefined };
+    if (hadTargets && !opts.dryRun) {
+      const { renderSituationPng } = await import("./lib/situation-image");
+      const png = await renderSituationPng([]);
+      const text =
+        "🟢 <b>Відбій — небо чисте</b>\n\n" +
+        "<i>активних цілей за OSINT наразі не фіксуємо · бережіть себе 🙏</i>";
+      const res = await sendChannelUpdate(token, channel, text, 0, png);
+      if (res.ok) {
+        lastChannelPost = { signature: "", at: Date.now(), snapshot: undefined };
+        return { posted: true, targets: 0 };
+      }
+    }
     return { posted: false, reason: "небо чисте" };
   }
   if (opts.dryRun) return { posted: false, dryRun: true, targets: post.targets, text: post.text };
@@ -354,9 +368,10 @@ async function runChannelTick(
     }
   }
 
-  // Картинка обстановки — best-effort: якщо не вийшла, шлемо текст без неї.
+  // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
+  // текст: якщо не вийшла, шлемо текст без неї.
   const { renderSituationPng } = await import("./lib/situation-image");
-  const png = await renderSituationPng(threats);
+  const png = await renderSituationPng(smoothed);
 
   const res = await sendChannelUpdate(token, channel, post.text, post.targets, png);
   if (!res.ok) {
