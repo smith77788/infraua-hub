@@ -19,6 +19,42 @@ export interface TelegramUpdate {
     chat?: { id?: number; type?: string };
     from?: { id?: number; first_name?: string; username?: string };
     text?: string;
+    location?: { latitude?: number; longitude?: number };
+  };
+}
+
+/** Точка, надіслана кнопкою «Надіслати мою точку» або вкладенням. */
+export interface LocationMessage {
+  chatId: number;
+  userId: number | undefined;
+  chatType: string;
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Дістає геолокацію з оновлення.
+ *
+ * Окремо від `parseCommand`, бо це не команда: людина натискає кнопку, і
+ * повідомлення приходить узагалі без тексту. Саме тому раніше такі оновлення
+ * тихо відкидались — `parseCommand` вимагає рядка, що починається з «/».
+ */
+export function parseLocation(update: unknown): LocationMessage | null {
+  if (typeof update !== "object" || update === null) return null;
+  const message = (update as TelegramUpdate).message;
+  const chatId = message?.chat?.id;
+  const lat = message?.location?.latitude;
+  const lon = message?.location?.longitude;
+  if (typeof chatId !== "number") return null;
+  if (typeof lat !== "number" || typeof lon !== "number") return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return {
+    chatId,
+    userId: message?.from?.id,
+    chatType: message?.chat?.type ?? "private",
+    lat,
+    lon,
   };
 }
 
@@ -125,16 +161,20 @@ export function renderStatus(brief: SituationBrief): string {
 
 export function renderStart(consoleUrl: string): string {
   return [
-    "<b>RADAR UA</b> — моніторинг критичної інфраструктури.",
+    "<b>RADAR UA</b> — повітряна обстановка для вашої точки.",
     "",
-    "Показує обʼєкти енергетики, води, транспорту та звʼязку, події з NASA, USGS і GDACS, повітряні тривоги, та граф залежностей із моделюванням відключень.",
+    "Усі монітори відповідають на питання «що в небі над областю». Цей відповідає на інше: <b>чи йде це на вас</b> — напрямок, відстань, хвилини до підльоту.",
     "",
-    "Кожен звʼязок у графі позначений: спостережений із реальних ЛЕП чи виведений за припущенням. Це не косметика — висновок, що стоїть на здогадці, має виглядати інакше за висновок на факті.",
+    "🎯 /my — надішліть свою точку, і бот сам напише, коли ціль піде на вас",
+    "⚙️ /settings — на що будити, на якій відстані, що дозволено вночі",
+    "🛰 /status — обстановка по країні",
+    "🤝 /invite — покликати своїх",
     "",
-    "/status — поточна обстановка",
-    "/help — що вміє бот",
+    "Бот працює і в чужих чатах: наберіть його @імʼя й назву області — і надішлете живу картку обстановки туди, де його немає.",
     "",
-    `<a href="${consoleUrl}">Відкрити консоль</a>`,
+    "<i>Джерело — відкриті OSINT-канали. Це не офіційне джерело: офіційну тривогу й відбій дають Повітряні Сили.</i>",
+    "",
+    `<a href="${consoleUrl}">Відкрити карту</a>`,
   ].join("\n");
 }
 
@@ -142,6 +182,10 @@ export function renderHelp(consoleUrl: string): string {
   return [
     "<b>Команди</b>",
     "",
+    "/my — мій радар: що йде на мою точку (надішліть геолокацію або <code>/my Харків</code>)",
+    "/settings — на що будити, радіус, нічний режим",
+    "/stop — пауза сповіщень; /my вмикає назад",
+    "/invite — посилання-запрошення й лічильник",
     "/status — тривоги, події за добу, стан джерел",
     "/start — про систему",
     "/help — цей текст",
@@ -178,7 +222,11 @@ export interface TgBotCommand {
 
 export function publicCommands(): TgBotCommand[] {
   return [
+    { command: "my", description: "Чи летить на мене: мій радар за моєю точкою" },
+    { command: "settings", description: "Налаштування сповіщень: тип, радіус, ніч" },
     { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
+    { command: "invite", description: "Покликати своїх: посилання-запрошення" },
+    { command: "stop", description: "Пауза сповіщень (налаштування збережуться)" },
     { command: "start", description: "Про систему та посилання на консоль" },
     { command: "help", description: "Що вміє бот" },
   ];
@@ -188,6 +236,7 @@ export function adminCommands(): TgBotCommand[] {
   return [
     { command: "admin", description: "Панель власника з кнопками" },
     { command: "channel", description: "Автоканал: прев'ю; /channel post — надіслати" },
+    { command: "stats", description: "Скільки підписників і чи переживуть вони редеплой" },
     { command: "layers", description: "Шари інфраструктури: on / off" },
     { command: "purge", description: "Прибрати завантажені обʼєкти з графа" },
   ];

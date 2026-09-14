@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import type { Threat } from "./air";
-import { oblastOf, renderChannelPost } from "./channel-post";
+import { channelKeyboard, hashtags, oblastOf, renderChannelPost } from "./channel-post";
 
 function threat(p: Partial<Threat>): Threat {
   return {
@@ -148,5 +148,55 @@ describe("renderChannelPost", () => {
       threat({ lat: 51, lon: 34.5, type: "missile" }),
     ])!;
     expect(a.signature).not.toBe(b.signature);
+  });
+});
+
+describe("хештеги", () => {
+  it("складаються лише з літер — Telegram обриває тег на першому не-літері", () => {
+    // «м. Київ» як «#м. Київ» дало б марний тег «#м».
+    const tags = hashtags(["м. Київ"], new Set(["shahed"]));
+    expect(tags).toContain("#мКиїв");
+    expect(tags).not.toContain("#м ");
+  });
+
+  it("область іде перед типом: шукають «що в моїй області»", () => {
+    const tags = hashtags(["Сумщина"], new Set(["shahed"]));
+    expect(tags.indexOf("#Сумщина")).toBeLessThan(tags.indexOf("#шахеди"));
+  });
+
+  it("шахед і реактивний шахед не дають двох однакових тегів", () => {
+    const tags = hashtags(["Сумщина"], new Set(["shahed", "reactive"]));
+    expect(tags.split(" ").filter((t) => t === "#шахеди")).toHaveLength(1);
+  });
+
+  it("постійний тег є завжди — за ним канал знаходять ті, хто про нього не чув", () => {
+    expect(hashtags([], new Set())).toContain("#повітрянатривога");
+  });
+});
+
+describe("пост із прогнозом", () => {
+  it("рядок прогнозу потрапляє в текст і не ламає підпис дедупу", () => {
+    const threats = [threat({ lat: 50.91, lon: 34.8, type: "shahed", heading: 180 })];
+    const withF = renderChannelPost(threats, { forecast: "🔮 <b>За курсом далі:</b> Полтавщина" })!;
+    const without = renderChannelPost(threats)!;
+    expect(withF.text).toContain("За курсом далі");
+    expect(withF.signature).toBe(without.signature);
+  });
+
+  it("хештеги вкладені в сам текст поста", () => {
+    const post = renderChannelPost([threat({ lat: 50.91, lon: 34.8, type: "shahed" })])!;
+    expect(post.text).toContain(post.hashtags);
+    expect(post.hashtags).toContain("#Сумщина");
+  });
+});
+
+describe("channelKeyboard", () => {
+  it("кнопка бота їде разом із пересланим постом", () => {
+    const kb = channelKeyboard("https://t.me/b?start=ch", "https://radar.example")!;
+    expect(kb.inline_keyboard[0]).toHaveLength(2);
+    expect(kb.inline_keyboard[0]![0]!.url).toBe("https://t.me/b?start=ch");
+  });
+  it("немає що показати — немає й клавіатури, а не порожній ряд", () => {
+    expect(channelKeyboard(null, null)).toBeUndefined();
   });
 });
