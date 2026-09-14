@@ -119,7 +119,9 @@ describe("renderChannelPost", () => {
       { previous: first.snapshot },
     )!;
     expect(grown.material).toBe(true);
-    expect(grown.text).toContain("🆕");
+    // Словами, а не бейджем: «🆕» Telegram малює значком NEW, який нічого не
+    // каже українською, і люди його просто не розуміли.
+    expect(grown.text).toContain("Зʼявились цілі:");
   });
 
   it("ескалація до ракет — завжди суттєво", () => {
@@ -267,7 +269,30 @@ describe("канал не вживає слова «відбій» для вла
     const after = renderChannelPost([threat({ lat: 49.99, lon: 36.23, type: "shahed" })], {
       previous: before.snapshot,
     })!;
-    expect(after.text).toContain("цілей не бачимо");
+    expect(after.text).toContain("Цілей більше не бачимо");
     expect(after.text).not.toContain("відбій");
+  });
+});
+
+describe("рядок змін читається однозначно", () => {
+  const before = renderChannelPost([threat({ lat: 50.91, lon: 34.8, type: "shahed" })])!;
+  const after = renderChannelPost([threat({ lat: 49.23, lon: 28.48, type: "shahed" })], {
+    previous: before.snapshot,
+  })!;
+
+  it("поява й зникнення — на РІЗНИХ рядках", () => {
+    // Склеєні через «·», вони читались навпаки: зелена позначка «цілей не
+    // бачимо» опинялась поруч із назвами областей, де цілі щойно зʼявились.
+    const appeared = after.text.split("\n").find((l) => l.includes("Зʼявились"))!;
+    expect(appeared).not.toContain("не бачимо");
+  });
+
+  it("жодного бейджа NEW — Telegram малює його значком, який нічого не каже", () => {
+    expect(after.text).not.toContain("🆕");
+  });
+
+  it("зникнення цілей не позначається зеленою галочкою — вона читається як відбій", () => {
+    expect(after.text).not.toContain("✅");
+    expect(after.text).toContain("Цілей більше не бачимо");
   });
 });
