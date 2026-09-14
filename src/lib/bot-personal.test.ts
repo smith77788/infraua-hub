@@ -7,6 +7,7 @@ import {
   parsePersonalAction,
   renderAlert,
   renderAskPoint,
+  renderOblastPicked,
   renderPersonal,
   renderSettings,
   settingsKeyboard,
@@ -169,5 +170,26 @@ describe("офіційна тривога в картці", () => {
     const { assess, danger } = cards([inbound("a", "ballistic", 20)]);
     const text = renderPersonal(assess, danger, "моя точка", 50, { officialAlert: true });
     expect(text).toContain("В УКРИТТЯ");
+  });
+});
+
+describe("прохання точки веде трьома шляхами, а не одним", () => {
+  it("перший спосіб — той, що працює скрізь і без дозволів", () => {
+    // Скарга «натиснув кнопку поділитись локацією — нічого не сталося»:
+    // раніше текст вів до ОДНІЄЇ кнопки, яка на компʼютері не робить нічого.
+    const text = renderAskPoint();
+    expect(text).toContain("Оберіть область кнопками");
+    expect(text).toContain("не питає жодних дозволів");
+  });
+
+  it("названо, що саме робити на компʼютері", () => {
+    expect(renderAskPoint()).toContain("Локація");
+    expect(renderAskPoint()).toContain("компʼютер");
+  });
+
+  it("вибір області не мовчить про свою грубість", () => {
+    const text = renderOblastPicked("Харківщина");
+    expect(text).toContain("центр області");
+    expect(text).toContain("десятки кілометрів");
   });
 });

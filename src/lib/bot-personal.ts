@@ -188,17 +188,57 @@ export function renderAlert(
   return lines.join("\n");
 }
 
-/** Точки ще немає — просимо її одним дотиком, а не інструкцією на абзац. */
+/**
+ * Точки ще немає.
+ *
+ * Текст переписано після скарги «натиснув кнопку поділитись локацією — нічого
+ * не сталося». Раніше він вів до ОДНОГО способу — кнопки `request_location`,
+ * яка на компʼютері показується, але не робить нічого: джерела координат там
+ * немає. Людина лишалась без жодного шляху вперед і без пояснення.
+ *
+ * Тепер першим іде спосіб, який працює скрізь і без дозволів (кнопки з
+ * областями), а точніші — поруч, із чесною позначкою, де саме вони працюють.
+ */
 export function renderAskPoint(): string {
   return [
     "🎯 <b>Персональний радар</b>",
     "",
     "Скажіть, де ви, — і бот рахуватиме не «цілі над країною», а те, що йде саме на вашу точку: напрямок, відстань, хвилини.",
     "",
-    "Кнопка нижче надішле координати одним дотиком. Або просто надішліть геолокацію вкладенням — чи напишіть <code>/my Харків</code>.",
+    "<b>Оберіть область кнопками нижче</b> — це працює на будь-якому пристрої й не питає жодних дозволів.",
+    "",
+    "Точніше (і краще):",
+    "📱 <b>телефон</b> — кнопка «📍 Точніше» нижче, один дотик;",
+    "💻 <b>компʼютер</b> — 📎 → <b>Локація</b> → вибрати точку на карті;",
+    "⌨️ будь-де — напишіть <code>/my Харків</code>.",
     "",
     "<i>Координати зберігаються лише для розрахунку відстані. Адреси ми не знаємо й не питаємо.</i>",
   ].join("\n");
+}
+
+/**
+ * Підказка після вибору області.
+ *
+ * Центр області — орієнтир на десятки кілометрів. Мовчати про це означало б
+ * дати людині радіус 50 км від точки, яка може бути за 120 км від неї, і не
+ * сказати, що з цим робити.
+ */
+export function renderOblastPicked(name: string): string {
+  return [
+    `✅ Область: <b>${escapeHtml(name)}</b>`,
+    "",
+    "<i>Точка — центр області, це орієнтир на десятки кілометрів. Щоб рахувало саме для вас, надішліть геолокацію: на телефоні кнопкою «📍 Точніше», на компʼютері 📎 → Локація.</i>",
+  ].join("\n");
+}
+
+export interface PersonalButton {
+  text: string;
+  callback_data: string;
+}
+
+/** Кнопка «точніше» під вибором області — веде до запиту геолокації. */
+export function preciseButton(): PersonalButton {
+  return { text: "📍 Точніше — моя геолокація", callback_data: PERSONAL_ACTIONS.wantGeo };
 }
 
 /** Клавіатура з проханням геолокації — приймається лише в приватному чаті. */
@@ -249,6 +289,7 @@ export const PERSONAL_ACTIONS = {
   refresh: "pv",
   settings: "st",
   soundMenu: "snd",
+  wantGeo: "geo",
   soundPrefix: "snd:",
   imOk: "ok",
   tierPrefix: "t:",
@@ -257,11 +298,6 @@ export const PERSONAL_ACTIONS = {
   mute: "mu:1",
   unmute: "mu:0",
 } as const;
-
-export interface PersonalButton {
-  text: string;
-  callback_data: string;
-}
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
 export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalButton[][] } {
@@ -299,6 +335,7 @@ export function parsePersonalAction(
   | { kind: "refresh" }
   | { kind: "settings" }
   | { kind: "soundMenu" }
+  | { kind: "wantGeo" }
   | { kind: "sound"; value: SoundKind }
   | { kind: "imOk" }
   | { kind: "tier"; value: AlertTier }
@@ -309,6 +346,7 @@ export function parsePersonalAction(
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
   if (data === PERSONAL_ACTIONS.soundMenu) return { kind: "soundMenu" };
+  if (data === PERSONAL_ACTIONS.wantGeo) return { kind: "wantGeo" };
   if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
   if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
