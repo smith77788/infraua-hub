@@ -139,3 +139,35 @@ describe("прохання точки", () => {
     expect(locationKeyboard("supergroup")).toBeUndefined();
   });
 });
+
+describe("офіційна тривога в картці", () => {
+  it("під чинною тривогою «спокійно» не пишемо — це фальшивий відбій на одного", () => {
+    const { assess, danger } = cards([]);
+    const text = renderPersonal(assess, danger, "моя точка", 50, { officialAlert: true });
+    expect(text).toContain("Триває повітряна тривога");
+    expect(text).toContain("Лишайтесь в укритті");
+    expect(text).not.toContain("можна спати");
+  });
+
+  it("невідомий стан тривоги не видається ні за тривогу, ні за відбій", () => {
+    // Збій джерела, зведений до «діє», кричав би щотихого дня; зведений до
+    // «знято» — дав би фальшивий відбій. Обидва спрощення шкідливі.
+    const { assess, danger } = cards([]);
+    const text = renderPersonal(assess, danger, "моя точка", 50, { officialAlert: null });
+    expect(text).toContain("невідомий");
+    expect(text).not.toContain("Триває повітряна тривога");
+    expect(text).not.toContain("можна спати");
+  });
+
+  it("відбій офіційно знято — картка спокійна, як і раніше", () => {
+    const { assess, danger } = cards([]);
+    const text = renderPersonal(assess, danger, "моя точка", 50, { officialAlert: false });
+    expect(text).toContain("Спокійно");
+  });
+
+  it("тривога не глушить нашу власну — ціль на точці лишається головним", () => {
+    const { assess, danger } = cards([inbound("a", "ballistic", 20)]);
+    const text = renderPersonal(assess, danger, "моя точка", 50, { officialAlert: true });
+    expect(text).toContain("В УКРИТТЯ");
+  });
+});

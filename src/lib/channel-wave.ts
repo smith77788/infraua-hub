@@ -135,6 +135,17 @@ export interface WaveState {
   messageId: number | null;
   /** Скільки разів редагували живий пост. */
   edits: number;
+  /**
+   * Чи бачили ми за цю хвилю ОФІЦІЙНУ тривогу в якійсь із її областей.
+   *
+   * Без цього прапорця відбій виходив би й там, де тривоги не оголошували
+   * взагалі (поодинокий розвідник, рух без сирени). «Відбій» без тривоги —
+   * це відбій чого? Оголошувати кінець того, що не починалось, означає
+   * привчати читача, що наше слово «відбій» нічого не значить.
+   */
+  officialAlertSeen: boolean;
+  /** Коли в живому пості вже сказали «цілей не бачимо, тривога триває». */
+  quietNoticeAt: number | null;
 }
 
 export function beginWave(now: number): WaveState {
@@ -146,7 +157,22 @@ export function beginWave(now: number): WaveState {
     types: {},
     messageId: null,
     edits: 0,
+    officialAlertSeen: false,
+    quietNoticeAt: null,
   };
+}
+
+/**
+ * Запам'ятовує, що в областях хвилі була офіційна тривога.
+ *
+ * Прапорець лише вмикається й ніколи не гасне: тривогу, яку оголошували,
+ * треба закрити відбоєм, навіть якщо на момент перевірки її вже зняли.
+ */
+export function markOfficialAlert(state: WaveState, active: readonly string[]): WaveState {
+  if (state.officialAlertSeen) return state;
+  const set = new Set(active);
+  const seen = Object.keys(state.oblasts).some((o) => set.has(o));
+  return seen ? { ...state, officialAlertSeen: true } : state;
 }
 
 /** Вбирає черговий зріз у хвилю. Піки — саме максимуми, а не суми за час. */
@@ -171,16 +197,27 @@ export function updateWave(state: WaveState, snapshot: AirSnapshot, now: number)
 }
 
 /**
- * Хвиля скінчилась — після `quietMs` без жодної цілі.
+ * Хвиля затихла — цілей не бачимо вже `quietMs`.
  *
- * Пауза потрібна саме тому, що набір OSINT блимає: одна порожня вибірка не
- * означає чистого неба, і «відбій» на ній був би брехнею, за якою через дві
- * хвилини пішов би новий наліт.
+ * Це НЕ умова відбою (його дає офіційне оголошення), а умова того, що можна
+ * переписати живий пост на «цілей не бачимо». Пауза потрібна, бо набір OSINT
+ * блимає: одна порожня вибірка не означає чистого неба.
  */
 export const WAVE_QUIET_MS = 20 * 60 * 1000;
 export function waveEnded(state: WaveState, now: number, quietMs = WAVE_QUIET_MS): boolean {
   return now - state.lastActiveAt >= quietMs;
 }
+
+/**
+ * Коли хвилю кидають без відбою.
+ *
+ * Є області, де офіційна тривога триває добами. Чекати на її зняття вічно
+ * означало б тримати хвилю відкритою назавжди, а відбій за ту ніч так і не
+ * вийшов би. Через дванадцять годин тиші хвиля просто закривається — мовчки.
+ * Мовчки, а не постом: «відбою не було» краще сказати нічим, ніж постом, який
+ * прочитають як відбій.
+ */
+export const WAVE_ABANDON_MS = 12 * 60 * 60 * 1000;
 
 const TYPE_PLURAL: Record<ThreatType, string> = {
   shahed: "шахеди",
@@ -212,7 +249,9 @@ export function renderAllClear(state: WaveState, endedAt: number): string {
 
   const regions = Object.keys(state.oblasts).length;
   return [
-    "🟢 <b>Відбій — у небі чисто</b>",
+    // Заголовок мусить казати, ЧИЙ це відбій. «У небі чисто» читалося б як
+    // наша власна оцінка — а саме її ціна тут і є питанням життя.
+    "🟢 <b>Відбій — офіційно</b>",
     "",
     `Хвиля тривала <b>${formatDuration(endedAt - state.startedAt)}</b>.`,
     `Пік: <b>${state.peakTargets}</b> цілей одночасно, зачепило <b>${regions}</b> ${regions === 1 ? "область" : "областей"}.`,
@@ -220,7 +259,33 @@ export function renderAllClear(state: WaveState, endedAt: number): string {
     ...(top.length ? ["", "Найгарячіше було:"] : []),
     ...top.map(([name, n]) => `📍 <b>${name}</b> — до ${n} одночасно`),
     "",
-    "<i>відбій тут означає, що ми перестали бачити цілі. Офіційний відбій дають Повітряні Сили.</i>",
+    "<i>відбій оголошено офіційно в усіх областях, яких торкалася хвиля. Тривога може повернутись — не вимикайте сповіщення.</i>",
+  ].join("\n");
+}
+
+/**
+ * Проміжний стан: цілей не бачимо, але тривога ТРИВАЄ.
+ *
+ * Найважливіший текст у всьому каналі. Саме тут людину найлегше вбити
+ * необережним словом: у неї на екрані пост із переліком цілей, яких уже
+ * немає, і спокуса прочитати тишу як «можна виходити». Тому живий пост у цей
+ * момент переписується на чесний стан — і прямо каже, що це НЕ відбій.
+ */
+export function renderQuietHold(
+  state: WaveState,
+  stillAlertingIn: readonly string[],
+  now: number,
+): string {
+  const quietFor = formatDuration(now - state.lastActiveAt);
+  return [
+    "🟡 <b>Цілей не бачимо — але тривога триває</b>",
+    "",
+    `Востаннє фіксували ціль ${quietFor} тому. Пік хвилі: <b>${state.peakTargets}</b> одночасно.`,
+    "",
+    `🔴 Офіційна тривога ще діє: <b>${stillAlertingIn.join(", ")}</b>`,
+    "",
+    "<b>Це не відбій.</b> Відбій ми дамо лише після офіційного оголошення — " +
+      "не виходьте з укриття за цим постом.",
   ].join("\n");
 }
 

@@ -8,11 +8,13 @@ import {
   beginWave,
   emptyDay,
   forecastWave,
+  markOfficialAlert,
   movePoint,
   newCriticalTypes,
   renderAllClear,
   renderDigest,
   renderForecast,
+  renderQuietHold,
   updateWave,
   waveEnded,
 } from "./channel-wave";
@@ -114,10 +116,9 @@ describe("хвиля", () => {
     let w = beginWave(0);
     w = updateWave(w, snap({ Сумщина: { shahed: 7 }, Харківщина: { kab: 2 } }), 0);
     const text = renderAllClear(w, 3 * 60 * 60 * 1000 + 20 * 60 * 1000);
-    expect(text).toContain("Відбій");
+    expect(text).toContain("Відбій — офіційно");
     expect(text).toContain("3 год 20 хв");
     expect(text).toContain("Сумщина");
-    expect(text).toContain("Повітряні Сили");
   });
 });
 
@@ -152,5 +153,50 @@ describe("підсумок доби", () => {
     const text = renderDigest(day)!;
     expect(text).toContain("2026-01-01");
     expect(text).toContain("ОДНОЧАСНО");
+  });
+});
+
+describe("відбій прив'язаний до офіційної тривоги", () => {
+  it("прапорець вмикається, коли тривога є в області хвилі", () => {
+    const w = updateWave(beginWave(0), snap({ Сумщина: { shahed: 3 } }), 0);
+    expect(w.officialAlertSeen).toBe(false);
+    expect(markOfficialAlert(w, ["Львівщина"]).officialAlertSeen).toBe(false);
+    expect(markOfficialAlert(w, ["Сумщина"]).officialAlertSeen).toBe(true);
+  });
+
+  it("прапорець не гасне: оголошену тривогу треба закрити відбоєм", () => {
+    // Інакше тривога, знята між двома тиками, лишила б хвилю без відбою.
+    let w = updateWave(beginWave(0), snap({ Сумщина: { shahed: 3 } }), 0);
+    w = markOfficialAlert(w, ["Сумщина"]);
+    expect(markOfficialAlert(w, []).officialAlertSeen).toBe(true);
+  });
+
+  it("нова хвиля починається без прапорця", () => {
+    expect(beginWave(0).officialAlertSeen).toBe(false);
+    expect(beginWave(0).quietNoticeAt).toBeNull();
+  });
+});
+
+describe("renderQuietHold", () => {
+  it("прямо каже, що це НЕ відбій, і називає області, де тривога триває", () => {
+    // Найнебезпечніший текст каналу: у читача на екрані пост із цілями, яких
+    // уже немає, і спокуса прочитати тишу як дозвіл вийти.
+    let w = beginWave(0);
+    w = updateWave(w, snap({ Сумщина: { shahed: 6 } }), 0);
+    const text = renderQuietHold(w, ["Сумщина", "Харківщина"], 30 * 60 * 1000);
+    expect(text).toContain("Це не відбій");
+    expect(text).toContain("не виходьте з укриття");
+    expect(text).toContain("Сумщина, Харківщина");
+    expect(text).toContain("30 хв");
+  });
+});
+
+describe("renderAllClear після офіційного оголошення", () => {
+  it("каже, що відбій саме офіційний, і не обіцяє, що більше не прилетить", () => {
+    let w = beginWave(0);
+    w = updateWave(w, snap({ Сумщина: { shahed: 4 } }), 0);
+    const text = renderAllClear(w, 60 * 60 * 1000);
+    expect(text).toContain("офіційно");
+    expect(text).toContain("може повернутись");
   });
 });

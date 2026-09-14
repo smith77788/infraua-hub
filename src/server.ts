@@ -58,6 +58,9 @@ import {
   type DayStats,
   emptyDay,
   forecastWave,
+  markOfficialAlert,
+  renderQuietHold,
+  WAVE_ABANDON_MS,
   renderAllClear,
   renderDigest,
   newCriticalTypes,
@@ -67,6 +70,7 @@ import {
   type WaveState,
 } from "./lib/channel-wave";
 import { kyivDate, kyivHour } from "./lib/kyiv";
+import { parseOfficialAlerts, stillAlerting } from "./lib/official-alerts";
 import { channelLink, inviteLink, parseStartPayload, renderInvite } from "./lib/referral";
 import {
   clampRadius,
@@ -279,6 +283,35 @@ async function botUsername(token: string): Promise<string | null> {
  * означало б удвічі більше запитів до джерела, яке нам нічого не винне.
  */
 let threatCache: { at: number; threats: Threat[] } | null = null;
+
+/**
+ * Офіційні тривоги — спільний кеш для каналу й `/status`.
+ *
+ * `null` означає «не вдалося дізнатися», і це навмисно не зводиться до
+ * порожнього списку: збій джерела, прочитаний як «тривог немає», дав би
+ * фальшивий відбій у каналі рівно тоді, коли перевірити його нічим.
+ */
+let alertsCache: { at: number; regions: string[] } | null = null;
+async function fetchOfficialAlerts(maxAgeMs = 60_000): Promise<string[] | null> {
+  const now = Date.now();
+  if (alertsCache && now - alertsCache.at < maxAgeMs) return alertsCache.regions;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch("https://ubilling.net.ua/aerialalerts/?json", {
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const regions = parseOfficialAlerts(await res.json());
+    if (regions === null) return null;
+    alertsCache = { at: now, regions };
+    return regions;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   const now = Date.now();
   if (threatCache && now - threatCache.at < maxAgeMs) return threatCache.threats;
@@ -565,8 +598,46 @@ async function maybeDigest(token: string, channel: string, now: number): Promise
   await sendChannelUpdate(token, channel, text, day.peakTargets, null, await channelButtons(token));
 }
 
-async function closeWave(token: string, channel: string, now: number): Promise<boolean> {
+/**
+ * Закриває хвилю БЕЗ поста — коли відбою оголошувати нема за чим.
+ *
+ * Два випадки: офіційної тривоги за цю хвилю не було взагалі (відбій чого?)
+ * або тривога триває вже дванадцяту годину й чекати на неї далі означає не
+ * дати відбою ніколи. Обидва — мовчки: «відбою не буде» краще сказати нічим,
+ * ніж постом, який прочитають як відбій.
+ */
+function abandonWave(reason: string): void {
+  if (!wave) return;
+  console.info("wave closed without all-clear:", reason);
+  wave = null;
+  liveWithPhoto = false;
+  currentDay = { ...currentDay, waves: currentDay.waves + 1 };
+}
+
+/**
+ * Відбій — і тільки після офіційного оголошення.
+ *
+ * Раніше тут вистачало того, що ми перестали бачити цілі. Це була помилка
+ * того класу, який коштує життя: наші дані — повідомлення спостерігачів, а не
+ * радар, і ціль, якої ми не бачимо, не перестає летіти. Тепер відбій виходить
+ * лише тоді, коли офіційну тривогу знято в УСІХ областях, яких торкалася
+ * хвиля, і лише якщо та тривога взагалі оголошувалась.
+ *
+ * `false` — відбою не дали (і викликач має лишити хвилю відкритою).
+ */
+async function closeWave(
+  token: string,
+  channel: string,
+  now: number,
+  active: readonly string[],
+): Promise<boolean> {
   if (!wave) return false;
+  if (!wave.officialAlertSeen) {
+    abandonWave("офіційної тривоги за цю хвилю не оголошували");
+    return false;
+  }
+  if (stillAlerting(Object.keys(wave.oblasts), active).length > 0) return false;
+
   const ended = wave;
   wave = null;
   liveWithPhoto = false;
@@ -590,6 +661,34 @@ async function closeWave(token: string, channel: string, now: number): Promise<b
 }
 
 /**
+ * Переписує живий пост на «цілей не бачимо, але тривога триває».
+ *
+ * Без цього читач лишається з постом, у якому перелічені цілі, яких уже
+ * немає, — і тишу навколо прочитає як дозвіл вийти. Робиться один раз на
+ * хвилю: далі текст не змінюється, поки не буде офіційного відбою.
+ */
+async function holdQuietNotice(
+  token: string,
+  channel: string,
+  now: number,
+  still: readonly string[],
+): Promise<void> {
+  if (!wave || wave.messageId === null || wave.quietNoticeAt !== null) return;
+  const { renderSituationPng } = await import("./lib/situation-image");
+  const ok = await editChannelUpdate(
+    token,
+    channel,
+    wave.messageId,
+    renderQuietHold(wave, still, now),
+    0,
+    await renderSituationPng([]),
+    liveWithPhoto,
+    await channelButtons(token),
+  );
+  if (ok) wave = { ...wave, quietNoticeAt: now };
+}
+
+/**
  * Ядро автоканалу — без HTTP і без секрету.
  *
  * Тут зібрана вся поведінка каналу як ЖИВОГО видання, а не стрічки дублів:
@@ -598,7 +697,8 @@ async function closeWave(token: string, channel: string, now: number): Promise<b
  *     тож за ніч у каналі кілька постів, а не сімдесят;
  *  2. новий пост відкривається лише коли є привід — початок хвилі, поява
  *     критичного типу або те, що живий пост уже задавнився;
- *  3. коли небо справді очистилось — виходить «Відбій» зі зведенням хвилі;
+ *  3. відбій виходить ЛИШЕ після офіційного зняття тривоги в областях хвилі;
+ *     поки вона триває, а цілей не видно, живий пост прямо каже «це не відбій»;
  *  4. уранці — підсумок доби;
  *  5. під кожним постом — кнопка «чи летить на мене», яка їде разом із
  *     пересиланням.
@@ -629,31 +729,53 @@ async function runChannelTick(
   if (!opts.dryRun) rollKyivDay(now);
 
   if (!post) {
-    // Небо чисте. Якщо ЩОЙНО були цілі — один заспокійливий «відбій» (із чистою
-    // картою), далі мовчимо. Забуваємо зріз, щоб поява цілей знову була суттєвою.
-    const hadTargets = (lastChannelPost.snapshot?.targets ?? 0) > 0;
+    // Цілей не бачимо. Це ще НЕ відбій: наші дані — повідомлення спостерігачів,
+    // а не радар. Забуваємо зріз, щоб поява цілей знову була суттєвою.
     lastChannelPost = { signature: "", at: lastChannelPost.at, snapshot: undefined };
-    if (!opts.dryRun) {
-      // Годинник добової статистики йде і в тиші — інакше після кількох тихих
-      // годин перший же гучний тик дорахував би їх як гучні.
-      lastAccrualAt = now;
-      // Відбій шле closeWave — зі зведенням хвилі й лише після справжньої
-      // тиші. `hadTargets` тут більше не вирішує: одна порожня вибірка не
-      // означає чистого неба, а «відбій», за яким через дві хвилини йде новий
-      // наліт, — гірший за мовчання.
-      if (wave && waveEnded(wave, now)) {
-        const posted = await closeWave(token, channel, now);
-        if (posted) return { posted: true, targets: 0 };
-      }
-      await maybeDigest(token, channel, now);
+    if (opts.dryRun) return { posted: false, reason: "цілей не бачимо" };
+
+    // Годинник добової статистики йде і в тиші — інакше після кількох тихих
+    // годин перший же гучний тик дорахував би їх як гучні.
+    lastAccrualAt = now;
+    await maybeDigest(token, channel, now);
+    if (!wave) return { posted: false, reason: "небо чисте" };
+
+    const active = await fetchOfficialAlerts();
+    if (active === null) {
+      // Стан офіційних тривог невідомий. Мовчимо: відбій, виданий наосліп,
+      // гірший за відсутність відбою.
+      return { posted: false, reason: "джерело офіційних тривог не відповідає" };
     }
-    return { posted: false, reason: hadTargets ? "чекаємо на справжню тишу" : "небо чисте" };
+
+    const still = stillAlerting(Object.keys(wave.oblasts), active);
+    if (still.length === 0) {
+      const posted = await closeWave(token, channel, now, active);
+      if (posted) {
+        lastChannelTouch = now;
+        return { posted: true, targets: 0 };
+      }
+      return { posted: false, reason: "відбою не давали: тривоги за цю хвилю не було" };
+    }
+
+    // Тривога триває. Найнебезпечніший момент: у читача на екрані пост із
+    // цілями, яких уже немає. Переписуємо живий пост на чесний стан — один раз.
+    if (waveEnded(wave, now)) await holdQuietNotice(token, channel, now, still);
+    if (now - wave.lastActiveAt > WAVE_ABANDON_MS) {
+      abandonWave(`офіційна тривога триває понад 12 год: ${still.join(", ")}`);
+    }
+    return { posted: false, reason: `чекаємо на офіційний відбій: ${still.join(", ")}` };
   }
 
   if (opts.dryRun) return { posted: false, dryRun: true, targets: post.targets, text: post.text };
 
   const escalation = newCriticalTypes(lastChannelPost.snapshot, post.snapshot);
   wave = updateWave(wave ?? beginWave(now), post.snapshot, now);
+  // Запам'ятовуємо факт офіційної тривоги, поки вона триває: саме він дає
+  // право оголосити відбій, коли її знімуть. Недоступне джерело тут не біда —
+  // прапорець виставиться на наступному тику.
+  wave = markOfficialAlert(wave, (await fetchOfficialAlerts()) ?? []);
+  // Нова хвиля активності скасовує сказане «цілей не бачимо».
+  if (wave.quietNoticeAt !== null) wave = { ...wave, quietNoticeAt: null };
   // Хвилини беруться з годинника, а не з очікуваного кроку планувальника: тик
   // смикає і зовнішній крон, і команда /channel, і за сталим кроком «у небі
   // щось було 6 годин» вийшло б із трьох реальних. Стеля в 15 хвилин обрізає
@@ -775,8 +897,13 @@ async function personalCard(sub: Subscriber): Promise<{ text: string; keyboard: 
   const threats = await fetchThreatsCached(60_000);
   const assess = personalAssessment(threats, sub.point, { radiusKm: sub.radiusKm });
   const danger = dangerIndex(assess);
+  // Чи діє офіційна тривога над точкою. `null` — джерело мовчить, і це так і
+  // передається далі: невідоме не зводиться ні до «діє», ні до «знято».
+  const active = await fetchOfficialAlerts();
+  const officialAlert =
+    active === null ? null : active.includes(oblastOf(sub.point.lat, sub.point.lon));
   return {
-    text: renderPersonal(assess, danger, sub.point.label, sub.radiusKm),
+    text: renderPersonal(assess, danger, sub.point.label, sub.radiusKm, { officialAlert }),
     keyboard: personalKeyboard(),
   };
 }
@@ -1157,15 +1284,15 @@ async function situationBrief(request: Request) {
   let eventsLastDay = 0;
   const sources: { name: string; ok: boolean }[] = [];
 
-  try {
-    const res = await fetch("https://ubilling.net.ua/aerialalerts/?json");
-    const data = (await res.json()) as { states?: Record<string, { alertnow?: boolean }> };
-    for (const [name, state] of Object.entries(data.states ?? {})) {
-      if (state?.alertnow) alarms.push(name.replace(/ область$/, ""));
-    }
-    sources.push({ name: "Тривоги", ok: true });
-  } catch {
+  // Той самий кеш, що вирішує долю відбою в каналі: два різні читання одного
+  // джерела означали б, що /status і канал можуть розійтися в тому, чи триває
+  // тривога — а саме на цьому питанні тут усе й тримається.
+  const official = await fetchOfficialAlerts();
+  if (official === null) {
     sources.push({ name: "Тривоги", ok: false });
+  } else {
+    alarms.push(...official);
+    sources.push({ name: "Тривоги", ok: true });
   }
 
   try {

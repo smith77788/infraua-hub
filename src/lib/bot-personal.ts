@@ -70,10 +70,35 @@ export function renderPersonal(
   danger: DangerIndex,
   placeLabel: string,
   radiusKm: number,
+  /**
+   * Стан офіційної тривоги над точкою: `true` — діє, `false` — знято,
+   * `null` — дізнатися не вдалося. Три стани, а не два, навмисно: збій
+   * джерела, зведений до «діє», кричав би «тривога» щотихого дня і навчив би
+   * не вірити, а зведений до «знято» — дав би фальшивий відбій. Обидва
+   * спрощення шкідливі, тож невідоме лишається невідомим.
+   */
+  opts: { officialAlert?: boolean | null } = {},
 ): string {
+  // `??` тут був би помилкою: він зводить явний `null` («не знаємо») до
+  // `false` («знято») — тобто рівно до того спрощення, якого ми уникаємо.
+  const official: boolean | null = opts.officialAlert === undefined ? false : opts.officialAlert;
+  // Офіційна тривога перекриває наш спокій, але не нашу тривогу.
+  //
+  // «Спокійно, можна спати» під чинною тривогою — це той самий фальшивий
+  // відбій, тільки сказаний одній людині й тому ще переконливіший. Ми не
+  // бачимо цілей поруч — це все, що можемо чесно стверджувати; відбій дає не
+  // наш радіус, а офіційне оголошення.
+  const quietUnderAlert = official === true && danger.level === "calm";
+  const unknownAlert = official === null && danger.level === "calm";
   const lines: string[] = [
-    `${LEVEL_BADGE[danger.level]} · ${escapeHtml(placeLabel)}`,
-    `<i>${escapeHtml(danger.verdict)}</i>`,
+    quietUnderAlert
+      ? `🔴 <b>Триває повітряна тривога</b> · ${escapeHtml(placeLabel)}`
+      : `${LEVEL_BADGE[danger.level]} · ${escapeHtml(placeLabel)}`,
+    quietUnderAlert
+      ? "<i>Цілей поруч не бачимо — але відбою не було. Лишайтесь в укритті.</i>"
+      : unknownAlert
+        ? "<i>Цілей поруч не бачимо. Стан офіційної тривоги зараз невідомий — звіртесь з офіційними каналами.</i>"
+        : `<i>${escapeHtml(danger.verdict)}</i>`,
     "",
   ];
 
