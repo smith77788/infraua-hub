@@ -13,6 +13,7 @@ import {
   type WindowSide,
 } from "@/lib/advisory";
 import { newInboundIds, notify, playBeep, vibrate } from "@/lib/alarm";
+import { ALL_PLACES } from "@/lib/ua-cities";
 import {
   locationErrorText,
   requestBrowserLocation,
@@ -39,23 +40,6 @@ type LocationFailure = Extract<LocationOutcome, { ok: false }>["reason"];
 const LS_POINT = "infraua.me.point.v1";
 const LS_WINDOW = "infraua.me.window.v1";
 const LS_SOUND = "infraua.me.sound.v1";
-
-// Запасний вибір, коли геолокація закрита. Обласні центри — публічно відомі
-// координати, не персональні дані.
-const CITIES: { name: string; lat: number; lon: number }[] = [
-  { name: "Київ", lat: 50.45, lon: 30.52 },
-  { name: "Харків", lat: 49.99, lon: 36.23 },
-  { name: "Дніпро", lat: 48.46, lon: 35.05 },
-  { name: "Одеса", lat: 46.48, lon: 30.72 },
-  { name: "Запоріжжя", lat: 47.84, lon: 35.14 },
-  { name: "Львів", lat: 49.84, lon: 24.03 },
-  { name: "Миколаїв", lat: 46.97, lon: 32.0 },
-  { name: "Полтава", lat: 49.59, lon: 34.54 },
-  { name: "Чернігів", lat: 51.49, lon: 31.29 },
-  { name: "Суми", lat: 50.91, lon: 34.8 },
-  { name: "Черкаси", lat: 49.44, lon: 32.06 },
-  { name: "Херсон", lat: 46.64, lon: 32.61 },
-];
 
 // Колір індексу небезпеки за рівнем: спокій → зелений, укриття → червоний.
 const DANGER_FG: Record<DangerLevel, string> = {
@@ -345,12 +329,12 @@ export default function PersonalThreatPanel({
             className="w-full rounded border border-border bg-card px-1.5 py-1 font-mono text-[10px] text-foreground"
             defaultValue=""
             onChange={(e) => {
-              const c = CITIES.find((x) => x.name === e.target.value);
+              const c = ALL_PLACES.find((x) => x.name === e.target.value);
               if (c) persistPoint({ lat: c.lat, lon: c.lon });
             }}
           >
-            <option value="">— обрати місто —</option>
-            {CITIES.map((c) => (
+            <option value="">— обрати місто або область —</option>
+            {ALL_PLACES.map((c) => (
               <option key={c.name} value={c.name}>
                 {c.name}
               </option>
