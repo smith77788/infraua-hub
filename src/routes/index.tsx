@@ -1444,24 +1444,26 @@ function Console() {
                 «Укриття» на огляді країни виглядало як «укриттів немає» —
                 саме так дефект і виглядав ззовні.
               */}
-              {showShelters ? (
+              {/*
+                Підказка укриттів — компактний чип, а не банер на пів-карти:
+                укриття увімкнені за замовчуванням, тож на огляді країни великий
+                напис «наблизьте» висів би постійно й перекривав цілі. На огляді
+                країни його взагалі не показуємо (бічний перемикач і так каже, що
+                шар увімкнено); чип зʼявляється лише коли є що сказати по ділу —
+                шукаємо / знайдено N / джерело мовчить / тут не розмічено.
+                «Джерело не відповіло» і «тут нічого не розмічено» — різні
+                речення: друге стверджує про світ те, чого ми не знаємо.
+              */}
+              {showShelters && shelterBox !== null ? (
                 <div className="pointer-events-none absolute inset-x-0 top-16 z-[500] flex justify-center px-3">
-                  <span className="rounded-full border border-emerald-500/40 bg-background/90 px-3 py-1 text-center font-mono text-[10px] uppercase tracking-[0.1em] text-emerald-300 backdrop-blur-sm">
-                    {/*
-                      «Джерело не відповіло» і «тут нічого не розмічено» — різні
-                      речення, і плутати їх не можна: друге стверджує про світ
-                      те, чого ми не знаємо. Саме це й сталося, коли запит почав
-                      відвалюватись по таймауту.
-                    */}
-                    {shelterBox === null
-                      ? "Укриття: наблизьте карту до міста"
-                      : sheltersQuery.isFetching
-                        ? "Укриття: шукаємо…"
-                        : shelters.length
-                          ? `Укриття поруч: ${shelters.length}`
-                          : sheltersQuery.data?.degraded
-                            ? "Джерело укриттів не відповіло — спробуйте ще раз"
-                            : "У цій області на відкритій карті нічого не розмічено"}
+                  <span className="max-w-[80%] truncate rounded-full border border-emerald-500/40 bg-background/85 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-emerald-300 backdrop-blur-sm">
+                    {sheltersQuery.isFetching
+                      ? "укриття: шукаємо…"
+                      : shelters.length
+                        ? `укриттів поруч: ${shelters.length}`
+                        : sheltersQuery.data?.degraded
+                          ? "укриття: джерело не відповіло"
+                          : "укриттів тут не розмічено"}
                   </span>
                 </div>
               ) : null}
