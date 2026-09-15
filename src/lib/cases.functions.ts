@@ -116,25 +116,16 @@ export const pinToCase = createServerFn({ method: "POST" })
       return { configured: true, ok: false, error: "Немає що приколоти." };
     }
 
-    const ingest = await platformFetch("/api/platform/ingest/infraua", {
-      method: "POST",
-      body: JSON.stringify({
-        payload: { facilities: data.facilities, retrievedAt: new Date().toISOString() },
-        source: "infraua-console",
-        sector: "infrastructure",
-      }),
-    });
-    if (!ingest.ok) {
-      return {
-        configured: true,
-        ok: false,
-        error: `Не вдалося передати обʼєкт у платформу — ${ingest.error ?? "невідома помилка"}`,
-      };
-    }
-
+    // Обʼєкти йдуть у ТОМУ Ж запиті на приколювання: платформа впорсне саме їх
+    // (як відкриті дані OSM) без гейта гуртового прийому. Раніше це був окремий
+    // виклик `/ingest/infraua`, який відмовляв 403 усюди, де вимкнено шари
+    // інфраструктури, — і «приколоти» не працювало саме через це.
     const res = await platformFetch(`/api/platform/cases/${encodeURIComponent(data.id)}/pin`, {
       method: "POST",
-      body: JSON.stringify({ entityIds: data.facilities.map((f) => platformEntityId(f.id)) }),
+      body: JSON.stringify({
+        entityIds: data.facilities.map((f) => platformEntityId(f.id)),
+        entities: data.facilities,
+      }),
     });
     if (!res.ok) return { configured: true, ok: false, ...(res.error ? { error: res.error } : {}) };
     return { configured: true, ok: true, case: res.body as AnalystCase };
