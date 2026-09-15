@@ -104,6 +104,7 @@ import {
   renderAccessOpened,
   renderGate,
   renderStillNotSubscribed,
+  urlFromChat,
 } from "./lib/gate";
 import { COVERAGE_CAVEAT, nearestShelters } from "./lib/shelters";
 import {
@@ -1184,11 +1185,41 @@ async function checkSubscription(token: string, userId: number): Promise<boolean
  *
  * Повертає готову відповідь-гейт, коли пускати не можна, і `null`, коли можна.
  */
+/**
+ * Публічна адреса каналу, спитана в Telegram і закешована.
+ *
+ * Питаємо, а не виводимо з налаштування: у проді канал заданий числом, з якого
+ * посилання не зробити, і гейт через це мовчки не працював. Кеш назавжди —
+ * адреса каналу не змінюється частіше, ніж перезапускається процес; `null`
+ * теж кешуємо, щоб не стукати в Telegram на кожну команду.
+ */
+let cachedChannelUrl: { url: string | null } | null = null;
+
+async function channelPublicUrl(token: string): Promise<string | null> {
+  const configured = channelUrl(process.env["TELEGRAM_CHANNEL_ID"]);
+  if (configured) return configured;
+  const channel = process.env["TELEGRAM_CHANNEL_ID"]?.trim();
+  if (!channel) return null;
+  if (cachedChannelUrl) return cachedChannelUrl.url;
+  try {
+    const res = await fetch(
+      `${TELEGRAM_API}/bot${token}/getChat?chat_id=${encodeURIComponent(channel)}`,
+    );
+    const body = (await res.json()) as { ok?: boolean; result?: Record<string, unknown> };
+    const url = body.ok && body.result ? urlFromChat(body.result) : null;
+    cachedChannelUrl = { url };
+    return url;
+  } catch {
+    // Не кешуємо збій: наступна спроба має бути справжньою спробою.
+    return null;
+  }
+}
+
 async function subscriptionGate(
   token: string,
   userId: number | undefined,
 ): Promise<{ text: string; keyboard: unknown } | null> {
-  const url = channelUrl(process.env["TELEGRAM_CHANNEL_ID"]);
+  const url = await channelPublicUrl(token);
   // Без публічного посилання гейт неможливий по суті: ми не можемо показати
   // людині, КУДИ підписуватись. Замкнути її в цьому стані було б знущанням.
   if (!url || typeof userId !== "number") return null;
