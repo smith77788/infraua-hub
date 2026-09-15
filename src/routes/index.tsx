@@ -50,6 +50,11 @@ import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import RaidReplay from "@/components/RaidReplay";
+import OfflineBanner from "@/components/OfflineBanner";
+import { useOnline } from "@/hooks/useConnection";
+import { airConnection } from "@/lib/connection-status";
+import { browserStore, readSnapshot, writeSnapshot } from "@/lib/snapshot-cache";
+import { registerServiceWorker } from "@/lib/register-sw";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -392,7 +397,63 @@ function Console() {
   const allEvents = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
-  const threats = useMemo(() => threatsQuery.data?.threats ?? [], [threatsQuery.data]);
+  // ── Автономний режим: останній відомий знімок повітря ────────────────────
+  // Наліт і погана мережа приходять разом. react-query тримає останні вдалі
+  // дані під час невдалого оновлення, але при ХОЛОДНОМУ старті офлайн (вкладку
+  // відкрили знову без мережі) даних немає взагалі — тоді підставляємо знімок
+  // із localStorage. І завжди чесно показуємо вік: застигла картина, видана за
+  // поточну, у цьому інструменті небезпечніша за порожній екран.
+  const AIR_SNAPSHOT_KEY = "infraua.air.snapshot.v1";
+  const airPayload = threatsQuery.data;
+  const [cachedAir, setCachedAir] = useState<{
+    data: NonNullable<typeof threatsQuery.data>;
+    at: number;
+  } | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const snap = readSnapshot<NonNullable<typeof threatsQuery.data>>(
+      browserStore(),
+      AIR_SNAPSHOT_KEY,
+    );
+    if (snap) setCachedAir(snap);
+  }, []);
+  useEffect(() => {
+    if (airPayload) {
+      writeSnapshot(
+        browserStore(),
+        AIR_SNAPSHOT_KEY,
+        airPayload,
+        threatsQuery.dataUpdatedAt || Date.now(),
+      );
+    }
+  }, [airPayload, threatsQuery.dataUpdatedAt]);
+  // Годинник для банера: вік фіду росте й без нових даних, тож перемальовуємо
+  // раз на пів хвилини, щоб «7 хв тому» не застигало на «щойно».
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  // Service worker — щоб консоль відкривалась і без мережі (див. register-sw).
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
+  const effectiveAir = airPayload ?? cachedAir?.data;
+  const threats = useMemo(() => effectiveAir?.threats ?? [], [effectiveAir]);
+  const online = useOnline();
+  const airConn = useMemo(
+    () =>
+      airConnection({
+        online,
+        feedUpdatedAt: threatsQuery.dataUpdatedAt || cachedAir?.at || null,
+        // Перший запит іще в дорозі (online, без помилки) — це не «немає даних».
+        hasData:
+          airPayload !== undefined || cachedAir !== null || (threatsQuery.isLoading && online),
+        now: nowTick,
+      }),
+    [online, threatsQuery.dataUpdatedAt, threatsQuery.isLoading, cachedAir, airPayload, nowTick],
+  );
+
   // Пишемо знімок повітряної картини в буфер реплею при кожному оновленні фіду
   // (recordFrame сам відсіює незмінні кадри й тримає вікно/стелю).
   useEffect(() => {
@@ -954,6 +1015,8 @@ function Console() {
           </Button>
         </div>
       </header>
+
+      <OfflineBanner conn={airConn} />
 
       <SituationBar
         summary={summary}
