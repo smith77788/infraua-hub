@@ -752,6 +752,8 @@ let digestPostedFor: string | null = null;
 let cityAlertedAt: Record<string, number> = {};
 /** Чи підтягнули кулдаун міст зі стійкого сховища (раз на процес). */
 let cityCooldownHydrated = false;
+/** Чи підтягнули стан живого поста зі стійкого сховища (раз на процес). */
+let liveStateHydrated = false;
 /** Коли востаннє додавали час у добову статистику. */
 let lastAccrualAt = 0;
 /** Коли востаннє щось зробили в каналі — надіслали пост або відредагували. */
@@ -994,7 +996,47 @@ async function holdQuietNotice(
  *
  * `force` пропускає дедуп — для ручного `/channel post`.
  */
+/**
+ * Стан живого поста має пережити редеплой.
+ *
+ * `wave` (з `messageId` поста, який редагується) і `lastChannelPost.at` жили в
+ * модульній памʼяті. На кожному перезапуску процесу вони скидались — і замість
+ * того, щоб ВІДРЕДАГУВАТИ живий пост хвилі, бот постив НОВИЙ. Під час нальоту,
+ * коли ми ще й часто деплоїмо, канал діставав дублі постів однієї хвилі. Тепер
+ * стан лягає стійкою позначкою й підхоплюється після перезапуску — але лише
+ * якщо пост ще «живий» (у межах вікна редагування); застарілий не воскрешаємо,
+ * бо редагувати похований у стрічці пост уже пізно, і нова хвиля має новий пост.
+ */
+async function hydrateLiveState(now: number): Promise<void> {
+  if (liveStateHydrated) return;
+  liveStateHydrated = true;
+  const raw = await readMarker("live-post");
+  if (!raw) return;
+  try {
+    const s = JSON.parse(raw) as { wave: WaveState | null; lastPostAt: number };
+    if (s.wave && typeof s.lastPostAt === "number" && now - s.lastPostAt <= LIVE_POST_MAX_MS) {
+      wave = s.wave;
+      lastChannelPost = { ...lastChannelPost, at: s.lastPostAt };
+    }
+  } catch {
+    /* бита позначка — ігноруємо, починаємо з чистого стану */
+  }
+}
+
 async function runChannelTick(
+  opts: { dryRun?: boolean; force?: boolean } = {},
+): Promise<ChannelTickResult> {
+  // Сухий прогін лише ПОКАЗУЄ, що постили б — стан не чіпає й не зберігає.
+  if (opts.dryRun) return runChannelTickCore(opts);
+  await hydrateLiveState(Date.now());
+  try {
+    return await runChannelTickCore(opts);
+  } finally {
+    await writeMarker("live-post", JSON.stringify({ wave, lastPostAt: lastChannelPost.at }));
+  }
+}
+
+async function runChannelTickCore(
   opts: { dryRun?: boolean; force?: boolean } = {},
 ): Promise<ChannelTickResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
