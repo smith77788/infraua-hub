@@ -163,9 +163,30 @@ interface OverpassElement {
  */
 const USER_AGENT = "InfraUA-Console/1.0 (critical infrastructure situational awareness)";
 
-async function overpass(body: string, signal: AbortSignal): Promise<OverpassElement[]> {
+/**
+ * Запит до Overpass із переходом на дзеркала.
+ *
+ * `perMirrorMs` — власний бюджет КОЖНОГО дзеркала, і це виправлення тихої
+ * поломки: раніше всі дзеркала ділили один сигнал від виклику. Щойно він
+ * спрацьовував, кожна наступна спроба падала миттєво — тобто перехід на
+ * дзеркало існував у коді й не працював жодного разу, коли був потрібен
+ * найбільше (перше дзеркало не відповідає вчасно).
+ *
+ * Зовнішній `signal` лишається як загальна стеля: він скасовує все.
+ */
+async function overpassOrThrow(
+  body: string,
+  signal: AbortSignal,
+  perMirrorMs?: number,
+): Promise<OverpassElement[]> {
   let lastError: unknown = null;
   for (const url of OVERPASS_ENDPOINTS) {
+    if (signal.aborted) break;
+    // Власний строк дзеркала, скасовуваний і зовнішнім сигналом теж.
+    const own = perMirrorMs ? new AbortController() : null;
+    const ownTimer = own ? setTimeout(() => own.abort(), perMirrorMs) : null;
+    const onOuterAbort = own ? () => own.abort() : null;
+    if (own && onOuterAbort) signal.addEventListener("abort", onOuterAbort, { once: true });
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -175,17 +196,55 @@ async function overpass(body: string, signal: AbortSignal): Promise<OverpassElem
           Accept: "application/json",
         },
         body: `data=${encodeURIComponent(body)}`,
-        signal,
+        signal: own ? own.signal : signal,
       });
       if (!res.ok) throw new Error(`overpass ${res.status}`);
       const json = (await res.json()) as { elements?: OverpassElement[] };
       return json.elements ?? [];
     } catch (err) {
       lastError = err;
+    } finally {
+      if (ownTimer) clearTimeout(ownTimer);
+      if (onOuterAbort) signal.removeEventListener("abort", onOuterAbort);
     }
   }
   console.error("Overpass unavailable", lastError);
-  return [];
+  throw new OverpassUnavailable(lastError);
+}
+
+/**
+ * Те саме, але провал повертається порожнім масивом.
+ *
+ * Стара поведінка, і вона лишається для шарів карти: там порожньо й недоступно
+ * виглядають однаково (позначок просто немає), тож розрізняти їх нема для чого.
+ * Укриття натомість друкують людині речення про те, що саме сталося, — і для
+ * них є `overpassOrThrow`.
+ */
+async function overpass(
+  body: string,
+  signal: AbortSignal,
+  perMirrorMs?: number,
+): Promise<OverpassElement[]> {
+  try {
+    return await overpassOrThrow(body, signal, perMirrorMs);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Джерело не відповіло — і це НЕ те саме, що «тут нічого немає».
+ *
+ * Раніше `overpass` на повний провал повертав порожній масив, а виклик не міг
+ * відрізнити його від чесної порожньої відповіді. Для укриттів це коштувало
+ * прямої неправди на екрані: «у цій області нічого не розмічено» замість
+ * «джерело не відповіло».
+ */
+export class OverpassUnavailable extends Error {
+  constructor(override readonly cause: unknown) {
+    super("overpass unavailable");
+    this.name = "OverpassUnavailable";
+  }
 }
 
 function toFacility(el: OverpassElement, category: CategoryId): Facility | null {
@@ -1584,6 +1643,22 @@ const SHELTER_BOX_DEG = 0.05;
 const SHELTER_TTL_MS = 12 * 60 * 60 * 1000;
 
 /**
+ * Бюджети запиту укриттів — за замірами, а не за відчуттям.
+ *
+ * Попереднє значення 12 с я взяв із міркування «краще швидко визнати поразку»,
+ * і воно було помилкою: заміряна тривалість цього самого запиту складала
+ * 9,5–10,3 с, тобто запас був майже нульовий. Щойно Overpass пригальмував,
+ * усі три міста почали стабільно відвалюватись по таймауту — функція просто
+ * перестала працювати.
+ *
+ * Помилка була і в самому міркуванні. Поразка тут не безкоштовна: замість
+ * укриттів людина бачить речення про те, що їх немає. Зачекати довше дешевше,
+ * ніж не показати нічого.
+ */
+const PER_MIRROR_MS = 20_000;
+const SHELTER_TOTAL_MS = 45_000;
+
+/**
  * Укриття навколо точки — звичайна функція, а не лише серверна.
  *
  * Бот ходить сюди з вебхука, консоль — через серверну функцію нижче. Один шлях
@@ -1646,20 +1721,24 @@ export async function fetchSheltersBox(box: ShelterBox): Promise<SheltersPayload
   if (cached) return cached;
 
   const controller = new AbortController();
-  /*
-   * Коротший строк, ніж у решти запитів інфраструктури, і навмисно: ті
-   * наповнюють карту, а цей відповідає людині, яка стоїть і чекає. Краще
-   * швидко визнати поразку й дати пораду, яка працює без даних, ніж мовчати
-   * пів хвилини.
-   */
-  const timer = setTimeout(() => controller.abort(), 12_000);
+  const timer = setTimeout(() => controller.abort(), SHELTER_TOTAL_MS);
   try {
-    const elements = await overpass(shelterQuery(box), controller.signal);
+    // Кожному дзеркалу — свій бюджет; загальна стеля лишається зовнішньою.
+    const elements = await overpassOrThrow(shelterQuery(box), controller.signal, PER_MIRROR_MS);
     const shelters = elements.map((el) => toShelter(el)).filter((x): x is Shelter => x !== null);
+    /*
+     * `degraded` тепер означає рівно одне: джерело не відповіло. Порожня
+     * відповідь від джерела, яке ВІДПОВІЛО, — це не збій, а знання: у цьому
+     * районі на відкритій карті нічого не розмічено.
+     *
+     * Раніше обидва випадки давали `degraded`, а екран на обидва друкував
+     * «нічого не розмічено» — тобто на таймаут людині казали неправду про
+     * наявність укриттів.
+     */
     const payload: SheltersPayload = {
       shelters,
       caveat: COVERAGE_CAVEAT,
-      degraded: elements.length === 0,
+      degraded: false,
     };
     // Порожню відповідь теж кешуємо: «тут нічого не розмічено» — це знання,
     // і платити за нього одинадцятьма секундами вдруге немає за що.

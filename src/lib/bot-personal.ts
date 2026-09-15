@@ -492,10 +492,16 @@ export function soundKeyboard(): { inline_keyboard: PersonalButton[][] } {
  * Координати даються посиланням на карту, а не текстом: людині треба дійти,
  * а не запамʼятати число.
  */
-export function renderShelters(list: readonly NearbyShelter[], caveat: string): string {
+export function renderShelters(
+  list: readonly NearbyShelter[],
+  caveat: string,
+  degraded = false,
+): string {
   if (!list.length) {
     return [
-      "🛡 <b>Поруч нічого не знайдено</b>",
+      // «Не відповіло» і «нічого немає» — різні речення. Друге стверджує про
+      // світ те, чого ми не знаємо, і людина може на цьому збудувати рішення.
+      degraded ? "🛡 <b>Джерело не відповіло</b>" : "🛡 <b>Поруч нічого не знайдено</b>",
       "",
       escapeHtml(caveat),
       "",

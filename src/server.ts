@@ -1629,9 +1629,9 @@ async function sendShelters(
     const { fetchShelters } = await import("./lib/infra.functions");
     const payload = await fetchShelters(point.lat, point.lon);
     const near = nearestShelters(point, payload.shelters, { limit: 4 });
-    await telegramSend(token, chatId, renderShelters(near, payload.caveat));
+    await telegramSend(token, chatId, renderShelters(near, payload.caveat, payload.degraded));
   } catch {
-    await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT));
+    await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT, true));
   }
 }
 
