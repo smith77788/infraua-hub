@@ -60,6 +60,7 @@ import {
   getFacilityTiles,
   getShelters,
   getThreats,
+  SHELTER_MAX_SPAN_DEG,
 } from "@/lib/infra.functions";
 import { platformEntityId } from "@/lib/cases";
 import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
@@ -571,16 +572,44 @@ function Console() {
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
 
   /*
-   * Укриття навколо обраного обʼєкта — або навколо Києва, поки нічого не
-   * обрано. Прив'язка саме до вибору, а не до центру карти: центр змінюється
-   * від кожного руху миші, і запит ганявся б за ним.
+   * Укриття вантажаться для того, що ЗАРАЗ на екрані.
+   *
+   * Була груба помилка: запит будувався навколо ОБРАНОГО обʼєкта (а без вибору
+   * — навколо жорстко заданого центру Києва) і накривав прямокутник 11×11 км.
+   * На огляді країни це кілька пікселів, а якщо дивитись на Львів — приходили
+   * київські точки. Шар вмикався й не показував нічого, і це виглядало як
+   * «укриттів немає», хоча вони були.
+   *
+   * Тепер прямокутник — видима область карти. Ширше за розумну межу запит не
+   * йде: перелік укриттів на всю країну — це десятки тисяч точок, серед яких
+   * нічого не знайти, тож замість них консоль просить наблизити карту.
    */
-  const shelterPoint = selected ?? { lat: 50.45, lon: 30.52 };
+  const [viewport, setViewport] = useState<{
+    box: { south: number; west: number; north: number; east: number };
+    zoom: number;
+  } | null>(null);
+
+  const shelterBox = useMemo(() => {
+    if (!viewport) return null;
+    const { box } = viewport;
+    const tooWide =
+      box.north - box.south > SHELTER_MAX_SPAN_DEG || box.east - box.west > SHELTER_MAX_SPAN_DEG;
+    return tooWide ? null : box;
+  }, [viewport]);
+
   const sheltersFn = useServerFn(getShelters);
   const sheltersQuery = useQuery({
-    queryKey: ["shelters", Math.round(shelterPoint.lat * 50), Math.round(shelterPoint.lon * 50)],
-    queryFn: () => sheltersFn({ data: { lat: shelterPoint.lat, lon: shelterPoint.lon } }),
-    enabled: showShelters,
+    // Округлення до сотої градуса: інакше кожен піксель руху карти — новий
+    // ключ і новий запит.
+    queryKey: [
+      "shelters",
+      shelterBox ? shelterBox.south.toFixed(2) : "",
+      shelterBox ? shelterBox.west.toFixed(2) : "",
+      shelterBox ? shelterBox.north.toFixed(2) : "",
+      shelterBox ? shelterBox.east.toFixed(2) : "",
+    ],
+    queryFn: () => sheltersFn({ data: shelterBox! }),
+    enabled: showShelters && shelterBox !== null,
     staleTime: 6 * 60 * 60 * 1000,
   });
   const shelters = useMemo(() => sheltersQuery.data?.shelters ?? [], [sheltersQuery.data]);
@@ -1298,6 +1327,7 @@ function Console() {
                     selectedId={selectedId}
                     onSelect={(f) => setSelectedId(f.id)}
                     shelters={showShelters ? shelters : []}
+                    onViewport={(box, zoom) => setViewport({ box, zoom })}
                   />
                 </Suspense>
               </ClientOnly>
@@ -1393,6 +1423,25 @@ function Console() {
                 }}
               />
               <MapLegend showInfra={!infraDisabled} />
+
+              {/*
+                Порожній шар мусить пояснювати себе. Без цього рядка ввімкнене
+                «Укриття» на огляді країни виглядало як «укриттів немає» —
+                саме так дефект і виглядав ззовні.
+              */}
+              {showShelters ? (
+                <div className="pointer-events-none absolute inset-x-0 top-2 z-[500] flex justify-center px-3">
+                  <span className="rounded-full border border-emerald-500/40 bg-background/90 px-3 py-1 text-center font-mono text-[10px] uppercase tracking-[0.1em] text-emerald-300 backdrop-blur-sm">
+                    {shelterBox === null
+                      ? "Укриття: наблизьте карту до міста"
+                      : sheltersQuery.isFetching
+                        ? "Укриття: шукаємо…"
+                        : shelters.length
+                          ? `Укриття поруч: ${shelters.length}`
+                          : "У цій області на відкритій карті нічого не розмічено"}
+                  </span>
+                </div>
+              ) : null}
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">

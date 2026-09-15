@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  KIND_NOTE,
   classifyShelter,
   nearestShelters,
   shelterQuery,
@@ -149,5 +150,54 @@ describe("nearestShelters", () => {
 
   it("порожній список — це порожній список, а не помилка", () => {
     expect(nearestShelters(point, [])).toEqual([]);
+  });
+});
+
+/*
+ * Пункти незламності беруться за ПОВНОЮ фразою. Заміряно по країні: широкий
+ * збіг на слово «незламност» дає 108 обʼєктів, зі ста без жодного змістовного
+ * тегу, і серед них «площа Незламності» — площі й вулиці, названі на честь.
+ * Точна фраза лишає 8 на всю країну: мало, але справжнє.
+ */
+describe("пункти незламності", () => {
+  it("пункт — це пункт", () => {
+    expect(classifyShelter({ name: "Пункт незламності (ДСНС)" })).toBe("invincibility");
+    expect(classifyShelter({ name: "Пункт Незламності" })).toBe("invincibility");
+    expect(classifyShelter({ name: "Пункт незламності «станція Запоріжжя-Ліве»" })).toBe(
+      "invincibility",
+    );
+  });
+
+  it("площа — не пункт", () => {
+    expect(classifyShelter({ name: "площа Незламності" })).toBeNull();
+    expect(classifyShelter({ name: "вулиця Незламності" })).toBeNull();
+  });
+
+  it("підпис не обіцяє захисту від удару", () => {
+    // Найважливіший рядок у переліку: людина, яка побіжить туди від «шахеда»,
+    // побіжить не туди.
+    expect(KIND_NOTE.invincibility).toContain("не захист від удару");
+  });
+
+  it("у черзі «куди бігти» стоїть після всього підземного", () => {
+    const point = { lat: 50, lon: 30 };
+    const at = (kind: Shelter["kind"], id: string): Shelter => ({
+      id,
+      kind,
+      name: id,
+      lat: point.lat + 0.002,
+      lon: point.lon,
+    });
+    const list = nearestShelters(point, [at("invincibility", "пн"), at("underground", "паркінг")]);
+    expect(list[0]!.id).toBe("паркінг");
+  });
+
+  it("запит тягне пункти, але не ловить площі широким словом", () => {
+    const q = shelterQuery({ south: 50, west: 30, north: 51, east: 31 });
+    // Перша літера схована в класі символів ([Нн]), тож шукаємо хвіст слова.
+    expect(q).toContain("езламност");
+    // Саме «пункт …незламност», а не голе слово: інакше в запит потраплять
+    // площі й вулиці, названі на честь.
+    expect(q).toContain("[Пп]ункт.?[Нн]езламност");
   });
 });

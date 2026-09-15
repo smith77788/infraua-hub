@@ -66,6 +66,43 @@ interface Props {
   onSelect: (f: Facility) => void;
   /** Укриття навколо точки перегляду. Порожньо — шар просто не малюється. */
   shelters?: Shelter[];
+  /**
+   * Куди людина зараз дивиться. Потрібне тим шарам, які вантажаться на вимогу
+   * і мають сенс лише у видимому прямокутнику, а не навколо чогось обраного.
+   */
+  onViewport?: (
+    box: { south: number; west: number; north: number; east: number },
+    zoom: number,
+  ) => void;
+}
+
+/**
+ * Повідомляє назовні видимий прямокутник і масштаб.
+ *
+ * Окремим компонентом, бо хуки Leaflet працюють лише всередині `MapContainer`.
+ * Перше повідомлення шлеться одразу після монтування: без нього шар, увімкнений
+ * до першого руху карти, не дізнався б, де він, і мовчав би — саме так укриття
+ * й не було видно.
+ */
+function ViewportReporter({
+  onViewport,
+}: {
+  onViewport: (
+    box: { south: number; west: number; north: number; east: number },
+    zoom: number,
+  ) => void;
+}) {
+  const map = useMap();
+  const report = () => {
+    const b = map.getBounds();
+    onViewport(
+      { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() },
+      map.getZoom(),
+    );
+  };
+  useEffect(report, []);
+  useMapEvents({ moveend: report, zoomend: report });
+  return null;
 }
 
 /** Мінімальні SVG-гліфи (у стилі lucide) для кожної категорії. */
@@ -731,6 +768,7 @@ export default function InfraMap({
   selectedId,
   onSelect,
   shelters = [],
+  onViewport,
 }: Props) {
   const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
@@ -965,6 +1003,8 @@ export default function InfraMap({
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />
+      {onViewport ? <ViewportReporter onViewport={onViewport} /> : null}
+
       {/*
         Укриття. Зелене — єдиний зелений шар на карті, і це навмисно: усе
         інше тут про загрозу, а це єдине, що про порятунок. Підпис у попапі

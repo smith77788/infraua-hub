@@ -1565,6 +1565,13 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
  */
 export interface SheltersPayload {
   shelters: Shelter[];
+  /**
+   * Прямокутник ширший за розумний — консоль просить наблизити карту.
+   *
+   * Це окремий стан, а не помилка й не «нічого не знайдено»: обидва останні
+   * читалися б як «тут укриттів немає», що неправда.
+   */
+  tooWide?: boolean;
   /** Межа покриття — інтерфейс мусить її показати. Див. shelters.ts. */
   caveat: string;
   degraded: boolean;
@@ -1583,9 +1590,41 @@ const SHELTER_TTL_MS = 12 * 60 * 60 * 1000;
  * на двох: якби кожен мав свій, вони б розійшлися в тому, що вважають
  * укриттям, і людина отримала б у боті одну відповідь, а на карті іншу.
  */
-export async function fetchShelters(lat: number, lon: number): Promise<SheltersPayload> {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+export interface ShelterBox {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+}
+
+/**
+ * Найбільший прямокутник, який має сенс питати, градуси по стороні.
+ *
+ * Не заради Overpass, а заради відповіді: на огляді всієї країни перелік
+ * укриттів — це десятки тисяч точок, серед яких нічого не знайти, а сама
+ * відповідь їхатиме хвилину. Понад цю межу консоль просить наблизити карту.
+ */
+export const SHELTER_MAX_SPAN_DEG = 0.9;
+
+/**
+ * Укриття в прямокутнику — звичайна функція, а не лише серверна.
+ *
+ * Бот ходить сюди з вебхука, консоль — через серверну функцію нижче. Один шлях
+ * на двох: якби кожен мав свій, вони б розійшлися в тому, що вважають
+ * укриттям, і людина отримала б у боті одну відповідь, а на карті іншу.
+ */
+export async function fetchSheltersBox(box: ShelterBox): Promise<SheltersPayload> {
+  const finite =
+    Number.isFinite(box.south) &&
+    Number.isFinite(box.west) &&
+    Number.isFinite(box.north) &&
+    Number.isFinite(box.east);
+  if (!finite || box.north <= box.south || box.east <= box.west) {
     return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+  }
+  if (box.north - box.south > SHELTER_MAX_SPAN_DEG || box.east - box.west > SHELTER_MAX_SPAN_DEG) {
+    // Занадто широко, щоб відповідь була корисною. Не помилка — стан.
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: false, tooWide: true };
   }
 
   /*
@@ -1596,11 +1635,13 @@ export async function fetchShelters(lat: number, lon: number): Promise<SheltersP
    * сховатися» під тривогою — це не «повільно», це марна кнопка: за цей час
    * людина встигне вирішити, що бот завис.
    *
-   * Клітинка округлена до сотої градуса — близько кілометра, тобто сусіди по
+   * Ключ округлений до сотої градуса — близько кілометра, тобто сусіди по
    * району дістають відповідь миттєво. Термін довгий, бо укриття й станції
    * метро не зʼявляються щогодини.
    */
-  const cellKey = `shelters:${lat.toFixed(2)}:${lon.toFixed(2)}`;
+  const cellKey =
+    `shelters:${box.south.toFixed(2)}:${box.west.toFixed(2)}` +
+    `:${box.north.toFixed(2)}:${box.east.toFixed(2)}`;
   const cached = readCache<SheltersPayload>(cellKey, SHELTER_TTL_MS);
   if (cached) return cached;
 
@@ -1613,19 +1654,8 @@ export async function fetchShelters(lat: number, lon: number): Promise<SheltersP
    */
   const timer = setTimeout(() => controller.abort(), 12_000);
   try {
-    const elements = await overpass(
-      shelterQuery({
-        south: lat - SHELTER_BOX_DEG,
-        west: lon - SHELTER_BOX_DEG,
-        north: lat + SHELTER_BOX_DEG,
-        east: lon + SHELTER_BOX_DEG,
-      }),
-      controller.signal,
-    );
+    const elements = await overpass(shelterQuery(box), controller.signal);
     const shelters = elements.map((el) => toShelter(el)).filter((x): x is Shelter => x !== null);
-    // Порожньо після успішного запиту — теж відповідь: у цьому районі на
-    // відкритій карті нічого не розмічено. `degraded` тоді false, бо джерело
-    // відповіло; решту скаже застереження про покриття.
     const payload: SheltersPayload = {
       shelters,
       caveat: COVERAGE_CAVEAT,
@@ -1643,11 +1673,28 @@ export async function fetchShelters(lat: number, lon: number): Promise<SheltersP
   }
 }
 
+/** Укриття навколо точки — те саме, але прямокутник будується сам. */
+export async function fetchShelters(lat: number, lon: number): Promise<SheltersPayload> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+  }
+  return fetchSheltersBox({
+    south: lat - SHELTER_BOX_DEG,
+    west: lon - SHELTER_BOX_DEG,
+    north: lat + SHELTER_BOX_DEG,
+    east: lon + SHELTER_BOX_DEG,
+  });
+}
+
 export const getShelters = createServerFn({ method: "GET" })
-  .validator((input: unknown): { lat: number; lon: number } => {
-    const o = (input ?? {}) as { lat?: unknown; lon?: unknown };
-    const lat = typeof o.lat === "number" && Number.isFinite(o.lat) ? o.lat : Number.NaN;
-    const lon = typeof o.lon === "number" && Number.isFinite(o.lon) ? o.lon : Number.NaN;
-    return { lat, lon };
+  .validator((input: unknown): ShelterBox => {
+    const o = (input ?? {}) as Record<string, unknown>;
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : Number.NaN);
+    return {
+      south: num(o["south"]),
+      west: num(o["west"]),
+      north: num(o["north"]),
+      east: num(o["east"]),
+    };
   })
-  .handler(async ({ data }): Promise<SheltersPayload> => fetchShelters(data.lat, data.lon));
+  .handler(async ({ data }): Promise<SheltersPayload> => fetchSheltersBox(data));

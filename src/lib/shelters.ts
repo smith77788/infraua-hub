@@ -28,7 +28,7 @@
  */
 
 /** Вид укриття. Порядок — за наданим захистом, від найкращого. */
-export type ShelterKind = "shelter" | "metro" | "metro_entrance" | "underground";
+export type ShelterKind = "shelter" | "metro" | "metro_entrance" | "underground" | "invincibility";
 
 export interface Shelter {
   id: string;
@@ -47,6 +47,7 @@ export const KIND_LABEL: Record<ShelterKind, string> = {
   metro: "Станція метро",
   metro_entrance: "Вхід у метро",
   underground: "Підземний паркінг",
+  invincibility: "Пункт незламності",
 };
 
 /**
@@ -61,6 +62,10 @@ export const KIND_NOTE: Record<ShelterKind, string> = {
   metro: "глибока станція — класичне укриття",
   metro_entrance: "вхід на станцію",
   underground: "підземне, але не обладнане укриття",
+  // Найважливіший підпис у цьому переліку. Пункт незламності — це тепло,
+  // світло і звʼязок під час блекауту, а НЕ захист від удару. Людина, яка
+  // побіжить туди від «шахеда», побіжить не туди.
+  invincibility: "тепло і звʼязок під час блекауту, не захист від удару",
 };
 
 /** Емодзі для бота: рядок має читатися оком, а не розбиратися. */
@@ -69,6 +74,7 @@ export const KIND_EMOJI: Record<ShelterKind, string> = {
   metro: "🚇",
   metro_entrance: "🚇",
   underground: "🅿️",
+  invincibility: "🔌",
 };
 
 const KIND_RANK: Record<ShelterKind, number> = {
@@ -76,6 +82,9 @@ const KIND_RANK: Record<ShelterKind, number> = {
   metro: 1,
   metro_entrance: 2,
   underground: 3,
+  // Останній свідомо: від удару він не захищає, тож у списку «куди бігти»
+  // не має витісняти нічого підземного.
+  invincibility: 4,
 };
 
 /**
@@ -99,6 +108,15 @@ export function shelterQuery(bbox: {
     `nwr["station"="subway"](${b});`,
     `node["railway"="subway_entrance"](${b});`,
     `nwr["amenity"="parking"]["parking"="underground"](${b});`,
+    /*
+     * Пункти незламності шукаються за назвою, і саме за ПОВНОЮ фразою
+     * «пункт незламності», а не за словом «незламност». Заміряно по країні:
+     * широкий збіг дає 108 обʼєктів, з яких сто без жодного змістовного тегу,
+     * і серед них «площа Незламності» — тобто площі й вулиці, названі на
+     * честь, а не пункти. Точна фраза лишає 8 на всю країну — це мало, але це
+     * справжнє, а класти на карту площу під виглядом пункту не можна.
+     */
+    `nwr["name"~"[Пп]ункт.?[Нн]езламност",i](${b});`,
     ");",
     "out center 800;",
   ].join("");
@@ -126,6 +144,9 @@ export function classifyShelter(tags: Record<string, string>): ShelterKind | nul
   if (tags["station"] === "subway") return "metro";
   if (tags["railway"] === "subway_entrance") return "metro_entrance";
   if (tags["amenity"] === "parking" && tags["parking"] === "underground") return "underground";
+  // Тільки повна фраза: «площа Незламності» — це площа, а не пункт.
+  const name = tags["name:uk"] ?? tags["name"] ?? "";
+  if (/[Пп]ункт.?[Нн]езламност/.test(name)) return "invincibility";
   return null;
 }
 
