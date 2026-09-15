@@ -2893,6 +2893,38 @@ async function ensureWebhook(request: Request): Promise<void> {
   }
 }
 
+/**
+ * Оболонка сторінки не кешується; хешовані ассети — навічно.
+ *
+ * Це виправлення того, через що задеплоєні зміни не доходили до людей.
+ *
+ * Ассети мають у назві хеш вмісту й віддаються як `immutable` на рік — це
+ * правильно. Але HTML-оболонка, яка й каже, ЯКІ саме хеші вантажити, не мала
+ * жодного заголовка кешування взагалі. Без директиви кеш застосовує власну
+ * евристику й може тримати документ годинами: WebView Telegram відкриває стару
+ * оболонку, та просить старі хеші, а вони `immutable` — тобто віддаються з
+ * кешу назавжди. Людина бачить стару збірку нескінченно, хоч на сервері лежить
+ * нова, і жоден редеплой цього не лікує.
+ *
+ * `no-cache` тут означає не «не зберігати», а «перепитати перед показом»: копія
+ * лишається, але звіряється з сервером, і `304` віддається дешево. Саме це й
+ * потрібно для документа, який важить десятки кілобайт і змінюється з кожним
+ * деплоєм.
+ */
+function withShellCacheHeaders(response: Response): Response {
+  const type = response.headers.get("content-type") ?? "";
+  if (!type.includes("text/html")) return response;
+  // Заголовок уже виставлений вище за течією — не перебиваємо чужого рішення.
+  if (response.headers.has("cache-control")) return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-cache, must-revalidate");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     // Перехоплюється до маршрутизатора: службова відповідь не має залежати
@@ -2957,7 +2989,7 @@ export default {
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
-      return await normalizeCatastrophicSsrResponse(response);
+      return withShellCacheHeaders(await normalizeCatastrophicSsrResponse(response));
     } catch (error) {
       console.error(error);
       return new Response(renderErrorPage(), {
