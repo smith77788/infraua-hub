@@ -385,6 +385,16 @@ export interface StoreStats {
   writeError?: string;
   lastError: string | null;
   circles: number;
+  /**
+   * Де саме зараз працює процес.
+   *
+   * Без цього «сховище ефемерне» не розрізняє два зовсім різні випадки: тому
+   * немає ніде — і том є, але підключений до СУСІДНЬОГО сервісу. Друге
+   * трапилось насправді: у проєкті три сервіси з дуже схожими назвами, том
+   * створили, побачили його в списку й вирішили, що готово.
+   */
+  railwayService: string | null;
+  railwayProject: string | null;
 }
 
 export async function stats(): Promise<StoreStats> {
@@ -402,6 +412,8 @@ export async function stats(): Promise<StoreStats> {
     ...(probe.error ? { writeError: probe.error } : {}),
     lastError,
     circles: CIRCLES.size,
+    railwayService: process.env["RAILWAY_SERVICE_NAME"]?.trim() || null,
+    railwayProject: process.env["RAILWAY_PROJECT_NAME"]?.trim() || null,
   };
 }
 
