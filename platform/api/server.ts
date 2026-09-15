@@ -31,6 +31,7 @@ import { PurposePolicy } from '../core/security/PurposePolicy';
 import { EnvApiKeyAuth, Principal } from '../core/security/ApiKeyAuth';
 import { RateLimiter } from '../core/security/RateLimiter';
 import { RiskScorer } from '../core/analytics/RiskScorer';
+import { AirActivityStore } from '../core/analytics/AirActivityStore';
 import { betweenness, components, degrees, allShortestPaths } from '../core/analytics/GraphMetrics';
 import { resolveDuplicates } from '../core/analytics/EntityResolver';
 import { findCommonOwnership, findConflictsOfInterest } from '../core/analytics/ConflictOfInterest';
@@ -99,6 +100,7 @@ const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
 const cases = new CaseStore(path.join(DATA_ROOT, 'cases.json'));
 const snapshots = new SnapshotStore(path.join(DATA_ROOT, 'snapshots.log'));
 const alerts = new AlertStore(path.join(DATA_ROOT, 'alerts.json'));
+const airActivity = new AirActivityStore(path.join(DATA_ROOT, 'air-activity.log'));
 const actions = new ActionRegistry(graph, audit, path.join(DATA_ROOT, 'pending-actions.json'));
 const tools = new ToolRegistry(
   graph,
@@ -514,6 +516,31 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+/**
+ * Air-activity surge detection over persisted history.
+ *
+ * The console pushes the current active-target count here on each poll; the
+ * platform keeps it on the durable volume and answers whether the sky is busier
+ * than this deployment's own baseline. Unlike the console's per-device session
+ * history, this baseline survives restarts and spans days.
+ *
+ * No clearance clamp and no compartment: the input is a single scalar derived
+ * from open air-monitoring sources, carrying nothing that ranks above PUBLIC.
+ * Not audited per call on purpose — this is a ~30-second heartbeat, and an
+ * audit line for each would bury the meaningful actions it exists to record.
+ */
+app.post('/api/platform/ingest/air', (req, res) => {
+  const count = Number((req.body ?? {}).count);
+  if (!Number.isFinite(count) || count < 0) {
+    return res.status(400).json({ error: 'count is required and must be a non-negative number' });
+  }
+  res.status(201).json(airActivity.record(count));
+});
+
+app.get('/api/platform/air/anomalies', (_req, res) => {
+  res.json(airActivity.surge());
 });
 
 /**
