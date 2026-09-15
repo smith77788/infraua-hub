@@ -93,12 +93,22 @@ function ViewportReporter({
   ) => void;
 }) {
   const map = useMap();
+  const last = useRef("");
   const report = () => {
     const b = map.getBounds();
-    onViewport(
-      { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() },
-      map.getZoom(),
-    );
+    const box = {
+      // Округлення до сотої градуса (~1 км) — і не лише заради ключа запиту:
+      // без нього кожен `moveend` перемальовував би весь маршрут дарма.
+      south: Math.round(b.getSouth() * 100) / 100,
+      west: Math.round(b.getWest() * 100) / 100,
+      north: Math.round(b.getNorth() * 100) / 100,
+      east: Math.round(b.getEast() * 100) / 100,
+    };
+    const zoom = map.getZoom();
+    const key = `${box.south},${box.west},${box.north},${box.east},${zoom}`;
+    if (key === last.current) return;
+    last.current = key;
+    onViewport(box, zoom);
   };
   useEffect(report, []);
   useMapEvents({ moveend: report, zoomend: report });
