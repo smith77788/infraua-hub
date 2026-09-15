@@ -35,6 +35,23 @@ export interface TrackFix {
   t: number;
 }
 
+/**
+ * Перетворює трек цілі (trail від джерела: lat/lon + ISO-час) на фікси для
+ * оцінки швидкості. Це КРАЩЕ джерело за клієнтський буфер: доступне одразу на
+ * першому ж завантаженні й щільніше. Биті мітки часу відкидаємо, решту — за
+ * часом.
+ */
+export function trailToFixes(
+  trail: readonly { lat: number; lon: number; t: string }[],
+): TrackFix[] {
+  const out: TrackFix[] = [];
+  for (const p of trail) {
+    const ms = Date.parse(p.t);
+    if (Number.isFinite(ms)) out.push({ lat: p.lat, lon: p.lon, t: ms });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
 export interface Velocity {
   /** Курс руху, ° (0=Пн, 90=Сх) — з реального зміщення, не з поля heading. */
   bearingDeg: number;

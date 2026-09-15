@@ -126,39 +126,3 @@ export function tracksUpTo(buffer: readonly RaidFrame[], cursorMs: number): Repl
   }
   return [...byId.values()].filter((tr) => tr.points.length >= 2);
 }
-
-/** Точка треку з часовою міткою — для оцінки ШВИДКОСТІ, не лише форми. */
-export interface TimedPoint {
-  lat: number;
-  lon: number;
-  /** Час фіксу (ms) — час кадру, у якому ціль була в цій позиції. */
-  t: number;
-}
-
-export interface TimedTrack {
-  id: string;
-  type: Threat["type"];
-  points: TimedPoint[];
-}
-
-/**
- * Треки з часом кожного фіксу — щоб можна було рахувати вектор швидкості, а не
- * лише малювати лінію. Той самий принцип, що й tracksUpTo (лише реально бачене,
- * без повторів позиції), але з часом кадру при кожній точці.
- */
-export function timedTracks(buffer: readonly RaidFrame[]): TimedTrack[] {
-  const byId = new Map<string, TimedTrack>();
-  for (const f of buffer) {
-    for (const t of f.threats) {
-      const prev = byId.get(t.id);
-      const pt: TimedPoint = { lat: t.lat, lon: t.lon, t: f.t };
-      if (!prev) {
-        byId.set(t.id, { id: t.id, type: t.type, points: [pt] });
-      } else {
-        const tail = prev.points[prev.points.length - 1]!;
-        if (tail.lat !== pt.lat || tail.lon !== pt.lon) prev.points.push(pt);
-      }
-    }
-  }
-  return [...byId.values()].filter((tr) => tr.points.length >= 2);
-}

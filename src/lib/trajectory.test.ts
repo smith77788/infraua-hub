@@ -5,6 +5,7 @@ import {
   projectForward,
   reachedPlaces,
   swarmVector,
+  trailToFixes,
   type TrackFix,
 } from "./trajectory";
 
@@ -87,6 +88,39 @@ describe("estimateVelocity — відновлення відомого руху"
     ]);
     expect(noisy).not.toBeNull();
     expect(noisy!.confidence).toBeLessThan(straight.confidence);
+  });
+});
+
+describe("trailToFixes", () => {
+  it("парсить ISO-час і сортує за часом", () => {
+    const fixes = trailToFixes([
+      { lat: 50.2, lon: 30.2, t: "2026-09-15T21:02:00Z" },
+      { lat: 50.0, lon: 30.0, t: "2026-09-15T21:00:00Z" },
+    ]);
+    expect(fixes).toHaveLength(2);
+    expect(fixes[0]!.t).toBeLessThan(fixes[1]!.t); // відсортовано
+    expect(fixes[0]!.lat).toBe(50.0);
+  });
+
+  it("биті мітки часу відкидає, не падає", () => {
+    const fixes = trailToFixes([
+      { lat: 50, lon: 30, t: "не дата" },
+      { lat: 50.1, lon: 30, t: "2026-09-15T21:00:00Z" },
+    ]);
+    expect(fixes).toHaveLength(1);
+  });
+
+  it("трек із trail дає той самий вектор, що й прямий синтетичний", () => {
+    // Побудуємо trail на схід і переконаємось, що курс ~90°.
+    const base = Date.parse("2026-09-15T21:00:00Z");
+    const trail = [0, 60, 120, 180].map((s) => ({
+      lat: 50,
+      lon: 30 + (180 * (s / 3600)) / (111.32 * Math.cos((50 * Math.PI) / 180)),
+      t: new Date(base + s * 1000).toISOString(),
+    }));
+    const v = estimateVelocity(trailToFixes(trail));
+    expect(v).not.toBeNull();
+    expect(Math.abs(v!.bearingDeg - 90)).toBeLessThanOrEqual(3);
   });
 });
 

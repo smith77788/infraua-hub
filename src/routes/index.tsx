@@ -1447,8 +1447,17 @@ function Console() {
 
               <PersonalThreatPanel threats={threats} weather={feeds.weather} />
               <HotOblasts threats={threats} />
-              <WaveForecast frames={raidFrames} />
-              <ActiveWaves waves={waves} frames={raidFrames} />
+              {/*
+                Прогнози руху ховаємо на застиглих/офлайн даних: проєктувати
+                траєкторію зі старих трейлів і подавати як поточну — оманливо.
+                Банер зверху вже каже про застій; тут краще мовчати.
+              */}
+              {airConn.link === "live" || airConn.link === "delayed" ? (
+                <>
+                  <WaveForecast threats={threats} />
+                  <ActiveWaves waves={waves} threats={threats} />
+                </>
+              ) : null}
 
               <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
               <TimelinePlayer onCursor={setPlayCursor} />

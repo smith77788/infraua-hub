@@ -1,10 +1,9 @@
 import { useMemo } from "react";
 import { Layers3 } from "lucide-react";
 
-import type { ThreatType } from "@/lib/air";
+import type { Threat, ThreatType } from "@/lib/air";
 import { UK } from "@/lib/channel-lexicon";
-import { type RaidFrame, timedTracks } from "@/lib/raid-replay";
-import { estimateVelocity, swarmVector } from "@/lib/trajectory";
+import { estimateVelocity, swarmVector, trailToFixes } from "@/lib/trajectory";
 import type { Wave } from "@/lib/waves";
 
 const COLOR: Record<ThreatType, string> = {
@@ -42,26 +41,25 @@ const TREND: Record<Wave["trend"], string> = {
  */
 export default function ActiveWaves({
   waves,
-  frames,
+  threats,
 }: {
   waves: readonly Wave[];
-  frames: readonly RaidFrame[];
+  threats: readonly Threat[];
 }) {
   const rows = useMemo(() => {
-    const tracks = timedTracks(frames);
-    const byId = new Map(tracks.map((t) => [t.id, t]));
+    const byId = new Map(threats.map((t) => [t.id, t]));
     const present = waves.filter((w) => w.status !== "fading");
     return present.map((w) => {
       const vs = w.threatIds
         .map((id) => byId.get(id))
-        .filter((t): t is NonNullable<typeof t> => !!t)
-        .map((t) => estimateVelocity(t.points))
+        .filter((t): t is Threat => !!t && !!t.trail && t.trail.length >= 2)
+        .map((t) => estimateVelocity(trailToFixes(t.trail!)))
         .filter((v): v is NonNullable<typeof v> => !!v && v.confidence >= 0.4);
       const sw = swarmVector(vs);
       const dir = sw && sw.coherence >= 0.5 ? dirUk(sw.bearingDeg) : null;
       return { wave: w, dir };
     });
-  }, [waves, frames]);
+  }, [waves, threats]);
 
   const active = rows.length;
   if (active < 2) return null;

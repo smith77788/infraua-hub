@@ -1,8 +1,14 @@
 import { useMemo } from "react";
 import { Navigation } from "lucide-react";
 
-import { type RaidFrame, timedTracks } from "@/lib/raid-replay";
-import { estimateVelocity, reachedPlaces, swarmVector, type Velocity } from "@/lib/trajectory";
+import type { Threat } from "@/lib/air";
+import {
+  estimateVelocity,
+  reachedPlaces,
+  swarmVector,
+  trailToFixes,
+  type Velocity,
+} from "@/lib/trajectory";
 import { ALL_PLACES } from "@/lib/ua-cities";
 
 const DIRS = [
@@ -24,20 +30,17 @@ const MIN_CONFIDENCE = 0.4;
 /**
  * «Куди йде рій» — прогноз руху за СПОСТЕРЕЖЕНИМ треком, не за полем heading.
  *
- * Зʼявляється лише коли накопичилось досить руху, щоб чесно порахувати вектор
- * (буфер реплею наповнюється з моменту відкриття). Немає впевненого треку —
+ * Джерело — власний trail кожної цілі (реальні фікси з часом): доступний одразу,
+ * без очікування, поки накопичиться клієнтський буфер. Немає впевненого руху —
  * панелі немає: порожній прогноз гірший за його відсутність.
  */
-export default function WaveForecast({ frames }: { frames: readonly RaidFrame[] }) {
+export default function WaveForecast({ threats }: { threats: readonly Threat[] }) {
   const model = useMemo(() => {
-    const tracks = timedTracks(frames);
     const confident: { lat: number; lon: number; v: Velocity }[] = [];
-    for (const tr of tracks) {
-      const v = estimateVelocity(tr.points);
-      if (v && v.confidence >= MIN_CONFIDENCE) {
-        const last = tr.points[tr.points.length - 1]!;
-        confident.push({ lat: last.lat, lon: last.lon, v });
-      }
+    for (const t of threats) {
+      if (!t.trail || t.trail.length < 2) continue;
+      const v = estimateVelocity(trailToFixes(t.trail));
+      if (v && v.confidence >= MIN_CONFIDENCE) confident.push({ lat: t.lat, lon: t.lon, v });
     }
     if (confident.length === 0) return null;
     const swarm = swarmVector(confident.map((c) => c.v));
@@ -48,7 +51,7 @@ export default function WaveForecast({ frames }: { frames: readonly RaidFrame[] 
     };
     const reach = reachedPlaces(centroid, swarm, ALL_PLACES, { horizonMin: 30 }).slice(0, 3);
     return { swarm, reach, tracked: confident.length };
-  }, [frames]);
+  }, [threats]);
 
   if (!model) return null;
   const { swarm, reach, tracked } = model;
