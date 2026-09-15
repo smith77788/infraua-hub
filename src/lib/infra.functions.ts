@@ -1573,6 +1573,9 @@ export interface SheltersPayload {
 /** Півсторона прямокутника пошуку, градуси (~5.5 км по широті). */
 const SHELTER_BOX_DEG = 0.05;
 
+/** Скільки живе кеш укриттів. Станції метро не зʼявляються щогодини. */
+const SHELTER_TTL_MS = 12 * 60 * 60 * 1000;
+
 /**
  * Укриття навколо точки — звичайна функція, а не лише серверна.
  *
@@ -1584,8 +1587,31 @@ export async function fetchShelters(lat: number, lon: number): Promise<SheltersP
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
   }
+
+  /*
+   * Кеш по клітинці, і він тут не про економію запитів, а про час людини.
+   *
+   * Заміряно на живому Overpass для цього самого запиту: Київ 5,2 с, Полтава
+   * 11,4 с, Львів 1,4 с. Одинадцять секунд очікування після натискання «куди
+   * сховатися» під тривогою — це не «повільно», це марна кнопка: за цей час
+   * людина встигне вирішити, що бот завис.
+   *
+   * Клітинка округлена до сотої градуса — близько кілометра, тобто сусіди по
+   * району дістають відповідь миттєво. Термін довгий, бо укриття й станції
+   * метро не зʼявляються щогодини.
+   */
+  const cellKey = `shelters:${lat.toFixed(2)}:${lon.toFixed(2)}`;
+  const cached = readCache<SheltersPayload>(cellKey, SHELTER_TTL_MS);
+  if (cached) return cached;
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
+  /*
+   * Коротший строк, ніж у решти запитів інфраструктури, і навмисно: ті
+   * наповнюють карту, а цей відповідає людині, яка стоїть і чекає. Краще
+   * швидко визнати поразку й дати пораду, яка працює без даних, ніж мовчати
+   * пів хвилини.
+   */
+  const timer = setTimeout(() => controller.abort(), 12_000);
   try {
     const elements = await overpass(
       shelterQuery({
@@ -1600,8 +1626,17 @@ export async function fetchShelters(lat: number, lon: number): Promise<SheltersP
     // Порожньо після успішного запиту — теж відповідь: у цьому районі на
     // відкритій карті нічого не розмічено. `degraded` тоді false, бо джерело
     // відповіло; решту скаже застереження про покриття.
-    return { shelters, caveat: COVERAGE_CAVEAT, degraded: elements.length === 0 };
+    const payload: SheltersPayload = {
+      shelters,
+      caveat: COVERAGE_CAVEAT,
+      degraded: elements.length === 0,
+    };
+    // Порожню відповідь теж кешуємо: «тут нічого не розмічено» — це знання,
+    // і платити за нього одинадцятьма секундами вдруге немає за що.
+    writeCache(cellKey, payload);
+    return payload;
   } catch {
+    // Провал НЕ кешуємо: наступна спроба має бути справжньою спробою.
     return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
   } finally {
     clearTimeout(timer);
