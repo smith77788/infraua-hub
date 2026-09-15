@@ -192,3 +192,56 @@ describe("достовірність у кореляції", () => {
     expect(noRoles[0]!.severity).toBe("critical");
   });
 });
+
+/*
+ * Рівень рахується з ближнього краю відстані, а не з поданої. Позначка за
+ * 25 км із розкидом ±25 км може вже стояти над обʼєктом, і порівнювати з
+ * порогом саму лише подану відстань означає занижувати рівень рівно на розкид.
+ *
+ * Заміряно на живих даних: усі десять кореляцій виходили «medium» — панель не
+ * виділяла нічого взагалі.
+ */
+describe("рівень від ближнього краю відстані", () => {
+  const facs = [fac("ps", "substation", 50.0, 30.0)];
+  const q = (uncertaintyKm: number | null) => ({
+    uncertaintyKm,
+    position: "approx" as const,
+    lifecycle: "tracking" as const,
+    presumptiveCourse: false,
+    speedKmh: null,
+  });
+
+  it("заявлений розкид піднімає рівень", () => {
+    const far = [threat("t", 50.25, 30.0, { quality: q(null) })]; // ~28 км, розкид невідомий
+    const same = [threat("t", 50.25, 30.0, { quality: q(25) })]; // та сама відстань, ±25 км
+    const a = correlateAirThreats(facs, far)[0]!;
+    const b = correlateAirThreats(facs, same)[0]!;
+    expect(b.nearestEdgeKm).toBeLessThan(a.nearestEdgeKm);
+    // Порядок гостроти локально: critical < high < medium. Не тягнемо його з
+    // модуля — публічний інтерфейс не має ширшати заради зручності тесту.
+    const rank = { critical: 0, high: 1, medium: 2 } as const;
+    expect(rank[b.severity]).toBeLessThan(rank[a.severity]);
+  });
+
+  it("мовчання джерела рівня НЕ піднімає", () => {
+    /*
+     * Межа, через яку не можна переступати: розширити коло на карті — визнати
+     * незнання, підняти рівень — стверджувати знання. Друге з власного
+     * припущення означало б вигадати терміновість за джерело.
+     */
+    const silent = correlateAirThreats(facs, [threat("t", 50.25, 30.0, { quality: q(null) })])[0]!;
+    expect(silent.nearestEdgeKm).toBe(silent.nearestKm);
+  });
+
+  it("подана відстань лишається поданою", () => {
+    const c = correlateAirThreats(facs, [threat("t", 50.25, 30.0, { quality: q(25) })])[0]!;
+    // Показуємо те, що сказало джерело; рахуємо з того, що з цього випливає.
+    expect(c.nearestKm).toBeGreaterThan(c.nearestEdgeKm);
+    expect(c.nearestEdgeKm).toBeGreaterThanOrEqual(0);
+  });
+
+  it("ближній край не йде у мінус", () => {
+    const c = correlateAirThreats(facs, [threat("t", 50.02, 30.0, { quality: q(45) })])[0]!;
+    expect(c.nearestEdgeKm).toBe(0);
+  });
+});

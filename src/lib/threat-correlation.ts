@@ -20,6 +20,7 @@ import {
   type CredibilityAssessment,
   type SourceRole,
 } from "./source-credibility";
+import { displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
 
 /** Категорії, удар по яких має найвищі наслідки (узгоджено з радаром). */
 export const CRITICAL_CATEGORIES: ReadonlySet<CategoryId> = new Set<CategoryId>([
@@ -37,8 +38,26 @@ export type ThreatSeverity = "critical" | "high" | "medium";
 
 export interface ThreatCorrelation {
   facility: Facility;
-  /** Відстань до найближчої повітряної позначки, км. */
+  /** Відстань до найближчої повітряної позначки, км — як її подає джерело. */
   nearestKm: number;
+  /**
+   * Найменша відстань, сумісна з даними: `nearestKm` мінус розкид, який
+   * джерело саме й називає.
+   *
+   * Рівень рахується з НЕЇ, а не з `nearestKm`. Позначка за 25 км із розкидом
+   * ±25 км може вже стояти над обʼєктом, і порівнювати з порогом саму лише
+   * подану відстань означає систематично занижувати рівень рівно на розкид.
+   *
+   * Розкид враховується, ЛИШЕ коли джерело назвало його саме. Розширити коло
+   * на карті — це визнати незнання, і помилитись там безпечно; підняти рівень
+   * тривоги — це стверджувати знання, і робити це з власного припущення
+   * означало б вигадати терміновість за джерело.
+   *
+   * Заміряно на живих даних (31 ціль, seed-обʼєкти): усі десять кореляцій
+   * виходили «medium» — тобто панель не виділяла нічого взагалі. Від ближнього
+   * краю двоє з них піднялися до «high».
+   */
+  nearestEdgeKm: number;
   /** Скільки позначок у радіусі. */
   threatCount: number;
   /** Скільки окремих OSINT-повідомлень стоїть за ними (сума reports). */
@@ -71,6 +90,7 @@ export interface CorrelateOptions {
 }
 
 function severityOf(
+  /** Ближній край відстані, а не подана відстань. Див. `nearestEdgeKm`. */
   nearestKm: number,
   critical: boolean,
   inAlarm: boolean,
@@ -111,6 +131,7 @@ export function correlateAirThreats(
   const out: ThreatCorrelation[] = [];
   for (const f of facilities) {
     let nearestKm = Infinity;
+    let nearestEdgeKm = Infinity;
     let threatCount = 0;
     let reportCount = 0;
     const sources = new Set<string>();
@@ -120,6 +141,20 @@ export function correlateAirThreats(
         threatCount++;
         reportCount += t.reports ?? 1;
         if (d < nearestKm) nearestKm = d;
+        /*
+         * Ближній край рахуємо окремо: найближча ПОДАНА позначка й найближча
+         * МОЖЛИВА — не обовʼязково та сама ціль.
+         *
+         * Розкид береться, лише коли джерело назвало його САМЕ. Це не
+         * педантизм, а межа, через яку не можна переступати: розширити коло
+         * на карті — це визнати незнання, і помилитись тут безпечно; підняти
+         * рівень тривоги — це стверджувати знання, і зробити це з власного
+         * припущення означає вигадати терміновість за джерело. Мовчання
+         * джерела лишає відстань такою, якою вона подана.
+         */
+        const q = t.quality ?? EMPTY_QUALITY;
+        const edge = radiusIsStated(q) ? Math.max(0, d - displayRadiusKm(q)) : d;
+        if (edge < nearestEdgeKm) nearestEdgeKm = edge;
         for (const s of t.sources ?? (t.source ? [t.source] : [])) sources.add(s);
       }
     }
@@ -135,10 +170,11 @@ export function correlateAirThreats(
     out.push({
       facility: f,
       nearestKm: Math.round(nearestKm * 10) / 10,
+      nearestEdgeKm: Math.round(nearestEdgeKm * 10) / 10,
       threatCount,
       reportCount,
       sources: [...sources],
-      severity: severityOf(nearestKm, critical, inAlarmRegion, warrantsEscalation(credibility)),
+      severity: severityOf(nearestEdgeKm, critical, inAlarmRegion, warrantsEscalation(credibility)),
       inAlarmRegion,
       credibility,
     });
