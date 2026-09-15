@@ -69,6 +69,33 @@ const SIDE_TEXT: Record<WindowSide, string> = {
 
 type Point = { lat: number; lon: number };
 
+/** Спільний вигляд для пошуку: регістр, апострофи (’ ʼ ` → '), пробіли. */
+function normPlace(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[’ʼ`´]/g, "'")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Місце за набраним рядком серед усіх міст і областей. Точний збіг — завжди;
+ * префікс — лише коли просимо (по Enter/після поля), щоб набір «к» не ставив
+ * точку на перше-ліпше місто на «к» під час друку.
+ */
+function resolvePlace(query: string, allowPrefix: boolean): (typeof ALL_PLACES)[number] | null {
+  const n = normPlace(query);
+  if (n.length < 2) return null;
+  const exact = ALL_PLACES.find((p) => normPlace(p.name) === n);
+  if (exact) return exact;
+  if (!allowPrefix) return null;
+  return (
+    ALL_PLACES.filter((p) => normPlace(p.name).startsWith(n)).sort(
+      (a, b) => a.name.length - b.name.length,
+    )[0] ?? null
+  );
+}
+
 function loadPoint(): Point | null {
   try {
     const raw = localStorage.getItem(LS_POINT);
@@ -325,21 +352,36 @@ export default function PersonalThreatPanel({
               ) : null}
             </>
           ) : null}
-          <select
-            className="w-full rounded border border-border bg-card px-1.5 py-1 font-mono text-[10px] text-foreground"
-            defaultValue=""
+          {/*
+            Пошук замість довгого списку: міст і областей під вісімдесят, і
+            гортати їх на телефоні — мука. Вводиш кілька літер — datalist сам
+            підказує. Точний збіг ставить точку одразу; частковий (напр.
+            «кремен») — по Enter або коли поле втрачає фокус.
+          */}
+          <input
+            list="me-places"
+            inputMode="text"
+            placeholder="Місто або область — почніть вводити…"
+            className="w-full rounded border border-border bg-card px-1.5 py-1 font-mono text-[10px] text-foreground placeholder:text-muted-foreground/60"
             onChange={(e) => {
-              const c = ALL_PLACES.find((x) => x.name === e.target.value);
+              const c = resolvePlace(e.target.value, false);
               if (c) persistPoint({ lat: c.lat, lon: c.lon });
             }}
-          >
-            <option value="">— обрати місто або область —</option>
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const c = resolvePlace((e.target as HTMLInputElement).value, true);
+              if (c) persistPoint({ lat: c.lat, lon: c.lon });
+            }}
+            onBlur={(e) => {
+              const c = resolvePlace(e.target.value, true);
+              if (c) persistPoint({ lat: c.lat, lon: c.lon });
+            }}
+          />
+          <datalist id="me-places">
             {ALL_PLACES.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name}
-              </option>
+              <option key={c.name} value={c.name} />
             ))}
-          </select>
+          </datalist>
         </div>
       ) : assessment ? (
         <div className="space-y-2">
