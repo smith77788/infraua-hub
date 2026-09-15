@@ -64,6 +64,56 @@ describe("forecastWave", () => {
     expect(out[0]!.minutes).toBeLessThanOrEqual(30);
   });
 
+  it("веде ціль найшвидшим можливим для типу, а не типовим", () => {
+    /*
+     * «Шахед» покриває і 185 км/год, і 600. Типова швидкість сказала б
+     * області, що в неї пів години, там, де лишається десять хвилин — а
+     * прогноз існує саме для того, щоб область устигла приготуватись.
+     */
+    const fast = forecastWave([threat({ lat: 50.91, lon: 34.8, type: "shahed", heading: 180 })]);
+    const measured = forecastWave([
+      threat({
+        lat: 50.91,
+        lon: 34.8,
+        type: "shahed",
+        heading: 180,
+        quality: {
+          uncertaintyKm: 4,
+          position: "confirmed",
+          lifecycle: "tracking",
+          presumptiveCourse: false,
+          speedKmh: 185,
+        },
+      }),
+    ]);
+    // Заміряні 185 км/год — це повільно; без заміру беремо верх діапазону,
+    // тож ціль «доходить» помітно раніше.
+    expect(fast[0]!.minutes).toBeLessThan(measured[0]!.minutes);
+  });
+
+  it("рахує, скільки цілей ідуть припущеним курсом", () => {
+    const out = forecastWave([
+      threat({
+        lat: 50.91,
+        lon: 34.8,
+        type: "shahed",
+        heading: 180,
+        quality: {
+          uncertaintyKm: 25,
+          position: "approx",
+          lifecycle: "uncertain",
+          presumptiveCourse: true,
+          speedKmh: null,
+        },
+      }),
+    ]);
+    expect(out[0]!.presumed).toBe(1);
+    expect(out[0]!.count).toBe(1);
+    // Рядок тоді так і каже — на відміну від адресного сигналу місту, тут
+    // припущений курс не відкидається, а називається.
+    expect(renderForecast(out)).toContain("курс припущений");
+  });
+
   it("ціль без курсу не прогнозується — вигадувати напрямок нема з чого", () => {
     expect(forecastWave([threat({ lat: 50.91, lon: 34.8, type: "shahed" })])).toEqual([]);
   });
@@ -82,14 +132,16 @@ describe("forecastWave", () => {
   it("рядок прогнозу згортає зайве в «і ще N»", () => {
     const line = renderForecast(
       [
-        { oblast: "А", minutes: 5, count: 1, types: ["shahed"] },
-        { oblast: "Б", minutes: 9, count: 1, types: ["shahed"] },
-        { oblast: "В", minutes: 12, count: 1, types: ["shahed"] },
-        { oblast: "Г", minutes: 20, count: 1, types: ["shahed"] },
+        { oblast: "А", minutes: 5, count: 1, types: ["shahed"], presumed: 0 },
+        { oblast: "Б", minutes: 9, count: 1, types: ["shahed"], presumed: 0 },
+        { oblast: "В", minutes: 12, count: 1, types: ["shahed"], presumed: 0 },
+        { oblast: "Г", minutes: 20, count: 1, types: ["shahed"], presumed: 0 },
       ],
       3,
     );
-    expect(line).toContain("А (~5 хв)");
+    // Число — найраніше з можливого, і формулювання каже саме це: «може бути
+    // вже за», а не «через», щоб рядок не читався як розклад.
+    expect(line).toContain("А (може бути вже за 5 хв)");
     expect(line).toContain("і ще 1");
   });
 

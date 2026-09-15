@@ -23,7 +23,8 @@ import type { ThreatType, Threat } from "./air";
 import type { AirSnapshot } from "./channel-post";
 import { oblastOf } from "./channel-post";
 import { formatDuration } from "./kyiv";
-import { SPEED_KMH } from "./threat-eta";
+import { speedRangeFor } from "./threat-eta";
+import { EMPTY_QUALITY } from "./threat-quality";
 
 /* ─── 1. Прогноз руху хвилі ─────────────────────────────────────────────── */
 
@@ -49,11 +50,29 @@ export function movePoint(
 
 export interface ForecastEntry {
   oblast: string;
-  /** За скільки хвилин перша ціль увійде в цю область (оцінка). */
+  /**
+   * За скільки хвилин перша ціль може ввійти в цю область — НАЙРАНІШЕ
+   * з можливого, а не найімовірніше.
+   *
+   * Тут це правильна половина вилки, і з тієї самої причини, що в порозі
+   * тривоги: прогноз існує, щоб область устигла приготуватись. Назвати
+   * найімовірніший час і помилитись означає, що люди не встигли; назвати
+   * найраніший і помилитись означає, що вони почекали зайві хвилини.
+   */
   minutes: number;
   /** Скільки цілей туди прямує. */
   count: number;
   types: ThreatType[];
+  /**
+   * Скільки з цих цілей ідуть ПРИПУЩЕНИМ курсом.
+   *
+   * На відміну від адресного сигналу місту, припущені курси тут не
+   * відкидаються: сигнал місту — це одне гучне твердження, яке без
+   * спостереження просто хибне, а прогноз по областях складається з багатьох
+   * цілей і від однієї помилки не руйнується. Але читач має бачити, на чому
+   * саме стоїть рядок.
+   */
+  presumed: number;
 }
 
 /**
@@ -79,11 +98,21 @@ export function forecastWave(
   const occupied = new Set<string>();
   for (const t of threats) occupied.add(oblastOf(t.lat, t.lon));
 
-  const acc = new Map<string, { minutes: number; count: number; types: Set<ThreatType> }>();
+  const acc = new Map<
+    string,
+    { minutes: number; count: number; types: Set<ThreatType>; presumed: number }
+  >();
   for (const t of threats) {
     if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) continue;
     const type: ThreatType = t.type ?? "unknown";
-    const speed = SPEED_KMH[type] ?? SPEED_KMH.unknown;
+    const q = t.quality ?? EMPTY_QUALITY;
+    /*
+     * Ведемо ціль НАЙБІЛЬШОЮ швидкістю, можливою для її типу, а не типовою.
+     * «Шахед» покриває і 185 км/год, і 600: типова швидкість сказала б
+     * області, що в неї пів години, там, де лишається десять хвилин.
+     */
+    const speed = q.speedKmh ?? speedRangeFor(type, null)[1];
+    const presumed = q.presumptiveCourse ? 1 : 0;
     const here = oblastOf(t.lat, t.lon);
     for (let m = step; m <= horizon; m += step) {
       const p = movePoint(t.lat, t.lon, t.heading, (speed * m) / 60);
@@ -91,10 +120,11 @@ export function forecastWave(
       if (there === here) continue;
       if (occupied.has(there)) break; // туди цілі вже долетіли — не прогноз
       const prev = acc.get(there);
-      if (!prev) acc.set(there, { minutes: m, count: 1, types: new Set([type]) });
+      if (!prev) acc.set(there, { minutes: m, count: 1, types: new Set([type]), presumed });
       else {
         prev.count += 1;
         prev.types.add(type);
+        prev.presumed += presumed;
         if (m < prev.minutes) prev.minutes = m;
       }
       break; // перша нова область — і досить
@@ -107,6 +137,7 @@ export function forecastWave(
       minutes: v.minutes,
       count: v.count,
       types: [...v.types],
+      presumed: v.presumed,
     }))
     .sort((a, b) => a.minutes - b.minutes || b.count - a.count);
 }
@@ -115,7 +146,12 @@ export function forecastWave(
 export function renderForecast(entries: readonly ForecastEntry[], max = 3): string | null {
   if (entries.length === 0) return null;
   const shown = entries.slice(0, max);
-  const parts = shown.map((e) => `${e.oblast} (~${e.minutes} хв)`);
+  // «Може бути вже за N», а не «через N»: число — найраніше з можливого, і
+  // формулювання має казати саме це, інакше воно читається як розклад.
+  const parts = shown.map((e) => {
+    const basis = e.presumed > 0 && e.presumed === e.count ? ", курс припущений" : "";
+    return `${e.oblast} (може бути вже за ${e.minutes} хв${basis})`;
+  });
   const rest = entries.length - shown.length;
   return `🔮 <b>За курсом далі:</b> ${parts.join(", ")}${rest > 0 ? ` і ще ${rest}` : ""}`;
 }
