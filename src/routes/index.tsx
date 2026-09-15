@@ -51,11 +51,13 @@ import HotOblasts from "@/components/HotOblasts";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import RaidReplay from "@/components/RaidReplay";
 import WaveForecast from "@/components/WaveForecast";
+import ActiveWaves from "@/components/ActiveWaves";
 import OfflineBanner from "@/components/OfflineBanner";
 import { useOnline } from "@/hooks/useConnection";
 import { airConnection } from "@/lib/connection-status";
 import { browserStore, readSnapshot, writeSnapshot } from "@/lib/snapshot-cache";
 import { registerServiceWorker } from "@/lib/register-sw";
+import { clusterThreats, updateWaves, type Wave } from "@/lib/waves";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -459,6 +461,11 @@ function Console() {
   // (recordFrame сам відсіює незмінні кадри й тримає вікно/стелю).
   useEffect(() => {
     setRaidFrames((buf) => recordFrame(buf, threats, Date.now()));
+  }, [threats]);
+  // Сегментація нальоту на окремі хвилі зі сталими id (updateWaves веде цикл).
+  const [waves, setWaves] = useState<Wave[]>([]);
+  useEffect(() => {
+    setWaves((prev) => updateWaves(prev, clusterThreats(threats), Date.now()));
   }, [threats]);
   // Під час перемотки карта показує кадр цього моменту; наживо — сам фід.
   const mapThreats = useMemo(() => {
@@ -1441,6 +1448,7 @@ function Console() {
               <PersonalThreatPanel threats={threats} weather={feeds.weather} />
               <HotOblasts threats={threats} />
               <WaveForecast frames={raidFrames} />
+              <ActiveWaves waves={waves} frames={raidFrames} />
 
               <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
               <TimelinePlayer onCursor={setPlayCursor} />
