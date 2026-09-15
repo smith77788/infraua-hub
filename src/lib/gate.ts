@@ -84,3 +84,43 @@ export function gateKeyboard(url: string): {
 export function renderStillNotSubscribed(): string {
   return "Поки не бачу вас у каналі. Підпишіться й натисніть ще раз — інколи Telegram оновлює це з затримкою в кілька секунд.";
 }
+
+/**
+ * Момент, коли доступ відкрився.
+ *
+ * Людина щойно зробила те, що в неї попросили, і найважливіше тут — не
+ * подякувати, а НЕ поставити наступну умову. Тому текст короткий і веде рівно
+ * в один наступний крок: дати точку, бо без неї персональний радар не працює.
+ */
+export function renderAccessOpened(): string {
+  return [
+    "✅ <b>Дякуємо, радар відкрито</b>",
+    "",
+    "Лишився один крок: скажіть, де ви — і бот попереджатиме саме про ті цілі,",
+    "що йдуть у ваш бік, а не про всю країну.",
+  ].join("\n");
+}
+
+/**
+ * Чи ця зміна членства означає «щойно підписався».
+ *
+ * Важливо саме «щойно»: Telegram шле зміни й тоді, коли адміністратор когось
+ * підвищив, і коли статус змінився в межах членства. Вітати людину з
+ * підпискою, якої вона зараз не робила, — дрібна, але помітна фальш.
+ */
+export function justSubscribed(
+  oldStatus: string | undefined,
+  newStatus: string | undefined,
+  newIsMember?: boolean,
+): boolean {
+  return !isSubscribed(oldStatus) && isSubscribed(newStatus, newIsMember);
+}
+
+/** Чи ця зміна означає вихід із каналу. */
+export function justLeft(
+  oldStatus: string | undefined,
+  newStatus: string | undefined,
+  newIsMember?: boolean,
+): boolean {
+  return isSubscribed(oldStatus) && !isSubscribed(newStatus, newIsMember);
+}

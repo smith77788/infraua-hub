@@ -19,6 +19,7 @@ import {
   type WeatherNow,
 } from "./air";
 import { readQuality } from "./threat-quality";
+import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
 import { INFRA_DISABLED_NOTICE, infraLayersEnabled } from "./infra-gate";
@@ -1551,4 +1552,57 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
     }
 
     return { tiles: fetched, tilesTotal: all.length };
+  });
+
+/*
+ * Укриття навколо точки.
+ *
+ * Запит вузький і навмисно не кешується надовго в памʼяті процесу: на
+ * Cloudflare Workers ізолят живе недовго, а сам запит малий (радіус кілька
+ * кілометрів, не країна). Дані змінюються рідко, тож частота звернень
+ * визначається людьми, а не таймером.
+ */
+export interface SheltersPayload {
+  shelters: Shelter[];
+  /** Межа покриття — інтерфейс мусить її показати. Див. shelters.ts. */
+  caveat: string;
+  degraded: boolean;
+}
+
+/** Півсторона прямокутника пошуку, градуси (~5.5 км по широті). */
+const SHELTER_BOX_DEG = 0.05;
+
+export const getShelters = createServerFn({ method: "GET" })
+  .validator((input: unknown): { lat: number; lon: number } => {
+    const o = (input ?? {}) as { lat?: unknown; lon?: unknown };
+    const lat = typeof o.lat === "number" && Number.isFinite(o.lat) ? o.lat : Number.NaN;
+    const lon = typeof o.lon === "number" && Number.isFinite(o.lon) ? o.lon : Number.NaN;
+    return { lat, lon };
+  })
+  .handler(async ({ data }): Promise<SheltersPayload> => {
+    if (!Number.isFinite(data.lat) || !Number.isFinite(data.lon)) {
+      return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25_000);
+    try {
+      const elements = await overpass(
+        shelterQuery({
+          south: data.lat - SHELTER_BOX_DEG,
+          west: data.lon - SHELTER_BOX_DEG,
+          north: data.lat + SHELTER_BOX_DEG,
+          east: data.lon + SHELTER_BOX_DEG,
+        }),
+        controller.signal,
+      );
+      const shelters = elements.map((el) => toShelter(el)).filter((s): s is Shelter => s !== null);
+      // Порожньо після успішного запиту — це теж відповідь: у цьому районі на
+      // відкритій карті нічого не розмічено. `degraded` тут false, бо джерело
+      // відповіло; застереження про покриття скаже решту.
+      return { shelters, caveat: COVERAGE_CAVEAT, degraded: elements.length === 0 };
+    } catch {
+      return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+    } finally {
+      clearTimeout(timer);
+    }
   });

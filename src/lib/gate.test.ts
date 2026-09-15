@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 
 import {
-  channelUrl,
   GATE_ACTION,
+  channelUrl,
   gateKeyboard,
   isSubscribed,
+  justLeft,
+  justSubscribed,
+  renderAccessOpened,
   renderGate,
   renderStillNotSubscribed,
 } from "./gate";
@@ -78,5 +81,55 @@ describe("екран гейту", () => {
     // Telegram оновлює членство із затримкою; «ви не підписались» тут було б
     // звинуваченням у тому, що людина щойно зробила.
     expect(renderStillNotSubscribed()).toContain("затримкою");
+  });
+});
+
+/*
+ * Перехід членства — те, чим гейт замикається. Без нього людина, яка
+ * підписалась і просто повторила команду, впиралась у ту саму відмову, бо
+ * перевірка кешується.
+ */
+describe("justSubscribed / justLeft — переходи членства", () => {
+  it("вхід у канал — це підписка", () => {
+    expect(justSubscribed("left", "member")).toBe(true);
+    expect(justSubscribed(undefined, "member")).toBe(true);
+  });
+
+  it("підвищення вже підписаного — не підписка", () => {
+    // Інакше бот вітав би людину з підпискою, якої вона зараз не робила.
+    expect(justSubscribed("member", "administrator")).toBe(false);
+    expect(justSubscribed("administrator", "creator")).toBe(false);
+  });
+
+  it("обмежений без членства не вважається підписаним", () => {
+    expect(justSubscribed("left", "restricted", false)).toBe(false);
+    expect(justSubscribed("left", "restricted", true)).toBe(true);
+  });
+
+  it("вихід і бан — це вихід", () => {
+    expect(justLeft("member", "left")).toBe(true);
+    expect(justLeft("administrator", "kicked")).toBe(true);
+  });
+
+  it("вихід того, кого й не було, — не подія", () => {
+    expect(justLeft("left", "kicked")).toBe(false);
+  });
+
+  it("переходи взаємно виключні", () => {
+    for (const [o, n] of [
+      ["left", "member"],
+      ["member", "left"],
+      ["member", "administrator"],
+    ] as const) {
+      expect(justSubscribed(o, n) && justLeft(o, n)).toBe(false);
+    }
+  });
+});
+
+describe("renderAccessOpened", () => {
+  it("не ставить наступної умови", () => {
+    const t = renderAccessOpened();
+    expect(t).toContain("радар відкрито");
+    expect(t).not.toContain("підпиш");
   });
 });

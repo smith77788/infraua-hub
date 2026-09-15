@@ -14,6 +14,7 @@ import {
   type BotCommand,
   ownerCommands,
   parseCallback,
+  parseChatMember,
   parseCommand,
   parseLayersArg,
   parseLocation,
@@ -97,6 +98,9 @@ import {
   GATE_ACTION,
   gateKeyboard,
   isSubscribed,
+  justLeft,
+  justSubscribed,
+  renderAccessOpened,
   renderGate,
   renderStillNotSubscribed,
 } from "./lib/gate";
@@ -2469,6 +2473,53 @@ async function telegramWebhook(request: Request): Promise<Response> {
   const inline = parseInlineQuery(update);
   if (inline) {
     await answerInline(token, inline);
+    return new Response("ok", { status: 200 });
+  }
+
+  /*
+   * Людина щойно підписалась на канал — і про це ми дізнаємось самі.
+   *
+   * Це те, чим гейт замикається. Без цього обробника той, хто підписався й
+   * просто написав `/my` знову, впирався в той самий екран: перевірка
+   * кешується на хвилину, і кеш ще тримав «ні». Людина зробила рівно те, що в
+   * неї попросили, і отримала ту саму відмову.
+   *
+   * Telegram шле `chat_member` лише адміністраторам чату. Якщо бота не
+   * зробили адміністратором каналу, оновлення просто не прийде — і все працює
+   * як раніше, через кнопку «Я підписався». Тому це підсилення, а не
+   * залежність.
+   */
+  const memberChange = parseChatMember(update);
+  if (memberChange) {
+    const channel = process.env["TELEGRAM_CHANNEL_ID"]?.trim();
+    // Зміни в чужих чатах (групи, куди додали бота) гейта не стосуються.
+    const ours =
+      channel === String(memberChange.chatId) ||
+      (channel?.startsWith("@") ?? false) ||
+      channel === undefined;
+    if (ours) {
+      const { userId, oldStatus, newStatus, newIsMember } = memberChange;
+      if (justSubscribed(oldStatus, newStatus, newIsMember)) {
+        // Кеш тримав «не підписаний» — прибираємо, інакше наступна команда
+        // відмовить людині, яка вже все зробила.
+        gateCache.set(userId, { at: Date.now(), ok: true });
+        const sub = await getSubscriber(userId);
+        // Пишемо лише тим, хто вже приходив до бота: непроханий лист від бота,
+        // з яким людина не спілкувалась, — це спам, навіть доброзичливий.
+        if (sub) {
+          await telegramSend(
+            token,
+            userId,
+            renderAccessOpened(),
+            sub.point ? undefined : askPointKeyboard(),
+          );
+        }
+      } else if (justLeft(oldStatus, newStatus, newIsMember)) {
+        // Лише скидаємо кеш, щоб наступна перевірка була чесною. Сповіщення
+        // тим, кого вже попереджали, НЕ вимикаємо — запобіжник 3 у gate.ts.
+        gateCache.delete(userId);
+      }
+    }
     return new Response("ok", { status: 200 });
   }
 

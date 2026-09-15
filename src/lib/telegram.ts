@@ -252,6 +252,20 @@ export const WEBHOOK_UPDATES = [
   "edited_message",
   "callback_query",
   "inline_query",
+  /*
+   * `chat_member` — те, чим гейт підписки замикається.
+   *
+   * Без нього бот дізнається про підписку лише тоді, коли людина сама тисне
+   * «Я підписався». Хто підписався й просто написав `/my` знову, впирався в
+   * той самий екран: перевірка кешується на хвилину, і кеш ще тримав «ні».
+   * Тобто людина зробила рівно те, що в неї попросили, і отримала ту саму
+   * відмову — найкоротший шлях втратити її назавжди.
+   *
+   * Telegram шле цей тип лише адміністраторам чату. Бот, якого не зробили
+   * адміністратором каналу, його не отримає — і тоді все працює як раніше,
+   * через кнопку. Тому це підсилення, а не залежність.
+   */
+  "chat_member",
 ] as const;
 
 /**
@@ -527,6 +541,45 @@ interface TelegramCallbackUpdate {
     from?: { id?: number };
     message?: { message_id?: number; chat?: { id?: number } };
     data?: string;
+  };
+}
+
+/** Зміна членства в чаті — те, з чого гейт дізнається про підписку. */
+export interface ChatMemberChange {
+  /** Чат, у якому змінилось членство (у нас — канал). */
+  chatId: number;
+  userId: number;
+  oldStatus: string | undefined;
+  newStatus: string | undefined;
+  /** `is_member` для статусу `restricted` — див. isSubscribed у gate.ts. */
+  newIsMember: boolean | undefined;
+}
+
+export function parseChatMember(update: unknown): ChatMemberChange | null {
+  if (typeof update !== "object" || update === null) return null;
+  const upd = (update as { chat_member?: unknown }).chat_member;
+  if (typeof upd !== "object" || upd === null) return null;
+  const u = upd as {
+    chat?: { id?: unknown };
+    from?: { id?: unknown };
+    old_chat_member?: { status?: unknown };
+    new_chat_member?: { status?: unknown; is_member?: unknown; user?: { id?: unknown } };
+  };
+  const chatId = u.chat?.id;
+  // Кого стосується зміна — це `new_chat_member.user`, а не `from`: `from` це
+  // той, ХТО змінив (адміністратор, який когось вигнав). Сплутати їх означало б
+  // відкрити доступ не тій людині.
+  const userId = u.new_chat_member?.user?.id;
+  if (typeof chatId !== "number" || typeof userId !== "number") return null;
+  const oldStatus = u.old_chat_member?.status;
+  const newStatus = u.new_chat_member?.status;
+  const isMember = u.new_chat_member?.is_member;
+  return {
+    chatId,
+    userId,
+    oldStatus: typeof oldStatus === "string" ? oldStatus : undefined,
+    newStatus: typeof newStatus === "string" ? newStatus : undefined,
+    newIsMember: typeof isMember === "boolean" ? isMember : undefined,
   };
 }
 
