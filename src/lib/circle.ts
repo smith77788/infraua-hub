@@ -21,6 +21,8 @@
  * • Вступ — лише за кодом, який дає учасник. Жодного пошуку людей.
  */
 
+import { escapeHtml } from "./telegram";
+
 export interface CircleMemberView {
   chatId: number;
   name: string;
@@ -85,6 +87,19 @@ function ago(ms: number): string {
  * Порядок навмисний: спершу ті, хто ще не відмітився. Це єдина причина
  * відкрити цей екран — подивитись, кого ще немає.
  */
+/*
+ * Усе, що прийшло від людини, йде в повідомлення лише через `escapeHtml`.
+ *
+ * Повідомлення кола шлються з `parse_mode: "HTML"`, а імена — і своє, і назва
+ * кола — людина задає сама. Без екранування це давало три різні поразки, і
+ * найгірша з них тиха:
+ *
+ *   • `<a href="…">Мама</a>` — чуже посилання в чаті з виглядом нашого;
+ *   • `Родина</b> ⚠️ <b>УВАГА` — підроблений текст від імені бота;
+ *   • `<b` — зламана розмітка, Telegram відхиляє повідомлення ЦІЛКОМ, і
+ *     «я в порядку» просто не доходить до рідних. Саме заради цього рядка
+ *     коло й існує, тож зламати його — зламати всю функцію.
+ */
 export function renderCircle(
   circle: Circle,
   members: readonly CircleMemberView[],
@@ -95,15 +110,16 @@ export function renderCircle(
   const done = members.filter(fresh);
 
   const lines = [
-    `👨‍👩‍👧 <b>${circle.name}</b>`,
+    `👨‍👩‍👧 <b>${escapeHtml(circle.name)}</b>`,
     "",
     `Відмітились: <b>${done.length}</b> з <b>${members.length}</b>`,
     "",
   ];
 
-  for (const m of done) lines.push(`✅ ${m.name} — ${ago(now - (m.okAt ?? now))}`);
+  for (const m of done) lines.push(`✅ ${escapeHtml(m.name)} — ${ago(now - (m.okAt ?? now))}`);
   for (const m of waiting) {
-    lines.push(m.okAt === null ? `⬜️ ${m.name} — ще не відмічався` : `⬜️ ${m.name}`);
+    const name = escapeHtml(m.name);
+    lines.push(m.okAt === null ? `⬜️ ${name} — ще не відмічався` : `⬜️ ${name}`);
   }
 
   lines.push("");
@@ -113,7 +129,7 @@ export function renderCircle(
     "<i>Порожня позначка означає лише те, що людина не відмічалась: розряджений телефон, сон, немає мережі. Це не сигнал про біду.</i>",
   );
   lines.push("");
-  lines.push(`Код для запрошення: <code>${circle.code}</code>`);
+  lines.push(`Код для запрошення: <code>${escapeHtml(circle.code)}</code>`);
   return lines.join("\n");
 }
 
@@ -132,5 +148,5 @@ export function renderCircleHelp(): string {
 
 /** Повідомлення решті кола про чиюсь відмітку. Один рядок — це сповіщення. */
 export function renderPeerOk(name: string, circleName: string): string {
-  return `✅ <b>${name}</b> у порядку · ${circleName}`;
+  return `✅ <b>${escapeHtml(name)}</b> у порядку · ${escapeHtml(circleName)}`;
 }

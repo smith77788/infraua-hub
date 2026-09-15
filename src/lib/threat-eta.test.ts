@@ -1,8 +1,15 @@
 import { describe, expect, it } from "bun:test";
 
-import { angularDiff, bearingDeg, citiesOnCourse, projectThreats } from "./threat-eta";
+import {
+  angularDiff,
+  bearingDeg,
+  citiesOnCourse,
+  projectThreats,
+  SPEED_KMH,
+  SPEED_RANGE_KMH,
+} from "./threat-eta";
 import type { CategoryId, Facility } from "./infra-types";
-import type { Threat } from "./air";
+import type { Threat, ThreatType } from "./air";
 
 function fac(id: string, category: CategoryId, lat: number, lon: number): Facility {
   return { id, name: id, category, lat, lon, source: "test" };
@@ -98,5 +105,202 @@ describe("citiesOnCourse", () => {
     // Курс на північ, а Львів далеко на захід — не на курсі.
     const r = citiesOnCourse(threat("s", 49.0, 34.55, { type: "shahed", heading: 0 }), cities);
     expect(r.some((c) => c.name === "Львів")).toBe(false);
+  });
+});
+
+/*
+ * Те, що джерело каже про власну точність, має доходити до часу підльоту.
+ * Заміри з живої відповіді neptun: радіус невизначеності 4..45 км, а для
+ * цілі із заміряною швидкістю 99 км/год таблиця типових дала б 180 — тобто
+ * майже вдвічі оптимістичніший час.
+ */
+describe("projectThreats — невизначеність доходить до часу", () => {
+  const target: Facility[] = [
+    { id: "pp", name: "ТЕЦ", category: "power_plant", lat: 51, lon: 30, source: "test" },
+  ];
+
+  it("вилка часу ширшає разом із заявленою невизначеністю", () => {
+    const tight = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 4,
+            position: "confirmed",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    const loose = projectThreats(
+      [
+        threat("b", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 45,
+            position: "approx",
+            lifecycle: "uncertain",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(tight).toHaveLength(1);
+    expect(loose).toHaveLength(1);
+    const width = (p: (typeof tight)[number]) => p.etaRangeMin[1] - p.etaRangeMin[0];
+    expect(width(loose[0]!)).toBeGreaterThan(width(tight[0]!));
+    // Середня оцінка при цьому та сама — ширшає саме невпевненість.
+    expect(loose[0]!.etaMin).toBe(tight[0]!.etaMin);
+  });
+
+  it("середня оцінка лежить усередині вилки", () => {
+    const [p] = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 10,
+            position: "approx",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(p!.etaRangeMin[0]).toBeLessThanOrEqual(p!.etaMin);
+    expect(p!.etaRangeMin[1]).toBeGreaterThanOrEqual(p!.etaMin);
+  });
+
+  it("заміряна швидкість б'є таблицю типових", () => {
+    const measured = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 4,
+            position: "confirmed",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: 99.4,
+          },
+        }),
+      ],
+      target,
+    );
+    const typical = projectThreats([threat("b", 50, 30, { heading: 0, type: "shahed" })], target);
+    expect(measured[0]!.speedMeasured).toBe(true);
+    expect(typical[0]!.speedMeasured).toBe(false);
+    // 99 км/год проти типових 180 — ціль іде повільніше, отже часу більше.
+    expect(measured[0]!.etaMin).toBeGreaterThan(typical[0]!.etaMin);
+  });
+
+  it("припущений курс позначається, а не видається за спостережений", () => {
+    const [p] = projectThreats(
+      [
+        threat("a", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 25,
+            position: "approx",
+            lifecycle: "uncertain",
+            presumptiveCourse: true,
+            speedKmh: null,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(p!.courseObserved).toBe(false);
+  });
+
+  it("без заяв джерела вилка все одно не нульова", () => {
+    const [p] = projectThreats([threat("a", 50, 30, { heading: 0, type: "shahed" })], target);
+    expect(p!.courseObserved).toBe(true);
+    expect(p!.etaRangeMin[1]).toBeGreaterThan(p!.etaRangeMin[0]);
+  });
+});
+
+/*
+ * «Шахед» у каналах — це два різні апарати: поршнева «Герань» понад 185 км/год
+ * і реактивна до 600. Канал пише про обидві однаково. Таблиця з одним числом
+ * 180 казала «пів години» там, де лишалося девʼять хвилин.
+ */
+describe("швидкість діапазоном — тип цілі теж невідомий", () => {
+  const target: Facility[] = [
+    { id: "pp", name: "ТЕЦ", category: "power_plant", lat: 51, lon: 30, source: "test" },
+  ];
+  const at = (type: ThreatType) =>
+    projectThreats([threat("a", 50, 30, { heading: 0, type })], target)[0]!;
+
+  it("невідомий різновид шахеда дає вилку в рази, а не відсотки", () => {
+    const p = at("shahed");
+    // Верхня межа діапазону 600 проти нижньої 185 — понад утричі.
+    expect(p.etaRangeMin[1] / Math.max(1, p.etaRangeMin[0])).toBeGreaterThan(2.5);
+  });
+
+  it("найраніший приліт рахується з БИСТРОГО краю", () => {
+    const shahed = at("shahed");
+    const reactive = at("reactive");
+    // Обидва можуть іти 600 км/год, тож найраніший приліт співмірний —
+    // саме це й рятує від «у вас пів години» на реактивному.
+    expect(shahed.etaRangeMin[0]).toBeLessThanOrEqual(reactive.etaRangeMin[0] * 1.3);
+  });
+
+  it("прямо названий реактивний не отримує поршневого хвоста", () => {
+    expect(at("reactive").etaRangeMin[1]).toBeLessThan(at("shahed").etaRangeMin[1]);
+  });
+
+  it("нерозпізнана позначка не тягне балістичний край", () => {
+    // Інакше кожна нерозпізнана ціль світилася б як найтерміновіша, а коли
+    // терміновим позначено все — не позначено нічого.
+    expect(at("unknown").etaRangeMin[0]).toBeGreaterThan(at("ballistic").etaRangeMin[0]);
+  });
+
+  it("заміряна швидкість схлопує діапазон у точку", () => {
+    const [p] = projectThreats(
+      [
+        threat("m", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 0.001,
+            position: "confirmed",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: 99.4,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(p!.etaRangeMin[1] - p!.etaRangeMin[0]).toBeLessThanOrEqual(1);
+    expect(p!.speedMeasured).toBe(true);
+  });
+
+  it("балістику більше не занижено вдвічі", () => {
+    // Іскандер-М: 2100–2600 м/с. Попереднє одне число 3000 км/год було
+    // заниженим більш ніж удвічі проти нижнього краю.
+    expect(SPEED_RANGE_KMH.ballistic[0]).toBeGreaterThanOrEqual(3000);
+    expect(SPEED_RANGE_KMH.ballistic[1]).toBeGreaterThan(7000);
+  });
+
+  it("середня оцінка лежить усередині свого діапазону", () => {
+    for (const [type, [slow, fast]] of Object.entries(SPEED_RANGE_KMH)) {
+      const typical = SPEED_KMH[type as keyof typeof SPEED_KMH];
+      expect(typical).toBeGreaterThanOrEqual(slow);
+      expect(typical).toBeLessThanOrEqual(fast);
+    }
   });
 });

@@ -17,6 +17,7 @@
  */
 
 import type { ThreatType } from "./air";
+import { normalizeThreatType } from "./air";
 
 export type LangCode = "uk" | "en";
 
@@ -30,10 +31,30 @@ export interface Lexicon {
   tail(serious: boolean, seed: number): string;
   /** «— у бік: Полтава (~11 хв), уважно!» */
   towards(parts: string[]): string;
+  /**
+   * Ціль іде на центр ТІЄЇ САМОЇ області, у якій вона зараз.
+   *
+   * Окреме формулювання, бо довідник орієнтирів і групування користуються
+   * одним переліком обласних центрів: група каже «ціль найближча до Полтави»,
+   * а рядок напрямку — «летить на Полтаву», і виходить тавтологія «Полтавщина
+   * — у бік: Полтавщина». Відомість при цьому НЕ зайва: людям у самому центрі
+   * важливо знати, що йде на них. Тож не викидаємо її, а називаємо як є.
+   */
+  towardsOwnCentre(time: string): string;
+  /** Тільки час, без назви міста — для `towardsOwnCentre`. */
+  etaTime(minutes: number, range?: readonly [number, number]): string;
   /** «…і ще 4 області» */
   more(n: number): string;
   /** «Полтава (~11 хв)» */
-  eta(city: string, minutes: number): string;
+  /**
+   * Час до міста. `range` — вилка [найраніше, найпізніше], коли вона широка.
+   *
+   * Одне число тут іде в канал на всю країну, і саме тому воно найдорожче:
+   * позиція відома з точністю, яку називає джерело, а «шахед» покриває і
+   * 185 км/год, і 600. Вузька вилка лишається одним числом — зайва точність
+   * у пості, який читають уночі, коштує уваги дорожче за свою користь.
+   */
+  eta(city: string, minutes: number, range?: readonly [number, number]): string;
   /** «🧭 хвиля йде на північ — на черзі: …» */
   wave(courseIndex: number, next: string[]): string;
   footer(targets: number, tail: string): string;
@@ -124,18 +145,50 @@ const UK_TAG: Partial<Record<ThreatType, string>> = {
   kab: "КАБ",
 };
 
+/**
+ * Час до міста словами — і межа, за якою вилка перестає бути корисною.
+ *
+ * Вилка чесна, але чесність тут не єдина вимога. Коли розкид позиції більший
+ * за саму відстань до міста, нижній край вилки впирається в нуль, і виходить
+ * «1–29 хв» — твердження формально правдиве й порожнє водночас. У пості, який
+ * читають уночі, порожнє твердження коштує уваги так само, як хибне.
+ *
+ * Тому в такому стані замість числа йде те, що з нього насправді випливає:
+ * ціль може бути вже поруч. Це коротше, це правда, і за цим зрозуміло, що
+ * робити — на відміну від інтервалу завширшки з пів години.
+ */
+function etaPhraseUk(minutes: number, range?: readonly [number, number]): string {
+  if (!range) return `~${minutes} хв`;
+  const [near, far] = range;
+  if (near <= 2 && far >= 10) return "може бути вже поруч";
+  if (far - near >= 3) return `${near}–${far} хв`;
+  return `~${minutes} хв`;
+}
+
+function etaPhraseEn(minutes: number, range?: readonly [number, number]): string {
+  if (!range) return `~${minutes} min`;
+  const [near, far] = range;
+  if (near <= 2 && far >= 10) return "may already be close";
+  if (far - near >= 3) return `${near}–${far} min`;
+  return `~${minutes} min`;
+}
+
 export const UK: Lexicon = {
   code: "uk",
   typeName(type, n) {
-    const [one, few, many] = UK_TYPE[type];
+    // Подвійний запобіжник: тип уже нормалізовано на межі, але саме цей пошук
+    // валив увесь пост каналу, тож тут він не має права кидати виняток.
+    const [one, few, many] = UK_TYPE[normalizeThreatType(type)];
     return pluralUk(n, one, few, many);
   },
   course: (i) => `курсом ${UK_COURSE[i % 8]}`,
   headline: (kind, seed) => pick(UK_HEAD[kind], seed),
   tail: (serious, seed) => pick(serious ? UK_TAIL_SERIOUS : UK_TAIL_LIGHT, seed),
   towards: (parts) => ` — у бік: ${parts.join(", ")}, уважно!`,
+  towardsOwnCentre: (time) => ` — на обласний центр (${time}), уважно!`,
+  etaTime: (minutes, range) => etaPhraseUk(minutes, range),
   more: (n) => `…і ще ${n} ${pluralUk(n, "область", "області", "областей")}`,
-  eta: (city, minutes) => `${city} (~${minutes} хв)`,
+  eta: (city, minutes, range) => `${city} (${etaPhraseUk(minutes, range)})`,
   wave: (i, next) => `🧭 хвиля йде ${UK_COURSE[i % 8]} — на черзі: ${next.join(", ")}`,
   footer: (targets, tail) => `<i>всього в небі: ${targets} · за даними OSINT · ${tail}</i>`,
   delta: {
@@ -207,15 +260,17 @@ const EN_TAG: Partial<Record<ThreatType, string>> = {
 export const EN: Lexicon = {
   code: "en",
   typeName(type, n) {
-    const [one, many] = EN_TYPE[type];
+    const [one, many] = EN_TYPE[normalizeThreatType(type)];
     return n === 1 ? one : many;
   },
   course: (i) => `heading ${EN_COURSE[i % 8]}`,
   headline: (kind, seed) => pick(EN_HEAD[kind], seed),
   tail: (serious, seed) => pick(serious ? EN_TAIL_SERIOUS : EN_TAIL_LIGHT, seed),
   towards: (parts) => ` — heading for ${parts.join(", ")}`,
+  towardsOwnCentre: (time) => ` — heading for the regional centre (${time})`,
+  etaTime: (minutes, range) => etaPhraseEn(minutes, range),
   more: (n) => `…and ${n} more ${n === 1 ? "region" : "regions"}`,
-  eta: (city, minutes) => `${city} (~${minutes} min)`,
+  eta: (city, minutes, range) => `${city} (${etaPhraseEn(minutes, range)})`,
   wave: (i, next) => `🧭 swarm moving ${EN_COURSE[i % 8]} — next: ${next.join(", ")}`,
   footer: (targets, tail) => `<i>${targets} in the air · OSINT data · ${tail}</i>`,
   delta: {

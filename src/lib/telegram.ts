@@ -252,6 +252,20 @@ export const WEBHOOK_UPDATES = [
   "edited_message",
   "callback_query",
   "inline_query",
+  /*
+   * `chat_member` — те, чим гейт підписки замикається.
+   *
+   * Без нього бот дізнається про підписку лише тоді, коли людина сама тисне
+   * «Я підписався». Хто підписався й просто написав `/my` знову, впирався в
+   * той самий екран: перевірка кешується на хвилину, і кеш ще тримав «ні».
+   * Тобто людина зробила рівно те, що в неї попросили, і отримала ту саму
+   * відмову — найкоротший шлях втратити її назавжди.
+   *
+   * Telegram шле цей тип лише адміністраторам чату. Бот, якого не зробили
+   * адміністратором каналу, його не отримає — і тоді все працює як раніше,
+   * через кнопку. Тому це підсилення, а не залежність.
+   */
+  "chat_member",
 ] as const;
 
 /**
@@ -301,6 +315,7 @@ export interface TgBotCommand {
 export function publicCommands(): TgBotCommand[] {
   return [
     { command: "my", description: "Чи летить на мене: мій радар за моєю точкою" },
+    { command: "shelter", description: "Куди сховатися: укриття й метро поруч" },
     { command: "settings", description: "Налаштування сповіщень: тип, радіус, ніч" },
     { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
     { command: "circle", description: "Коло: «я в порядку» одним дотиком замість дзвінків" },
@@ -530,6 +545,45 @@ interface TelegramCallbackUpdate {
   };
 }
 
+/** Зміна членства в чаті — те, з чого гейт дізнається про підписку. */
+export interface ChatMemberChange {
+  /** Чат, у якому змінилось членство (у нас — канал). */
+  chatId: number;
+  userId: number;
+  oldStatus: string | undefined;
+  newStatus: string | undefined;
+  /** `is_member` для статусу `restricted` — див. isSubscribed у gate.ts. */
+  newIsMember: boolean | undefined;
+}
+
+export function parseChatMember(update: unknown): ChatMemberChange | null {
+  if (typeof update !== "object" || update === null) return null;
+  const upd = (update as { chat_member?: unknown }).chat_member;
+  if (typeof upd !== "object" || upd === null) return null;
+  const u = upd as {
+    chat?: { id?: unknown };
+    from?: { id?: unknown };
+    old_chat_member?: { status?: unknown };
+    new_chat_member?: { status?: unknown; is_member?: unknown; user?: { id?: unknown } };
+  };
+  const chatId = u.chat?.id;
+  // Кого стосується зміна — це `new_chat_member.user`, а не `from`: `from` це
+  // той, ХТО змінив (адміністратор, який когось вигнав). Сплутати їх означало б
+  // відкрити доступ не тій людині.
+  const userId = u.new_chat_member?.user?.id;
+  if (typeof chatId !== "number" || typeof userId !== "number") return null;
+  const oldStatus = u.old_chat_member?.status;
+  const newStatus = u.new_chat_member?.status;
+  const isMember = u.new_chat_member?.is_member;
+  return {
+    chatId,
+    userId,
+    oldStatus: typeof oldStatus === "string" ? oldStatus : undefined,
+    newStatus: typeof newStatus === "string" ? newStatus : undefined,
+    newIsMember: typeof isMember === "boolean" ? isMember : undefined,
+  };
+}
+
 export function parseCallback(update: unknown): CallbackPress | null {
   if (typeof update !== "object" || update === null) return null;
   const query = (update as TelegramCallbackUpdate).callback_query;
@@ -634,5 +688,23 @@ export function callbackToast(action: AdminAction, state: LayersState): string {
       return "Прибрано";
     default:
       return "Оновлено";
+  }
+}
+
+/**
+ * `retry_after` із відповіді Telegram на 429, у секундах.
+ *
+ * Telegram кладе його в `parameters.retry_after`. Розбираємо саме з тіла, а не
+ * з заголовка: заголовок `Retry-After` він ставить не завжди, а тіло — завжди.
+ * Усе, що не схоже на додатне число секунд, дає `null`: чекати «стільки,
+ * скільки сказало сміття» гірше, ніж чекати усталену секунду.
+ */
+export function parseRetryAfter(body: string): number | null {
+  try {
+    const parsed = JSON.parse(body) as { parameters?: { retry_after?: unknown } };
+    const value = parsed.parameters?.retry_after;
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
   }
 }

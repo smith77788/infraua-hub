@@ -38,6 +38,14 @@ import {
   type InfraEvent,
 } from "@/lib/infra-types";
 import { roleOfSource } from "@/lib/osint-sources";
+import { KIND_EMOJI, KIND_LABEL, KIND_NOTE, type Shelter } from "@/lib/shelters";
+import {
+  courseIsObserved,
+  displayRadiusKm,
+  EMPTY_QUALITY,
+  LIFECYCLE_LABEL,
+  radiusIsStated,
+} from "@/lib/threat-quality";
 
 interface Props {
   facilities: Facility[];
@@ -56,6 +64,55 @@ interface Props {
   impactedIds: Set<string>;
   selectedId: string | null;
   onSelect: (f: Facility) => void;
+  /** Укриття навколо точки перегляду. Порожньо — шар просто не малюється. */
+  shelters?: Shelter[];
+  /**
+   * Куди людина зараз дивиться. Потрібне тим шарам, які вантажаться на вимогу
+   * і мають сенс лише у видимому прямокутнику, а не навколо чогось обраного.
+   */
+  onViewport?: (
+    box: { south: number; west: number; north: number; east: number },
+    zoom: number,
+  ) => void;
+}
+
+/**
+ * Повідомляє назовні видимий прямокутник і масштаб.
+ *
+ * Окремим компонентом, бо хуки Leaflet працюють лише всередині `MapContainer`.
+ * Перше повідомлення шлеться одразу після монтування: без нього шар, увімкнений
+ * до першого руху карти, не дізнався б, де він, і мовчав би — саме так укриття
+ * й не було видно.
+ */
+function ViewportReporter({
+  onViewport,
+}: {
+  onViewport: (
+    box: { south: number; west: number; north: number; east: number },
+    zoom: number,
+  ) => void;
+}) {
+  const map = useMap();
+  const last = useRef("");
+  const report = () => {
+    const b = map.getBounds();
+    const box = {
+      // Округлення до сотої градуса (~1 км) — і не лише заради ключа запиту:
+      // без нього кожен `moveend` перемальовував би весь маршрут дарма.
+      south: Math.round(b.getSouth() * 100) / 100,
+      west: Math.round(b.getWest() * 100) / 100,
+      north: Math.round(b.getNorth() * 100) / 100,
+      east: Math.round(b.getEast() * 100) / 100,
+    };
+    const zoom = map.getZoom();
+    const key = `${box.south},${box.west},${box.north},${box.east},${zoom}`;
+    if (key === last.current) return;
+    last.current = key;
+    onViewport(box, zoom);
+  };
+  useEffect(report, []);
+  useMapEvents({ moveend: report, zoomend: report });
+  return null;
 }
 
 /** Мінімальні SVG-гліфи (у стилі lucide) для кожної категорії. */
@@ -239,12 +296,25 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   return icon;
 }
 
+/**
+ * Прибирає рекламний префікс «Leaflet» з атрибуції — лишається лише кредит
+ * даних (Esri/OSM), якого вимагає ліцензія. Саме посилання «Leaflet» на карті
+ * зайве й ще й налазило на стрічку внизу.
+ */
+function AttributionPrefixOff() {
+  const map = useMap();
+  useEffect(() => {
+    map.attributionControl?.setPrefix(false);
+  }, [map]);
+  return null;
+}
+
 function BaseLayers() {
   return (
     <LayersControl position="topright">
       <LayersControl.BaseLayer checked name="Темна">
         <TileLayer
-          attribution="Tiles &copy; Esri"
+          attribution="&copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
           maxZoom={16}
         />
@@ -280,7 +350,6 @@ function BaseLayers() {
        */}
       <LayersControl.Overlay checked name="Межі областей і міста">
         <TileLayer
-          attribution="Labels &copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
           maxZoom={18}
         />
@@ -516,9 +585,47 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         // Спостережений трек (де ціль реально була) — СУЦІЛЬНА лінія; вектор
         // курсу вперед — ПУНКТИР (екстраполяція, а не факт). Це прибирає
         // хибну паніку: пунктир прямо каже «це припущення, не трек».
-        const observed = trackLatLngs(historyRef.current.get(t.id));
+        /*
+         * Трек беремо з двох джерел і саме в такому порядку.
+         *
+         * `neptun` віддає `trail` — уже зафіксовані положення цілі, — і це
+         * краще за накопичене нами: воно є з ПЕРШОГО кадру, а власна історія
+         * набирається хвилинами опитувань, тобто рівно тоді, коли вона вже не
+         * потрібна. Накопичене лишається як доповнення: сесія триває довше за
+         * вікно, яке віддає джерело.
+         */
+        const fromSource = (t.trail ?? []).map((p) => [p.lat, p.lon] as [number, number]);
+        const accumulated = trackLatLngs(historyRef.current.get(t.id));
+        const observed = fromSource.length >= 2 ? fromSource : accumulated;
+
+        /*
+         * Коло невизначеності. Джерело саме каже, з якою точністю знає
+         * позицію — від 4 до 45 км, — і крапка на карті це приховувала:
+         * позначка ±45 км виглядала так само впевнено, як ±4 км.
+         *
+         * Коло не «прикрашає» позначку, воно її виправляє: ціль десь у цьому
+         * колі, і рішення людини має спиратися на коло, а не на його центр.
+         */
+        const q = t.quality ?? EMPTY_QUALITY;
+        const radiusKm = displayRadiusKm(q);
+        const courseObserved = courseIsObserved(q);
         return (
           <Fragment key={t.id}>
+            <Circle
+              center={[t.lat, t.lon]}
+              radius={radiusKm * 1000}
+              pathOptions={{
+                color: style.color,
+                weight: 1,
+                opacity: fresh === "stale" ? 0.18 : 0.35,
+                fillColor: style.color,
+                fillOpacity: fresh === "stale" ? 0.03 : 0.07,
+                // Заявлений джерелом радіус — суцільний контур; наше
+                // консервативне припущення, коли джерело промовчало, —
+                // пунктир. Різницю видно, не читаючи попап.
+                ...(radiusIsStated(q) ? {} : { dashArray: "3 6" }),
+              }}
+            />
             {observed.length >= 2 ? (
               <Polyline
                 positions={observed}
@@ -534,9 +641,13 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 positions={[[t.lat, t.lon], vecEnd]}
                 pathOptions={{
                   color: style.color,
-                  weight: 1.6,
-                  opacity: fresh === "stale" ? 0.3 : 0.6,
-                  dashArray: "5 5",
+                  // Припущений курс джерело позначає окремо, і таких цілей
+                  // більшість: у живій відповіді — вісім із пʼятнадцяти. Досі
+                  // вони малювалися так само впевнено, як спостережені, тож
+                  // половина стрілок на карті була здогадкою без жодної ознаки.
+                  weight: courseObserved ? 1.6 : 1,
+                  opacity: (fresh === "stale" ? 0.3 : 0.6) * (courseObserved ? 1 : 0.6),
+                  dashArray: courseObserved ? "5 5" : "2 7",
                 }}
               />
             ) : null}
@@ -566,8 +677,22 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   {hasCourse ? (
                     <p className="opacity-70">
                       Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
+                      {courseObserved ? "" : " · припущений джерелом"}
                     </p>
                   ) : null}
+                  <p className="opacity-70">
+                    Позиція:{" "}
+                    {radiusIsStated(q)
+                      ? `±${Math.round(radiusKm)} км`
+                      : `±~${radiusKm} км (джерело не вказало)`}
+                    {q.lifecycle ? ` · ${LIFECYCLE_LABEL[q.lifecycle]}` : ""}
+                  </p>
+                  {q.speedKmh !== null ? (
+                    <p className="opacity-70">
+                      Швидкість: {Math.round(q.speedKmh)} км/год (заміряна)
+                    </p>
+                  ) : null}
+                  {t.sea ? <p className="opacity-70">Над морем</p> : null}
                   {hasCourse
                     ? (() => {
                         const onCourse = citiesOnCourse(t, CITY_CENTERS);
@@ -581,7 +706,9 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                     : null}
                   {observed.length >= 2 || vecEnd ? (
                     <p className="opacity-60 text-[11px] leading-snug">
-                      {observed.length >= 2 ? "── трек (де була) · " : ""}
+                      {observed.length >= 2
+                        ? `── трек (де була${fromSource.length >= 2 ? ", з джерела" : ""}) · `
+                        : ""}
                       {vecEnd ? "╌╌ курс (екстраполяція, не факт)" : ""}
                     </p>
                   ) : null}
@@ -662,6 +789,8 @@ export default function InfraMap({
   impactedIds,
   selectedId,
   onSelect,
+  shelters = [],
+  onViewport,
 }: Props) {
   const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
@@ -692,6 +821,7 @@ export default function InfraMap({
       className="size-full"
       style={{ background: "#0a0e14" }}
     >
+      <AttributionPrefixOff />
       <BaseLayers />
 
       {/*
@@ -896,6 +1026,38 @@ export default function InfraMap({
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />
+      {onViewport ? <ViewportReporter onViewport={onViewport} /> : null}
+
+      {/*
+        Укриття. Зелене — єдиний зелений шар на карті, і це навмисно: усе
+        інше тут про загрозу, а це єдине, що про порятунок. Підпис у попапі
+        каже, ЩО це насправді: станція метро й підземний паркінг дають різний
+        захист, і зрівняти їх кольором означало б збрехати кольором.
+      */}
+      {shelters.map((sh) => (
+        <CircleMarker
+          key={sh.id}
+          center={[sh.lat, sh.lon]}
+          radius={sh.kind === "shelter" ? 6 : 4}
+          pathOptions={{
+            color: "#34d399",
+            weight: sh.kind === "shelter" ? 2 : 1.2,
+            fillColor: "#34d399",
+            fillOpacity: sh.kind === "underground" ? 0.25 : 0.5,
+          }}
+        >
+          <Popup>
+            <div className="space-y-1 font-sans text-xs">
+              <p className="font-semibold text-emerald-600">
+                {KIND_EMOJI[sh.kind]} {KIND_LABEL[sh.kind]}
+              </p>
+              <p>{sh.name}</p>
+              <p className="opacity-70">{KIND_NOTE[sh.kind]}</p>
+              {sh.capacity ? <p className="opacity-70">Місткість: {sh.capacity}</p> : null}
+            </div>
+          </Popup>
+        </CircleMarker>
+      ))}
     </MapContainer>
   );
 }

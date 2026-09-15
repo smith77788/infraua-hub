@@ -18,6 +18,8 @@ import {
   type ThreatType,
   type WeatherNow,
 } from "./air";
+import { readQuality } from "./threat-quality";
+import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
 import { INFRA_DISABLED_NOTICE, infraLayersEnabled } from "./infra-gate";
@@ -161,9 +163,30 @@ interface OverpassElement {
  */
 const USER_AGENT = "InfraUA-Console/1.0 (critical infrastructure situational awareness)";
 
-async function overpass(body: string, signal: AbortSignal): Promise<OverpassElement[]> {
+/**
+ * Запит до Overpass із переходом на дзеркала.
+ *
+ * `perMirrorMs` — власний бюджет КОЖНОГО дзеркала, і це виправлення тихої
+ * поломки: раніше всі дзеркала ділили один сигнал від виклику. Щойно він
+ * спрацьовував, кожна наступна спроба падала миттєво — тобто перехід на
+ * дзеркало існував у коді й не працював жодного разу, коли був потрібен
+ * найбільше (перше дзеркало не відповідає вчасно).
+ *
+ * Зовнішній `signal` лишається як загальна стеля: він скасовує все.
+ */
+async function overpassOrThrow(
+  body: string,
+  signal: AbortSignal,
+  perMirrorMs?: number,
+): Promise<OverpassElement[]> {
   let lastError: unknown = null;
   for (const url of OVERPASS_ENDPOINTS) {
+    if (signal.aborted) break;
+    // Власний строк дзеркала, скасовуваний і зовнішнім сигналом теж.
+    const own = perMirrorMs ? new AbortController() : null;
+    const ownTimer = own ? setTimeout(() => own.abort(), perMirrorMs) : null;
+    const onOuterAbort = own ? () => own.abort() : null;
+    if (own && onOuterAbort) signal.addEventListener("abort", onOuterAbort, { once: true });
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -173,17 +196,64 @@ async function overpass(body: string, signal: AbortSignal): Promise<OverpassElem
           Accept: "application/json",
         },
         body: `data=${encodeURIComponent(body)}`,
-        signal,
+        signal: own ? own.signal : signal,
       });
       if (!res.ok) throw new Error(`overpass ${res.status}`);
       const json = (await res.json()) as { elements?: OverpassElement[] };
       return json.elements ?? [];
     } catch (err) {
       lastError = err;
+    } finally {
+      if (ownTimer) clearTimeout(ownTimer);
+      if (onOuterAbort) signal.removeEventListener("abort", onOuterAbort);
     }
   }
   console.error("Overpass unavailable", lastError);
-  return [];
+  throw new OverpassUnavailable(lastError);
+}
+
+/**
+ * Те саме, але провал повертається порожнім масивом.
+ *
+ * Стара поведінка, і вона лишається для шарів карти: там порожньо й недоступно
+ * виглядають однаково (позначок просто немає), тож розрізняти їх нема для чого.
+ * Укриття натомість друкують людині речення про те, що саме сталося, — і для
+ * них є `overpassOrThrow`.
+ */
+/**
+ * Скільки чекати на ОДНЕ дзеркало, перш ніж пробувати наступне.
+ *
+ * Без цього числа резерв був мертвий: усі дзеркала ділили один сигнал від
+ * виклику, тож після його спрацювання кожна наступна спроба падала миттєво —
+ * саме тоді, коли резерв і потрібен.
+ */
+const PER_MIRROR_MS = 25_000;
+
+async function overpass(
+  body: string,
+  signal: AbortSignal,
+  perMirrorMs: number = PER_MIRROR_MS,
+): Promise<OverpassElement[]> {
+  try {
+    return await overpassOrThrow(body, signal, perMirrorMs);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Джерело не відповіло — і це НЕ те саме, що «тут нічого немає».
+ *
+ * Раніше `overpass` на повний провал повертав порожній масив, а виклик не міг
+ * відрізнити його від чесної порожньої відповіді. Для укриттів це коштувало
+ * прямої неправди на екрані: «у цій області нічого не розмічено» замість
+ * «джерело не відповіло».
+ */
+export class OverpassUnavailable extends Error {
+  constructor(override readonly cause: unknown) {
+    super("overpass unavailable");
+    this.name = "OverpassUnavailable";
+  }
 }
 
 function toFacility(el: OverpassElement, category: CategoryId): Facility | null {
@@ -599,6 +669,42 @@ interface NeptunThreat {
   confirmedAt?: string;
   explanationShort?: string;
   status?: string;
+  /* Заяви джерела про власну точність — розбираються в readQuality. */
+  uncertaintyKm?: unknown;
+  positionQuality?: unknown;
+  lifecycle?: unknown;
+  presumptiveCourse?: unknown;
+  velocity?: unknown;
+  sea?: unknown;
+  trail?: unknown;
+}
+
+/**
+ * Трек із джерела — лише коректні точки.
+ *
+ * Джерело віддає його не завжди й не для всіх цілей, тож усе, що не є парою
+ * скінченних координат із часом, відкидається мовчки: половина треку гірша за
+ * його відсутність лише тоді, коли з неї малюють суцільну лінію, а тут вона до
+ * лінії просто не доходить.
+ */
+function readTrail(raw: unknown): { lat: number; lon: number; t: string }[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: { lat: number; lon: number; t: string }[] = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object") continue;
+    const o = p as { lat?: unknown; lon?: unknown; t?: unknown };
+    if (
+      typeof o.lat === "number" &&
+      Number.isFinite(o.lat) &&
+      typeof o.lon === "number" &&
+      Number.isFinite(o.lon) &&
+      typeof o.t === "string" &&
+      o.t
+    ) {
+      out.push({ lat: o.lat, lon: o.lon, t: o.t });
+    }
+  }
+  return out.length >= 2 ? out : null;
 }
 
 export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null> {
@@ -622,6 +728,7 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
     )
       continue;
     const text = `${t.title ?? ""} ${t.explanationShort ?? ""}`;
+    const trail = readTrail(t.trail);
     out.push({
       id: t.id,
       name: t.locality || t.district || t.region || t.title || "Ціль",
@@ -636,6 +743,12 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
       lastSeen: t.updatedAt ?? t.confirmedAt ?? "",
       ...(typeof t.heading === "number" ? { heading: t.heading } : {}),
       ...(t.confidenceLevel ? { confidence: t.confidenceLevel } : {}),
+      // Те, що джерело каже про власну точність. Без цього позначка ±45 км
+      // малювалась крапкою, а припущений курс — як спостережений.
+      quality: readQuality(t),
+      ...(trail ? { trail } : {}),
+      ...(t.sea === true ? { sea: true } : {}),
+      ...(t.region ? { region: t.region } : {}),
     });
   }
   return out;
@@ -1509,3 +1622,114 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
 
     return { tiles: fetched, tilesTotal: all.length };
   });
+
+/*
+ * Укриття навколо точки.
+ *
+ * Запит вузький і навмисно не кешується надовго в памʼяті процесу: на
+ * Cloudflare Workers ізолят живе недовго, а сам запит малий (радіус кілька
+ * кілометрів, не країна). Дані змінюються рідко, тож частота звернень
+ * визначається людьми, а не таймером.
+ */
+export interface SheltersPayload {
+  shelters: Shelter[];
+  /**
+   * Прямокутник ширший за розумний — консоль просить наблизити карту.
+   *
+   * Це окремий стан, а не помилка й не «нічого не знайдено»: обидва останні
+   * читалися б як «тут укриттів немає», що неправда.
+   */
+  tooWide?: boolean;
+  /** Межа покриття — інтерфейс мусить її показати. Див. shelters.ts. */
+  caveat: string;
+  degraded: boolean;
+}
+
+/** Півсторона прямокутника пошуку, градуси (~5.5 км по широті). */
+const SHELTER_BOX_DEG = 0.05;
+
+/**
+ * Укриття навколо точки — звичайна функція, а не лише серверна.
+ *
+ * Бот ходить сюди з вебхука, консоль — через серверну функцію нижче. Один шлях
+ * на двох: якби кожен мав свій, вони б розійшлися в тому, що вважають
+ * укриттям, і людина отримала б у боті одну відповідь, а на карті іншу.
+ */
+export interface ShelterBox {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+}
+
+/**
+ * Найбільший прямокутник, який має сенс питати, градуси по стороні.
+ *
+ * Не заради Overpass, а заради відповіді: на огляді всієї країни перелік
+ * укриттів — це десятки тисяч точок, серед яких нічого не знайти, а сама
+ * відповідь їхатиме хвилину. Понад цю межу консоль просить наблизити карту.
+ */
+export const SHELTER_MAX_SPAN_DEG = 0.9;
+
+/**
+ * Укриття в прямокутнику — звичайна функція, а не лише серверна.
+ *
+ * Бот ходить сюди з вебхука, консоль — через серверну функцію нижче. Один шлях
+ * на двох: якби кожен мав свій, вони б розійшлися в тому, що вважають
+ * укриттям, і людина отримала б у боті одну відповідь, а на карті іншу.
+ */
+export async function fetchSheltersBox(box: ShelterBox): Promise<SheltersPayload> {
+  const finite =
+    Number.isFinite(box.south) &&
+    Number.isFinite(box.west) &&
+    Number.isFinite(box.north) &&
+    Number.isFinite(box.east);
+  if (!finite || box.north <= box.south || box.east <= box.west) {
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+  }
+  if (box.north - box.south > SHELTER_MAX_SPAN_DEG || box.east - box.west > SHELTER_MAX_SPAN_DEG) {
+    // Занадто широко, щоб відповідь була корисною. Не помилка — стан.
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: false, tooWide: true };
+  }
+
+  /*
+   * Відповідь дає локальний набір, а не мережа.
+   *
+   * Заміряно на живому Overpass той самий запит по місту: то 10 секунд, то 45,
+   * то не віддає зовсім. Залежність, яка гальмує саме тоді, коли на неї
+   * спирається кнопка «куди сховатися», для аварійної функції не годиться —
+   * сплеск навантаження на публічний Overpass і сплеск потреби в укриттях
+   * трапляються з тих самих причин і в той самий час.
+   *
+   * Набір оновлюється окремим кроком (`scripts/build-shelters.mjs`), тож
+   * мережа лишається джерелом ОНОВЛЕННЯ, а не джерелом відповіді людині.
+   */
+  const { sheltersInBox } = await import("./shelter-data");
+  return { shelters: sheltersInBox(box), caveat: COVERAGE_CAVEAT, degraded: false };
+}
+
+/** Укриття навколо точки — те саме, але прямокутник будується сам. */
+export async function fetchShelters(lat: number, lon: number): Promise<SheltersPayload> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+  }
+  return fetchSheltersBox({
+    south: lat - SHELTER_BOX_DEG,
+    west: lon - SHELTER_BOX_DEG,
+    north: lat + SHELTER_BOX_DEG,
+    east: lon + SHELTER_BOX_DEG,
+  });
+}
+
+export const getShelters = createServerFn({ method: "GET" })
+  .validator((input: unknown): ShelterBox => {
+    const o = (input ?? {}) as Record<string, unknown>;
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : Number.NaN);
+    return {
+      south: num(o["south"]),
+      west: num(o["west"]),
+      north: num(o["north"]),
+      east: num(o["east"]),
+    };
+  })
+  .handler(async ({ data }): Promise<SheltersPayload> => fetchSheltersBox(data));

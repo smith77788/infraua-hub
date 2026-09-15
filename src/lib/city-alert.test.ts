@@ -125,3 +125,34 @@ describe("cityAlertCaption", () => {
     expect(cap).not.toContain("1 шахеди");
   });
 });
+
+/*
+ * Адресний сигнал каже конкретному місту «ціль іде саме на вас». Побудувати
+ * таке на припущеному курсі — значить підняти місто навмання; загальна
+ * картина, обласна тривога й персональний радар працюють для цієї людини
+ * незалежно, тож ідеться про прибрану хибну точність, а не про прибране
+ * попередження.
+ */
+describe("cityAlerts — адресний сигнал лише зі спостереженого курсу", () => {
+  const presumed = {
+    uncertaintyKm: 25,
+    position: "approx" as const,
+    lifecycle: "uncertain" as const,
+    presumptiveCourse: true,
+    speedKmh: null,
+  };
+
+  it("припущений курс не піднімає місто", () => {
+    expect(cityAlerts([nearPoltava({ quality: presumed })])).toHaveLength(0);
+  });
+
+  it("спостережений курс піднімає", () => {
+    expect(cityAlerts([nearPoltava()]).length).toBeGreaterThan(0);
+  });
+
+  it("серед змішаних лишаються тільки спостережені", () => {
+    const alerts = cityAlerts([nearPoltava({ quality: presumed }), nearPoltava()]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.count).toBe(1);
+  });
+});

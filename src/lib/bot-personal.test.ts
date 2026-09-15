@@ -11,9 +11,11 @@ import {
   renderOblastPicked,
   renderPersonal,
   renderSettings,
+  renderShelters,
   settingsKeyboard,
 } from "./bot-personal";
 import { newSubscriber, type Subscriber } from "./subscribers";
+import type { NearbyShelter } from "./shelters";
 
 const KYIV = { lat: 50.45, lon: 30.52 };
 
@@ -224,5 +226,101 @@ describe("картка не повторює застереження двічі
     const text = renderPersonal(assess, dangerIndex(assess), "моя точка", 50);
     expect(text).toContain("У радіусі 50 км нічого не бачимо");
     expect(text).toContain("поза вашим радіусом");
+  });
+});
+
+/*
+ * Людину підняли о третій ночі. Вона мусить бачити не лише «за скільки», а й
+ * наскільки цьому взагалі можна вірити: «підтверджена, ±4 км» і «не
+ * підтверджена, ±45 км, курс припущений» — це два різні рішення, і досі вони
+ * виглядали в повідомленні однаково.
+ */
+describe("renderAlert — якість даних видно людині", () => {
+  const withQuality = (kmSouth: number, quality: NonNullable<Threat["quality"]>): Threat => ({
+    ...inbound("q", "shahed", kmSouth),
+    quality,
+  });
+
+  it("широка невизначеність подається вилкою, а не одним числом", () => {
+    const t = withQuality(120, {
+      uncertaintyKm: 45,
+      position: "approx",
+      lifecycle: "uncertain",
+      presumptiveCourse: true,
+      speedKmh: null,
+    });
+    const assess = personalAssessment([t], KYIV);
+    const text = renderAlert(assess, dangerIndex(assess), "моя точка");
+    expect(text).toMatch(/\d+–\d+ хв/);
+    expect(text).toContain("не підтверджена");
+    expect(text).toContain("±45 км");
+    expect(text).toContain("курс припущений");
+  });
+
+  it("підтверджена ціль не обвішується застереженнями", () => {
+    const t = withQuality(40, {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "confirmed",
+      presumptiveCourse: false,
+      speedKmh: null,
+    });
+    const assess = personalAssessment([t], KYIV);
+    const text = renderAlert(assess, dangerIndex(assess), "моя точка");
+    expect(text).toContain("підтверджена");
+    expect(text).not.toContain("припущений");
+  });
+
+  it("заміряна швидкість називається заміряною", () => {
+    const t = withQuality(60, {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "tracking",
+      presumptiveCourse: false,
+      speedKmh: 99.4,
+    });
+    const assess = personalAssessment([t], KYIV);
+    expect(renderAlert(assess, dangerIndex(assess), "моя точка")).toContain("швидкість заміряна");
+  });
+
+  it("мовчання джерела не друкується як «дані відсутні»", () => {
+    const assess = personalAssessment([inbound("a", "shahed", 40)], KYIV);
+    const text = renderAlert(assess, dangerIndex(assess), "моя точка");
+    expect(text).not.toContain("±");
+    expect(text).not.toContain("не підтверджена");
+  });
+});
+
+describe("renderShelters", () => {
+  const s = (over: Partial<NearbyShelter> = {}): NearbyShelter => ({
+    id: "n/1",
+    kind: "metro",
+    name: "Арсенальна",
+    lat: 50.444,
+    lon: 30.545,
+    distanceKm: 0.3,
+    walkMin: 4,
+    ...over,
+  });
+
+  it("веде на карту, а не диктує координати", () => {
+    const t = renderShelters([s()], "застереження");
+    expect(t).toContain("openstreetmap.org");
+    expect(t).toContain("4 хв пішки");
+  });
+
+  it("паркінг не видається за обладнане укриття", () => {
+    const t = renderShelters([s({ kind: "underground", name: "Паркінг" })], "з");
+    expect(t).toContain("не обладнане укриття");
+  });
+
+  it("порожній список дає пораду, а не мовчання", () => {
+    const t = renderShelters([], "це не державний реєстр");
+    expect(t).toContain("без вікон");
+    expect(t).toContain("це не державний реєстр");
+  });
+
+  it("застереження про покриття є завжди", () => {
+    expect(renderShelters([s()], "МЕЖА")).toContain("МЕЖА");
   });
 });

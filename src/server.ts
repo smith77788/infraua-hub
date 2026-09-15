@@ -14,6 +14,7 @@ import {
   type BotCommand,
   ownerCommands,
   parseCallback,
+  parseChatMember,
   parseCommand,
   parseLayersArg,
   parseLocation,
@@ -32,6 +33,7 @@ import {
   renderUnknown,
   escapeHtml,
   purgeKeyboard,
+  parseRetryAfter,
   secretMatches,
   senderId,
 } from "./lib/telegram";
@@ -58,6 +60,7 @@ import {
   soundKeyboard,
   renderAlert,
   renderAskPoint,
+  renderShelters,
   renderPersonal,
   personalKeyboard,
   renderPointSaved,
@@ -97,9 +100,14 @@ import {
   GATE_ACTION,
   gateKeyboard,
   isSubscribed,
+  justLeft,
+  justSubscribed,
+  renderAccessOpened,
   renderGate,
   renderStillNotSubscribed,
+  urlFromChat,
 } from "./lib/gate";
+import { COVERAGE_CAVEAT, nearestShelters } from "./lib/shelters";
 import {
   canReport,
   corroborate,
@@ -141,7 +149,10 @@ import {
   leaveCircle,
   putCircle,
   putSubscriber,
+  readMarker,
   stats as subscriberStats,
+  writeMarker,
+  isDurable as subscribersDurable,
 } from "./lib/subscriber-store";
 
 type ServerEntry = {
@@ -287,27 +298,74 @@ function consoleUrl(request: Request): string {
   return publicOrigin(request);
 }
 
+/** Скільки чекати на відповідь Telegram, перш ніж вважати виклик мертвим. */
+const TELEGRAM_TIMEOUT_MS = 15_000;
+
+/** Стеля очікування після 429 — довше чекати немає сенсу, краще наступний обхід. */
+const MAX_RETRY_AFTER_S = 30;
+
+/**
+ * Надіслати повідомлення.
+ *
+ * Тут закрито дві вади, і обидві — в найдорожчому шляху продукту, доставці
+ * тривоги.
+ *
+ * **429 губився мовчки.** Telegram обмежує темп і на перевищення відповідає
+ * `429` з полем `retry_after`. Оброблявся лише `403`, тож повідомлення з 429
+ * писалося в лог і зникало: людина, якій ішла тривога, просто її не діставала.
+ * Гірше, обхід продовжував слати в тому ж темпі, поглиблюючи обмеження. Тепер
+ * чекаємо рівно стільки, скільки просить Telegram, і повторюємо ОДИН раз.
+ *
+ * **Не було строку.** `fetch` без таймауту може висіти як завгодно довго, а
+ * обхід підписників захищений прапорцем від перекриття — тож одне зависле
+ * зʼєднання зупиняло ВСІ тривоги до перезапуску процесу. Тепер у кожного
+ * виклику свій строк.
+ */
 async function telegramSend(
   token: string,
   chatId: number,
   text: string,
   replyMarkup?: unknown,
 ): Promise<{ ok: boolean; status: number }> {
-  const response = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    }),
+  const body = JSON.stringify({
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
-  if (!response.ok) {
-    console.error("telegram sendMessage failed", response.status, await response.text());
-  }
-  return { ok: response.ok, status: response.status };
+
+  const attempt = async (): Promise<{ ok: boolean; status: number; retryAfter: number | null }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+      if (response.ok) return { ok: true, status: response.status, retryAfter: null };
+      const raw = await response.text();
+      console.error("telegram sendMessage failed", response.status, raw);
+      return { ok: false, status: response.status, retryAfter: parseRetryAfter(raw) };
+    } catch (err) {
+      // Обрив або строк. Для викликача це така сама поразка, як HTTP-помилка,
+      // але статусу немає — 0 означає «не доїхало».
+      console.error("telegram sendMessage failed", err);
+      return { ok: false, status: 0, retryAfter: null };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const first = await attempt();
+  if (first.ok || first.status !== 429) return { ok: first.ok, status: first.status };
+
+  const wait = Math.min(first.retryAfter ?? 1, MAX_RETRY_AFTER_S);
+  await new Promise((r) => setTimeout(r, wait * 1000));
+  const second = await attempt();
+  return { ok: second.ok, status: second.status };
 }
 
 /**
@@ -451,11 +509,21 @@ interface ChannelTickResult {
   status?: number;
 }
 
-/** Підпис під фото обмежений 1024 символами — довгий текст стискаємо до шапки. */
-function captionFor(text: string, targets: number): string {
-  return text.length <= 1024
-    ? text
-    : `${text.split("\n")[0]}\n<i>всього в небі: ${targets} · за даними OSINT</i>`;
+/** Стеля підпису до фото в Telegram. */
+const TELEGRAM_CAPTION_LIMIT = 1024;
+
+/**
+ * Останній запобіжник довжини підпису.
+ *
+ * Текст уже зібрано під стелю (див. `assemblePost`), тож сюди довгий рядок
+ * потрапити не має. Але Telegram відхиляє надто довгий підпис цілком — тобто
+ * пост не вийде взагалі, — і мовчання гірше за обрізаний хвіст. Тому лишаємо
+ * грубе відсікання як страховку, а не як спосіб роботи.
+ */
+function captionFor(text: string): string {
+  if (text.length <= TELEGRAM_CAPTION_LIMIT) return text;
+  console.error(`Підпис довший за стелю (${text.length}) — відсікаємо хвіст`);
+  return `${text.slice(0, TELEGRAM_CAPTION_LIMIT - 1)}…`;
 }
 
 /** Публічна адреса карти для кнопки під постом. Немає — кнопки просто не буде. */
@@ -504,7 +572,7 @@ async function sendChannelUpdate(
   if (png) {
     const form = new FormData();
     form.append("chat_id", channel);
-    form.append("caption", captionFor(text, targets));
+    form.append("caption", captionFor(text));
     form.append("parse_mode", "HTML");
     if (silent) form.append("disable_notification", "true");
     if (keyboard) form.append("reply_markup", JSON.stringify(keyboard));
@@ -567,7 +635,7 @@ async function editChannelUpdate(
         JSON.stringify({
           type: "photo",
           media: "attach://photo",
-          caption: captionFor(text, targets),
+          caption: captionFor(text),
           parse_mode: "HTML",
         }),
       );
@@ -584,7 +652,7 @@ async function editChannelUpdate(
         body: JSON.stringify({
           chat_id: channel,
           message_id: messageId,
-          caption: captionFor(text, targets),
+          caption: captionFor(text),
           parse_mode: "HTML",
           ...(keyboard ? { reply_markup: keyboard } : {}),
         }),
@@ -682,6 +750,10 @@ let pendingDigest: DayStats | null = null;
 let digestPostedFor: string | null = null;
 /** Коли востаннє давали адресний сигнал по місту (для кулдауна). */
 let cityAlertedAt: Record<string, number> = {};
+/** Чи підтягнули кулдаун міст зі стійкого сховища (раз на процес). */
+let cityCooldownHydrated = false;
+/** Чи підтягнули стан живого поста зі стійкого сховища (раз на процес). */
+let liveStateHydrated = false;
 /** Коли востаннє додавали час у добову статистику. */
 let lastAccrualAt = 0;
 /** Коли востаннє щось зробили в каналі — надіслали пост або відредагували. */
@@ -726,6 +798,22 @@ async function maybeCityAlert(
 ): Promise<void> {
   const candidates = cityAlerts(threats, undefined, { limit: 1 });
   if (candidates.length === 0) return;
+  // Кулдаун по місту має пережити редеплой: інакше після кожного перезапуску
+  // процесу памʼять «коли сигналили» скидається, і людину будять удруге по
+  // тому самому місту. Стійка позначка (той самий том, що й підписники) —
+  // джерело істини; на ефемерному сховищі тихо лишаємось на памʼяті процесу.
+  if (!cityCooldownHydrated) {
+    cityCooldownHydrated = true;
+    const raw = await readMarker("city-cooldown");
+    if (raw) {
+      try {
+        const stored = JSON.parse(raw) as Record<string, number>;
+        cityAlertedAt = { ...stored, ...cityAlertedAt };
+      } catch {
+        /* бита позначка — ігноруємо, працюємо з памʼяті */
+      }
+    }
+  }
   const { fresh, lastAlertedAt } = selectFreshCityAlerts(
     candidates,
     cityAlertedAt,
@@ -734,6 +822,9 @@ async function maybeCityAlert(
   );
   cityAlertedAt = lastAlertedAt;
   if (fresh.length === 0) return;
+  // Записуємо ПЕРЕД надсиланням: якщо тік упаде на середині, кулдаун уже
+  // зафіксовано, і повтору не буде.
+  await writeMarker("city-cooldown", JSON.stringify(cityAlertedAt));
 
   try {
     const { renderZoomPng } = await import("./lib/situation-image");
@@ -905,7 +996,71 @@ async function holdQuietNotice(
  *
  * `force` пропускає дедуп — для ручного `/channel post`.
  */
+/**
+ * Стан живого поста має пережити редеплой.
+ *
+ * `wave` (з `messageId` поста, який редагується) і `lastChannelPost.at` жили в
+ * модульній памʼяті. На кожному перезапуску процесу вони скидались — і замість
+ * того, щоб ВІДРЕДАГУВАТИ живий пост хвилі, бот постив НОВИЙ. Під час нальоту,
+ * коли ми ще й часто деплоїмо, канал діставав дублі постів однієї хвилі. Тепер
+ * стан лягає стійкою позначкою й підхоплюється після перезапуску — але лише
+ * якщо пост ще «живий» (у межах вікна редагування); застарілий не воскрешаємо,
+ * бо редагувати похований у стрічці пост уже пізно, і нова хвиля має новий пост.
+ */
+interface ChannelState {
+  wave: WaveState | null;
+  lastPostAt: number;
+  /** Добова статистика й дедуп підсумку — щоб підсумок виходив і після редеплою. */
+  currentDay?: DayStats;
+  pendingDigest?: DayStats | null;
+  digestPostedFor?: string | null;
+}
+
+async function hydrateLiveState(now: number): Promise<void> {
+  if (liveStateHydrated) return;
+  liveStateHydrated = true;
+  const raw = await readMarker("live-post");
+  if (!raw) return;
+  try {
+    const s = JSON.parse(raw) as Partial<ChannelState>;
+    if (s.wave && typeof s.lastPostAt === "number" && now - s.lastPostAt <= LIVE_POST_MAX_MS) {
+      wave = s.wave;
+      lastChannelPost = { ...lastChannelPost, at: s.lastPostAt };
+    }
+    // Добова статистика й дедуп підсумку теж мають пережити редеплой: інакше
+    // підсумок доби не виходить, якщо перезапуск стався між зміною доби і 9:00
+    // (pendingDigest скидався в null), а накопичення доби фрагментувалось.
+    // Далі rollKyivDay сам розбереться зі зміною доби, а digestPostedFor не дасть
+    // подвоїти підсумок.
+    if (s.currentDay && typeof s.currentDay.date === "string") currentDay = s.currentDay;
+    if (s.pendingDigest !== undefined) pendingDigest = s.pendingDigest;
+    if (typeof s.digestPostedFor === "string") digestPostedFor = s.digestPostedFor;
+  } catch {
+    /* бита позначка — ігноруємо, починаємо з чистого стану */
+  }
+}
+
 async function runChannelTick(
+  opts: { dryRun?: boolean; force?: boolean } = {},
+): Promise<ChannelTickResult> {
+  // Сухий прогін лише ПОКАЗУЄ, що постили б — стан не чіпає й не зберігає.
+  if (opts.dryRun) return runChannelTickCore(opts);
+  await hydrateLiveState(Date.now());
+  try {
+    return await runChannelTickCore(opts);
+  } finally {
+    const state: ChannelState = {
+      wave,
+      lastPostAt: lastChannelPost.at,
+      currentDay,
+      pendingDigest,
+      digestPostedFor,
+    };
+    await writeMarker("live-post", JSON.stringify(state));
+  }
+}
+
+async function runChannelTickCore(
   opts: { dryRun?: boolean; force?: boolean } = {},
 ): Promise<ChannelTickResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
@@ -934,9 +1089,19 @@ async function runChannelTick(
   // картини. Власний кулдаун усередині не дає йому смітити.
   if (!opts.dryRun) await maybeCityAlert(token, channel, smoothed, now);
   const forecast = renderForecast(forecastWave(smoothed));
+  /*
+   * Стеля підпису задається ТУТ, бо пост іде підписом до картинки.
+   *
+   * Раніше він рендерився без обмеження, а перевищення різалося вже перед
+   * відправкою — і різалося тупо, лишаючи шапку й підвал. У каналі це давало
+   * «14 цілей у небі» без жодної названої області саме тоді, коли наліт
+   * великий. Тепер обмеження знає той, хто збирає текст, і жертвує спершу
+   * найменш цінним (див. assemblePost).
+   */
   const post = renderChannelPost(smoothed, {
     previous: lastChannelPost.snapshot,
     ...(forecast ? { forecast } : {}),
+    maxChars: TELEGRAM_CAPTION_LIMIT,
   });
 
   if (!opts.dryRun) rollKyivDay(now);
@@ -1155,11 +1320,41 @@ async function checkSubscription(token: string, userId: number): Promise<boolean
  *
  * Повертає готову відповідь-гейт, коли пускати не можна, і `null`, коли можна.
  */
+/**
+ * Публічна адреса каналу, спитана в Telegram і закешована.
+ *
+ * Питаємо, а не виводимо з налаштування: у проді канал заданий числом, з якого
+ * посилання не зробити, і гейт через це мовчки не працював. Кеш назавжди —
+ * адреса каналу не змінюється частіше, ніж перезапускається процес; `null`
+ * теж кешуємо, щоб не стукати в Telegram на кожну команду.
+ */
+let cachedChannelUrl: { url: string | null } | null = null;
+
+async function channelPublicUrl(token: string): Promise<string | null> {
+  const configured = channelUrl(process.env["TELEGRAM_CHANNEL_ID"]);
+  if (configured) return configured;
+  const channel = process.env["TELEGRAM_CHANNEL_ID"]?.trim();
+  if (!channel) return null;
+  if (cachedChannelUrl) return cachedChannelUrl.url;
+  try {
+    const res = await fetch(
+      `${TELEGRAM_API}/bot${token}/getChat?chat_id=${encodeURIComponent(channel)}`,
+    );
+    const body = (await res.json()) as { ok?: boolean; result?: Record<string, unknown> };
+    const url = body.ok && body.result ? urlFromChat(body.result) : null;
+    cachedChannelUrl = { url };
+    return url;
+  } catch {
+    // Не кешуємо збій: наступна спроба має бути справжньою спробою.
+    return null;
+  }
+}
+
 async function subscriptionGate(
   token: string,
   userId: number | undefined,
 ): Promise<{ text: string; keyboard: unknown } | null> {
-  const url = channelUrl(process.env["TELEGRAM_CHANNEL_ID"]);
+  const url = await channelPublicUrl(token);
   // Без публічного посилання гейт неможливий по суті: ми не можемо показати
   // людині, КУДИ підписуватись. Замкнути її в цьому стані було б знущанням.
   if (!url || typeof userId !== "number") return null;
@@ -1308,6 +1503,9 @@ async function personalCommand(
   const { command, args, chatId, chatType } = parsed;
   const personalCommands = new Set([
     "my",
+    "shelter",
+    "укриття",
+    "сховатись",
     "radar",
     "me",
     "settings",
@@ -1379,6 +1577,23 @@ async function personalCommand(
       text: sub.muted ? `🔔 Сповіщення знову увімкнені.\n\n${card.text}` : card.text,
       keyboard: card.keyboard,
     };
+  }
+
+  /*
+   * «Куди сховатися» — свідомо ПОЗА гейтом підписки, разом зі `/stop`.
+   *
+   * Гейт існує, щоб канал і бот були одним цілим; це продуктове рішення й
+   * воно доречне. Але поставити умову між людиною під тривогою й дорогою до
+   * укриття — інша річ. Ціна помилки тут не «менше підписників», а людина,
+   * яка читала екран про підписку замість того, щоб іти.
+   */
+  if (command === "shelter" || command === "укриття" || command === "сховатись") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const named = args.trim() ? matchPlace(args.trim()) : null;
+    const point = named ? { lat: named.lat, lon: named.lon } : sub.point;
+    if (!point) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
+    await sendShelters(token, chatId, point);
+    return "handled";
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -1484,7 +1699,7 @@ async function circleCommand(
     await putSubscriber({ ...sub, circle: circle.code, displayName: name }, true);
     return {
       text:
-        `✅ Ви в колі <b>${circle.name}</b>.\n\n` +
+        `✅ Ви в колі <b>${escapeHtml(circle.name)}</b>.\n\n` +
         "Підпишіться, щоб вас упізнавали: <code>/circle імʼя Мама</code>",
     };
   }
@@ -1570,6 +1785,30 @@ async function handlePickerPress(
   return true;
 }
 
+/**
+ * Надіслати перелік укриттів навколо точки.
+ *
+ * Джерело може не відповісти, і тоді мовчання — найгірше з можливого: людина
+ * натиснула «куди сховатися» й не отримала нічого. Тому поразка теж говорить,
+ * і говорить корисне — універсальна порада працює без жодних даних.
+ */
+async function sendShelters(
+  token: string,
+  chatId: number,
+  point: { lat: number; lon: number },
+): Promise<void> {
+  try {
+    // Динамічний імпорт, як і для решти даних інфраструктури: модуль тягне за
+    // собою чимало, а вебхук має лишатися легким, поки цього не попросили.
+    const { fetchShelters } = await import("./lib/infra.functions");
+    const payload = await fetchShelters(point.lat, point.lon);
+    const near = nearestShelters(point, payload.shelters, { limit: 4 });
+    await telegramSend(token, chatId, renderShelters(near, payload.caveat, payload.degraded));
+  } catch {
+    await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT, true));
+  }
+}
+
 /** Натискання кнопок персонального радара. `false` — кнопка не наша. */
 async function handlePersonalPress(
   token: string,
@@ -1577,8 +1816,10 @@ async function handlePersonalPress(
 ): Promise<boolean> {
   const action = parsePersonalAction(press.data);
   if (!action) return false;
-  // Пауза сповіщень поза гейтом — з тієї ж причини, що й `/stop`.
-  if (action.kind !== "mute") {
+  // Поза гейтом: пауза сповіщень (як `/stop`) і дорога до укриття. Ставити
+  // умову між людиною під тривогою й укриттям не можна — див. команду
+  // `/shelter` нижче в цьому файлі.
+  if (action.kind !== "mute" && action.kind !== "shelter") {
     const gate = await subscriptionGate(token, press.userId);
     if (gate) {
       await telegramAnswerCallback(token, press.callbackId, "Спершу підпишіться на канал");
@@ -1648,6 +1889,22 @@ async function handlePersonalPress(
     if (card) {
       await telegramEditMessage(token, press.chatId, press.messageId, card.text, card.keyboard);
     }
+    return true;
+  }
+
+  /*
+   * «Куди сховатися». Окремим повідомленням, а не редагуванням картки:
+   * людина під тривогою має тримати обидва — і обстановку, і дорогу, — а
+   * редагування з'їло б перше заради другого.
+   */
+  if (action.kind === "shelter") {
+    if (!sub.point) {
+      await telegramAnswerCallback(token, press.callbackId, "Спершу вкажіть точку");
+      await telegramSend(token, press.chatId, renderAskPoint(), askPointKeyboard());
+      return true;
+    }
+    await telegramAnswerCallback(token, press.callbackId, "Шукаю поруч…");
+    await sendShelters(token, press.chatId, sub.point);
     return true;
   }
 
@@ -2071,10 +2328,23 @@ let backupSentFor: string | null = null;
 async function maybeBackup(token: string, now: number): Promise<void> {
   const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
   if (!owner) return;
-  const today = kyivDate(new Date(now));
-  if (backupSentFor === today) return;
   if (kyivHour(new Date(now)) < DIGEST_HOUR) return;
+  // Ефемерне сховище — копію слати НЕ треба: там і бекапити нема чого (підписки
+  // й так зникнуть), а дедуп у памʼяті скидається щоізоляту, тож копія летіла б
+  // щоразу. Саме це й був спам щогодини.
+  if (!subscribersDurable()) return;
+  const today = kyivDate(new Date(now));
+  if (backupSentFor === today) return; // швидкий шлях у межах одного процесу
+  // Стійкий дедуп: позначка на тому бачиться всіма ізолятами/реплiками/після
+  // редеплою — на відміну від модульної змінної.
+  if ((await readMarker("last-backup")) === today) {
+    backupSentFor = today;
+    return;
+  }
   backupSentFor = today;
+  // Пишемо ПЕРЕД надсиланням: якщо два виконання зійшлися, друге побачить
+  // позначку й не надішле дубль.
+  await writeMarker("last-backup", today);
   await sendBackup(token, Number(owner));
 }
 
@@ -2487,6 +2757,53 @@ async function telegramWebhook(request: Request): Promise<Response> {
     return new Response("ok", { status: 200 });
   }
 
+  /*
+   * Людина щойно підписалась на канал — і про це ми дізнаємось самі.
+   *
+   * Це те, чим гейт замикається. Без цього обробника той, хто підписався й
+   * просто написав `/my` знову, впирався в той самий екран: перевірка
+   * кешується на хвилину, і кеш ще тримав «ні». Людина зробила рівно те, що в
+   * неї попросили, і отримала ту саму відмову.
+   *
+   * Telegram шле `chat_member` лише адміністраторам чату. Якщо бота не
+   * зробили адміністратором каналу, оновлення просто не прийде — і все працює
+   * як раніше, через кнопку «Я підписався». Тому це підсилення, а не
+   * залежність.
+   */
+  const memberChange = parseChatMember(update);
+  if (memberChange) {
+    const channel = process.env["TELEGRAM_CHANNEL_ID"]?.trim();
+    // Зміни в чужих чатах (групи, куди додали бота) гейта не стосуються.
+    const ours =
+      channel === String(memberChange.chatId) ||
+      (channel?.startsWith("@") ?? false) ||
+      channel === undefined;
+    if (ours) {
+      const { userId, oldStatus, newStatus, newIsMember } = memberChange;
+      if (justSubscribed(oldStatus, newStatus, newIsMember)) {
+        // Кеш тримав «не підписаний» — прибираємо, інакше наступна команда
+        // відмовить людині, яка вже все зробила.
+        gateCache.set(userId, { at: Date.now(), ok: true });
+        const sub = await getSubscriber(userId);
+        // Пишемо лише тим, хто вже приходив до бота: непроханий лист від бота,
+        // з яким людина не спілкувалась, — це спам, навіть доброзичливий.
+        if (sub) {
+          await telegramSend(
+            token,
+            userId,
+            renderAccessOpened(),
+            sub.point ? undefined : askPointKeyboard(),
+          );
+        }
+      } else if (justLeft(oldStatus, newStatus, newIsMember)) {
+        // Лише скидаємо кеш, щоб наступна перевірка була чесною. Сповіщення
+        // тим, кого вже попереджали, НЕ вимикаємо — запобіжник 3 у gate.ts.
+        gateCache.delete(userId);
+      }
+    }
+    return new Response("ok", { status: 200 });
+  }
+
   // Натискання кнопки приходить окремим типом оновлення, не повідомленням.
   const press = parseCallback(update);
   if (press) {
@@ -2793,6 +3110,38 @@ async function ensureWebhook(request: Request): Promise<void> {
   }
 }
 
+/**
+ * Оболонка сторінки не кешується; хешовані ассети — навічно.
+ *
+ * Це виправлення того, через що задеплоєні зміни не доходили до людей.
+ *
+ * Ассети мають у назві хеш вмісту й віддаються як `immutable` на рік — це
+ * правильно. Але HTML-оболонка, яка й каже, ЯКІ саме хеші вантажити, не мала
+ * жодного заголовка кешування взагалі. Без директиви кеш застосовує власну
+ * евристику й може тримати документ годинами: WebView Telegram відкриває стару
+ * оболонку, та просить старі хеші, а вони `immutable` — тобто віддаються з
+ * кешу назавжди. Людина бачить стару збірку нескінченно, хоч на сервері лежить
+ * нова, і жоден редеплой цього не лікує.
+ *
+ * `no-cache` тут означає не «не зберігати», а «перепитати перед показом»: копія
+ * лишається, але звіряється з сервером, і `304` віддається дешево. Саме це й
+ * потрібно для документа, який важить десятки кілобайт і змінюється з кожним
+ * деплоєм.
+ */
+function withShellCacheHeaders(response: Response): Response {
+  const type = response.headers.get("content-type") ?? "";
+  if (!type.includes("text/html")) return response;
+  // Заголовок уже виставлений вище за течією — не перебиваємо чужого рішення.
+  if (response.headers.has("cache-control")) return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-cache, must-revalidate");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     // Перехоплюється до маршрутизатора: службова відповідь не має залежати
@@ -2857,7 +3206,7 @@ export default {
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
-      return await normalizeCatastrophicSsrResponse(response);
+      return withShellCacheHeaders(await normalizeCatastrophicSsrResponse(response));
     } catch (error) {
       console.error(error);
       return new Response(renderErrorPage(), {

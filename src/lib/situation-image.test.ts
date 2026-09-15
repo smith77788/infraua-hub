@@ -25,14 +25,69 @@ describe("situationSvg", () => {
     ]);
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).toContain("</svg>");
-    // Кожна позначка несе glow-коло; дрон — силует, ракета — ромб.
-    expect((svg.match(/<circle /g) ?? []).length).toBe(2);
+    // Рахуємо саме позначки, а не кола: коло невизначеності є і в легенді,
+    // тож `<circle` більше не тотожний «ціль». Дрон — силует із rotate,
+    // ракета — ромб.
+    expect((svg.match(/d="M0,-9/g) ?? []).length).toBe(1);
+    expect((svg.match(/L-?\d+(\.\d+)?,\d+(\.\d+)? Z" fill="#ff4d4d"/g) ?? []).length).toBe(1);
+  });
+
+  it("коло невизначеності росте разом із заявленим розкидом", () => {
+    const radius = (uncertaintyKm: number) => {
+      const svg = situationSvg([
+        threat({
+          lat: 49,
+          lon: 32,
+          type: "shahed",
+          quality: {
+            uncertaintyKm,
+            position: "approx",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: null,
+          },
+        }),
+      ]);
+      const m = svg.match(/<circle cx="[\d.]+" cy="[\d.]+" r="(\d+)"/);
+      return Number(m![1]);
+    };
+    // 45 км помітно більше за 4 км; мале значення впирається в мінімум, щоб
+    // коло не було меншим за саму позначку.
+    expect(radius(45)).toBeGreaterThan(radius(4));
+  });
+
+  it("припущений курс малюється порожнім контуром, а не залитим силуетом", () => {
+    const presumed = situationSvg([
+      threat({
+        lat: 49,
+        lon: 32,
+        type: "shahed",
+        heading: 90,
+        quality: {
+          uncertaintyKm: 10,
+          position: "approx",
+          lifecycle: "uncertain",
+          presumptiveCourse: true,
+          speedKmh: null,
+        },
+      }),
+    ]);
+    expect(presumed).toContain('fill="none"');
+    expect(presumed).toContain("порожня стрілка");
+  });
+
+  it("легенда не пояснює значків, яких немає", () => {
+    const observed = situationSvg([threat({ lat: 49, lon: 32, type: "shahed", heading: 90 })]);
+    expect(observed).toContain("розкид позиції");
+    expect(observed).not.toContain("порожня стрілка");
   });
 
   it("порожнє небо — валідний SVG без позначок", () => {
     const svg = situationSvg([]);
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).not.toContain("<circle ");
+    // Порожнє небо — без легенди: пояснювати нічого.
+    expect(svg).not.toContain("розкид позиції");
   });
 
   it("курс на зображенні: стрілка лише коли heading відомий", () => {

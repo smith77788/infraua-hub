@@ -55,3 +55,60 @@ describe("swarmForecast", () => {
     expect(f).toBeNull();
   });
 });
+
+/*
+ * Припущені курси узгоджені між собою — вони виводяться з того самого
+ * загального напрямку нальоту. Тому вони не просто додають шуму, а роздувають
+ * міру узгодженості, яка й вирішує, чи давати прогноз узагалі: прогноз
+ * виглядав тим упевненішим, чим менше під ним було спостережень.
+ */
+describe("swarmForecast — рахує лише спостережені курси", () => {
+  const presumed = {
+    uncertaintyKm: 25,
+    position: "approx" as const,
+    lifecycle: "uncertain" as const,
+    presumptiveCourse: true,
+    speedKmh: null,
+  };
+
+  it("самі припущені курси прогнозу не дають", () => {
+    const only = [0, 1, 2, 3].map((i) =>
+      threat({ id: `p${i}`, lat: 47 + i * 0.1, heading: 315, quality: presumed }),
+    );
+    expect(swarmForecast(only, cities)).toBeNull();
+  });
+
+  it("припущені не добирають кількості до порогу", () => {
+    const mixed = [
+      threat({ id: "o1", lat: 47, heading: 315 }),
+      threat({ id: "o2", lat: 47.1, heading: 318 }),
+      threat({ id: "p1", lat: 47.2, heading: 316, quality: presumed }),
+      threat({ id: "p2", lat: 47.3, heading: 314, quality: presumed }),
+    ];
+    // Спостережених лише дві — менше за поріг у три, попри чотири з курсом.
+    expect(swarmForecast(mixed, cities)).toBeNull();
+  });
+
+  it("прогноз каже, скільки курсів відкинуто як припущені", () => {
+    const f = swarmForecast(
+      [
+        threat({ id: "o1", lat: 47, heading: 315 }),
+        threat({ id: "o2", lat: 47.1, heading: 318 }),
+        threat({ id: "o3", lat: 47.2, heading: 312 }),
+        threat({ id: "p1", lat: 47.3, heading: 316, quality: presumed }),
+      ],
+      cities,
+    );
+    expect(f).not.toBeNull();
+    expect(f!.count).toBe(3);
+    expect(f!.presumed).toBe(1);
+  });
+
+  it("без припущених лічильник нульовий", () => {
+    const f = swarmForecast(
+      [0, 1, 2].map((i) => threat({ id: `o${i}`, lat: 47 + i * 0.1, heading: 315 + i })),
+      cities,
+    );
+    expect(f!.presumed).toBe(0);
+  });
+});

@@ -21,6 +21,8 @@ import { escapeHtml } from "./telegram";
 import { preAlertFooter, preAlertHeader } from "./pre-alert";
 import type { SoundKind } from "./acoustic";
 import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
+import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
+import { KIND_EMOJI, KIND_NOTE, type NearbyShelter } from "./shelters";
 
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
@@ -195,10 +197,37 @@ export function renderAlert(
 
   const lines = [`${head} — ${escapeHtml(placeLabel)}`, ""];
   if (lead) {
+    /*
+     * Час подається вилкою, коли вона широка.
+     *
+     * Джерело саме каже, з якою точністю знає позицію — від 4 до 45 км. На
+     * швидкості шахеда сорок пʼять кілометрів це чверть години, і «~7 хв» у
+     * такому разі не оцінка, а випадкове число з інтервалу, подане людині як
+     * вимір. Коли вилка вузька, показуємо одне число: зайва точність у тексті,
+     * який читають о третій ночі, коштує дорожче за свою користь.
+     */
+    const r = lead.etaRangeMin;
+    const timePart =
+      r && r[1] - r[0] >= 3
+        ? ` · <b>${r[0]}–${r[1]} хв</b>`
+        : lead.etaMin != null
+          ? ` · <b>~${lead.etaMin} хв</b>`
+          : "";
     lines.push(
       `${TYPE_EMOJI[type]} ${TYPE_NAME[type]}: ${lead.distanceKm} км на ${compass(lead.bearingToThreat)}` +
-        (lead.etaMin != null ? ` · <b>~${lead.etaMin} хв</b>` : ""),
+        timePart,
     );
+    /*
+     * Чим підкріплений цей рядок — словами джерела, а не нашими.
+     *
+     * «Підтверджена, ±4 км» і «не підтверджена, ±45 км, курс припущений» — це
+     * два різні рішення для людини, і досі вони виглядали однаково. Мовчання
+     * джерела лишається мовчанням: порожній рядок не друкуємо.
+     */
+    const quality = qualityLine(lead.threat.quality ?? EMPTY_QUALITY);
+    const speed = lead.speedMeasured ? "швидкість заміряна" : "";
+    const detail = [quality, speed].filter(Boolean).join(" · ");
+    if (detail) lines.push(`<i>${escapeHtml(detail)}</i>`);
   }
   if (assess.inboundCount > 1) lines.push(`Усього на вашу точку: ${assess.inboundCount}`);
   // Наскільки цьому вірити — у самому сповіщенні, а не в довідці. Людина, яку
@@ -321,6 +350,7 @@ export const PERSONAL_ACTIONS = {
   radiusPrefix: "km:",
   mute: "mu:1",
   unmute: "mu:0",
+  shelter: "sh",
 } as const;
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
@@ -366,12 +396,14 @@ export function parsePersonalAction(
   | { kind: "night"; value: NightMode }
   | { kind: "radius"; value: number }
   | { kind: "mute"; value: boolean }
+  | { kind: "shelter" }
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
   if (data === PERSONAL_ACTIONS.soundMenu) return { kind: "soundMenu" };
   if (data === PERSONAL_ACTIONS.wantGeo) return { kind: "wantGeo" };
   if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
+  if (data === PERSONAL_ACTIONS.shelter) return { kind: "shelter" };
   if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
     return v === "drone" || v === "explosion" || v === "air-defence"
@@ -417,6 +449,13 @@ export function personalKeyboard(opts: { withOk?: boolean } = {}): {
   inline_keyboard: PersonalButton[][];
 } {
   const rows: PersonalButton[][] = [
+    /*
+     * «Куди сховатися» стоїть першим рядком і окремо.
+     *
+     * Це єдина кнопка, яка відповідає на питання, з яким людина відкриває
+     * бота під тривогою. Решта — про обстановку, і вони важливі потім.
+     */
+    [{ text: "🛡 Куди сховатися", callback_data: PERSONAL_ACTIONS.shelter }],
     [
       { text: "👂 Чую", callback_data: PERSONAL_ACTIONS.soundMenu },
       { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
@@ -441,4 +480,45 @@ export function soundKeyboard(): { inline_keyboard: PersonalButton[][] } {
       [{ text: "← Назад", callback_data: PERSONAL_ACTIONS.refresh }],
     ],
   };
+}
+
+/**
+ * Список укриттів для людини.
+ *
+ * Найближче — перше й окремим рядком, бо під тривогою читають один рядок.
+ * Кожен вид названо чесно: метро це метро, паркінг це паркінг, і жодне з них
+ * не видається за обладнане укриття, якщо воно ним не є.
+ *
+ * Координати даються посиланням на карту, а не текстом: людині треба дійти,
+ * а не запамʼятати число.
+ */
+export function renderShelters(
+  list: readonly NearbyShelter[],
+  caveat: string,
+  degraded = false,
+): string {
+  if (!list.length) {
+    return [
+      // «Не відповіло» і «нічого немає» — різні речення. Друге стверджує про
+      // світ те, чого ми не знаємо, і людина може на цьому збудувати рішення.
+      degraded ? "🛡 <b>Джерело не відповіло</b>" : "🛡 <b>Поруч нічого не знайдено</b>",
+      "",
+      escapeHtml(caveat),
+      "",
+      "<i>Найбезпечніше з доступного просто зараз — внутрішня кімната без вікон,",
+      "коридор чи ванна: дві стіни між вами й вулицею.</i>",
+    ].join("\n");
+  }
+
+  const lines = ["🛡 <b>Куди сховатися</b>", ""];
+  for (const s of list) {
+    const where = `<a href="https://www.openstreetmap.org/?mlat=${s.lat}&mlon=${s.lon}#map=17/${s.lat}/${s.lon}">на карті</a>`;
+    lines.push(
+      `${KIND_EMOJI[s.kind]} <b>${escapeHtml(s.name)}</b> — ${s.walkMin} хв пішки (${s.distanceKm} км) · ${where}`,
+    );
+    lines.push(`<i>${escapeHtml(KIND_NOTE[s.kind])}</i>`);
+  }
+  lines.push("");
+  lines.push(`<i>${escapeHtml(caveat)}</i>`);
+  return lines.join("\n");
 }

@@ -421,8 +421,19 @@ export default function PersonalThreatPanel({
                     {compass(n.bearingToThreat)} {n.distanceKm} км
                   </span>
                   {n.inbound && n.etaMin != null ? (
-                    <span className="font-mono text-[10px] font-bold text-red-400">
-                      {n.etaMin}′
+                    <span
+                      className="font-mono text-[10px] font-bold text-red-400"
+                      title={
+                        n.etaRangeMin
+                          ? `Оцінка ${n.etaRangeMin[0]}–${n.etaRangeMin[1]} хв — позиція цілі відома з точністю, яку називає джерело`
+                          : undefined
+                      }
+                    >
+                      {/* Широка вилка показується вилкою: одне число тут було б
+                          випадковою точкою інтервалу, поданою як вимір. */}
+                      {n.etaRangeMin && n.etaRangeMin[1] - n.etaRangeMin[0] >= 3
+                        ? `${n.etaRangeMin[0]}–${n.etaRangeMin[1]}′`
+                        : `${n.etaMin}′`}
                     </span>
                   ) : null}
                 </div>

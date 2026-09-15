@@ -31,6 +31,7 @@ import { PurposePolicy } from '../core/security/PurposePolicy';
 import { EnvApiKeyAuth, Principal } from '../core/security/ApiKeyAuth';
 import { RateLimiter } from '../core/security/RateLimiter';
 import { RiskScorer } from '../core/analytics/RiskScorer';
+import { AirActivityStore } from '../core/analytics/AirActivityStore';
 import { betweenness, components, degrees, allShortestPaths } from '../core/analytics/GraphMetrics';
 import { resolveDuplicates } from '../core/analytics/EntityResolver';
 import { findCommonOwnership, findConflictsOfInterest } from '../core/analytics/ConflictOfInterest';
@@ -99,6 +100,7 @@ const documents = new DocumentStore(path.join(DATA_ROOT, 'documents.json'));
 const cases = new CaseStore(path.join(DATA_ROOT, 'cases.json'));
 const snapshots = new SnapshotStore(path.join(DATA_ROOT, 'snapshots.log'));
 const alerts = new AlertStore(path.join(DATA_ROOT, 'alerts.json'));
+const airActivity = new AirActivityStore(path.join(DATA_ROOT, 'air-activity.log'));
 const actions = new ActionRegistry(graph, audit, path.join(DATA_ROOT, 'pending-actions.json'));
 const tools = new ToolRegistry(
   graph,
@@ -515,6 +517,51 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+
+/**
+ * Air-activity surge detection over persisted history.
+ *
+ * The console pushes the current active-target count here on each poll; the
+ * platform keeps it on the durable volume and answers whether the sky is busier
+ * than this deployment's own baseline. Unlike the console's per-device session
+ * history, this baseline survives restarts and spans days.
+ *
+ * No clearance clamp and no compartment: the input is a single scalar derived
+ * from open air-monitoring sources, carrying nothing that ranks above PUBLIC.
+ * Not audited per call on purpose — this is a ~30-second heartbeat, and an
+ * audit line for each would bury the meaningful actions it exists to record.
+ */
+app.post('/api/platform/ingest/air', (req, res) => {
+  const body = req.body ?? {};
+  const count = Number(body.count);
+  if (!Number.isFinite(count) || count < 0) {
+    return res.status(400).json({ error: 'count is required and must be a non-negative number' });
+  }
+  // regions may arrive as [{region, count}] (what the console sends) or as a
+  // plain {region: count} map; both fold to the same record.
+  const regions = parseRegions(body.regions);
+  const total = airActivity.record(count, new Date(), regions);
+  res.status(201).json({ ...total, regions: airActivity.regionSurges() });
+});
+
+app.get('/api/platform/air/anomalies', (_req, res) => {
+  res.json({ ...airActivity.surge(), regions: airActivity.regionSurges() });
+});
+
+/** Accepts the console's [{region,count}] array or a {region:count} map. */
+function parseRegions(raw: unknown): Record<string, number> | undefined {
+  if (Array.isArray(raw)) {
+    const out: Record<string, number> = {};
+    for (const r of raw) {
+      const name = (r as { region?: unknown })?.region;
+      const c = Number((r as { count?: unknown })?.count);
+      if (typeof name === 'string' && name && Number.isFinite(c)) out[name] = c;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+  if (raw && typeof raw === 'object') return raw as Record<string, number>;
+  return undefined;
+}
 
 /**
  * Re-runs the standing queries right after data lands.
@@ -1543,9 +1590,34 @@ app.post('/api/platform/cases/:id/notes', (req, res) => {
 
 app.post('/api/platform/cases/:id/pin', (req, res) => {
   const view = req.viewer!;
-  const { entityIds } = req.body ?? {};
+  const { entityIds, entities } = req.body ?? {};
   if (!Array.isArray(entityIds) || entityIds.length === 0) {
     return res.status(400).json({ error: 'entityIds must be a non-empty array' });
+  }
+
+  // Pinning a specific object the analyst chose is a deliberate, scoped action
+  // on their own CASE - not the bulk acceptance of a national infrastructure
+  // picture that the INFRA_LAYERS gate exists to control. So when the client
+  // sends the objects themselves, we upsert exactly those here, gate-free, at
+  // PUBLIC (the OSM data is open) and clamped to the caller's clearance. Without
+  // this, pinning failed with 404 on any deployment that keeps the bulk gate
+  // off, because the node the pin refers to had never entered the graph.
+  if (Array.isArray(entities) && entities.length > 0) {
+    const marks = resolveWriteCompartments(req);
+    if ('error' in marks) return res.status(403).json({ error: marks.error });
+    const level = Math.min(ClearanceLevel.PUBLIC, req.callerClearance!);
+    try {
+      const ingested = infraUA.ingest(
+        { facilities: entities, retrievedAt: new Date().toISOString() } as InfraUAPayload,
+        'infraua-console-pin',
+        'infrastructure',
+        level,
+        marks.compartments
+      );
+      documents.appendMany(ingested.documents);
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   // Resolve against the caller's own view, so an id they cannot see can never

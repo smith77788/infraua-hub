@@ -23,7 +23,8 @@
 import type { Threat, ThreatType } from "./air";
 import { OBLASTS } from "./alerts";
 import { distanceKm } from "./infra-types";
-import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
+import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta";
+import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 import { swarmForecast } from "./swarm";
 import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
 import { verifyThreat } from "./advisory";
@@ -65,20 +66,51 @@ export function oblastOf(lat: number, lon: number): string {
  * Місто в межах `nearKm` і курс у секторі ±`sectorDeg` на нього. ETA — за
  * типовою швидкістю типу цілі (SPEED_KMH): орієнтир, скільки лишилось.
  */
-function loudCity(t: Threat, nearKm = 80, sectorDeg = 40): { name: string; etaMin: number } | null {
+/**
+ * Поріг «вже над містом», км.
+ *
+ * Знайдено в живому каналі: «📍 м. Київ: 2 шахеди курсом на північ — у бік:
+ * м. Київ (4–14 хв)». Ціль уже була над містом, а рядок обіцяв, що вона туди
+ * прилетить, — тобто подавав як новину те, що вже сталося, і плутав читача
+ * рівно там, де він шукає ясності.
+ *
+ * Старий поріг у 3 км не рятував: великі міста ширші за нього в рази. Розрізняє
+ * саме ВІДСТАНЬ, а не назва — довідник міст названо по областях («Полтавщина»
+ * означає Полтаву), тож порівняння назв відкинуло б і законне попередження
+ * «ціль в області йде на обласний центр».
+ */
+const ALREADY_OVER_CITY_KM = 12;
+
+function loudCity(
+  t: Threat,
+  nearKm = 80,
+  sectorDeg = 40,
+): { name: string; etaMin: number; etaRangeMin: [number, number] } | null {
   if (typeof t.heading !== "number") return null;
   let best: { name: string; d: number } | null = null;
   for (const c of CITY_REFS) {
     const d = distanceKm(t, c);
-    if (d > nearKm || d < 3) continue;
+    if (d > nearKm || d < ALREADY_OVER_CITY_KM) continue;
     const brg = bearingDeg(t, c);
     if (angularDiff(brg, t.heading) <= sectorDeg && (!best || d < best.d)) {
       best = { name: c.name, d };
     }
   }
   if (!best) return null;
-  const speed = SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
-  return { name: best.name, etaMin: Math.max(1, Math.round((best.d / speed) * 60)) };
+  const q = t.quality ?? EMPTY_QUALITY;
+  const speed = q.speedKmh ?? SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+  // Вилка з тих самих двох причин, що й усюди: не знаємо точно, ДЕ ціль, і не
+  // знаємо точно, ЩО це.
+  const [slow, fast] = speedRangeFor(t.type, q.speedKmh);
+  const u = displayRadiusKm(q);
+  return {
+    name: best.name,
+    etaMin: Math.max(1, Math.round((best.d / speed) * 60)),
+    etaRangeMin: [
+      Math.max(1, Math.round((Math.max(0, best.d - u) / fast) * 60)),
+      Math.max(1, Math.round(((best.d + u) / slow) * 60)),
+    ],
+  };
 }
 
 // Значок типу цілі — щоб пост читався оком, а не суцільним рядком.
@@ -264,7 +296,8 @@ interface Group {
   oblast: string;
   byType: Map<ThreatType, number>;
   /** Місто на курсі → мінімальна ETA (хв). */
-  loud: Map<string, number>;
+  /** Місто → найтерміновіший час до нього: найімовірніший і вилка. */
+  loud: Map<string, { etaMin: number; etaRangeMin: [number, number] }>;
   /** Тип → індекс румба 0..7 (слова дає словник). */
   courses: Map<ThreatType, number>;
   /** Скільки цілей області спираються лише на одне непідтверджене джерело. */
@@ -285,6 +318,12 @@ export function renderChannelPost(
     forecast?: string | null;
     /** Мова поста. Усталено українська; англійська — для дзеркального каналу. */
     lang?: LangCode;
+    /**
+     * Стеля довжини. Задається, коли пост піде підписом до фото: Telegram
+     * обмежує підпис 1024 символами, і перевищення коштує дорого — див.
+     * `assemblePost`.
+     */
+    maxChars?: number;
   } = {},
 ): ChannelPost | null {
   if (!threats.length) return null;
@@ -317,7 +356,11 @@ export function renderChannelPost(
     const loud = loudCity(t);
     if (loud) {
       const prev = g.loud.get(loud.name);
-      if (prev === undefined || loud.etaMin < prev) g.loud.set(loud.name, loud.etaMin);
+      // Порівнюємо за найранішим часом: у переліку має стояти найтерміновіше
+      // з можливого, а не найімовірніше.
+      if (prev === undefined || loud.etaRangeMin[0] < prev.etaRangeMin[0]) {
+        g.loud.set(loud.name, { etaMin: loud.etaMin, etaRangeMin: loud.etaRangeMin });
+      }
     }
   }
 
@@ -354,7 +397,22 @@ export function renderChannelPost(
     // Без прийменника, щоб уникнути відмінка: назви в даних — у називному
     // («Харківщина», «Запоріжжя»), і «громко в Запоріжжя» різало б слух.
     if (g.loud.size) {
-      line += lex.towards([...g.loud.entries()].map(([n, e]) => lex.eta(n, e)));
+      /*
+       * Ціль, що йде на центр СВОЄЇ ж області, називається окремо.
+       *
+       * `oblastOf` і довідник напрямків користуються одним переліком обласних
+       * центрів, тож група й ціль часто збігаються — і рядок виходив
+       * тавтологією: «📍 Полтавщина: … — у бік: Полтавщина». Викинути його не
+       * можна (людям у центрі важливо, що йде на них), тому просто називаємо
+       * те, що є: «на обласний центр».
+       */
+      const own = g.loud.get(g.oblast);
+      const others = [...g.loud.entries()].filter(([n]) => n !== g.oblast);
+      if (others.length) {
+        line += lex.towards(others.map(([n, e]) => lex.eta(n, e.etaMin, e.etaRangeMin)));
+      } else if (own) {
+        line += lex.towardsOwnCentre(lex.etaTime(own.etaMin, own.etaRangeMin));
+      }
     }
     // Позначка стоїть ЛИШЕ коли підтвердження немає в жодної цілі області:
     // часткова слабкість тут не повідомляється, бо «частково непідтверджено»
@@ -374,27 +432,134 @@ export function renderChannelPost(
   // Напрямок хвилі рою — «куди зміщується маса, які області на черзі».
   // Даємо лише коли напрямок виражений (див. swarmForecast), інакше мовчимо.
   const wave = swarmForecast(threats, CITY_REFS);
+  /*
+   * Прогноз називає, на скількох спостережених курсах він стоїть.
+   *
+   * «Хвиля йде на північний захід, далі Полтавщина» звучить однаково впевнено
+   * і коли під ним дванадцять спостережених курсів, і коли три з дванадцяти, —
+   * а це різні за вагою твердження. Припущені курси в розрахунок уже не
+   * входять (див. swarmForecast), і коли їх відкинуто помітну частину, читач
+   * має право це знати, не питаючи.
+   */
   const waveLine =
-    wave && wave.next.length ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) : null;
+    wave && wave.next.length
+      ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) +
+        (wave.presumed > 0
+          ? ` (за ${wave.count} спостереженими курсами з ${wave.count + wave.presumed})`
+          : "")
+      : null;
 
   const tags = hashtags(
     ordered.map((g) => g.oblast),
     allTypes,
     lex,
   );
-  const lines = [
-    lex.headline(headlineKind(allTypes, shaheds), seed),
-    ...(deltaLine ? ["", deltaLine] : []),
-    "",
-    ...bodyLines,
-    ...(waveLine ? ["", waveLine] : []),
-    ...(opts.forecast ? ["", opts.forecast] : []),
-    "",
-    lex.footer(targets, lex.tail(isRocketish(allTypes) || allTypes.has("kab"), seed)),
-    ...(tags ? [tags] : []),
-  ];
+  const headline = lex.headline(headlineKind(allTypes, shaheds), seed);
+  const footer = lex.footer(targets, lex.tail(isRocketish(allTypes) || allTypes.has("kab"), seed));
 
-  return { text: lines.join("\n"), signature, targets, snapshot, material, hashtags: tags };
+  const text = assemblePost({
+    headline,
+    footer,
+    bodyLines,
+    ...(deltaLine ? { deltaLine } : {}),
+    ...(waveLine ? { waveLine } : {}),
+    ...(opts.forecast ? { forecast: opts.forecast } : {}),
+    ...(tags ? { tags } : {}),
+    ...(opts.maxChars !== undefined ? { maxChars: opts.maxChars } : {}),
+    more: (n) => lex.more(n),
+  });
+
+  return { text, signature, targets, snapshot, material, hashtags: tags };
+}
+
+/**
+ * Збирає пост і ВТИСКАЄ його в стелю, не викидаючи головного.
+ *
+ * Це виправлення найгіршої вади, яку я знайшов у живому каналі.
+ *
+ * Пост іде підписом до картинки, а підпис у Telegram обмежений 1024 символами.
+ * Старий код на перевищення просто відрізав усе, лишаючи шапку й підвал. У
+ * каналі це виглядало так:
+ *
+ *     🚀 Ракетна небезпека!
+ *     всього в небі: 14 · за даними OSINT
+ *
+ * Чотирнадцять цілей у небі — і жодної названої області. Вада зворотна за
+ * знаком: що більший наліт, то менше пост повідомляє, бо саме у великий наліт
+ * текст і переростає стелю. Система мовчала рівно тоді, коли була потрібна.
+ *
+ * Тепер відрізається за пріоритетом, і перелік областей — останнє, що піде.
+ * Порядок продуманий: спершу хештеги (пошук важливий, але не зараз), далі
+ * прогноз (здогадка), далі рядок змін (контекст), далі найспокійніші області
+ * — і лише вони, зі згорткою «…і ще N». Шапка й підвал лишаються завжди.
+ */
+export function assemblePost(input: {
+  headline: string;
+  footer: string;
+  bodyLines: readonly string[];
+  deltaLine?: string;
+  waveLine?: string;
+  forecast?: string;
+  tags?: string;
+  maxChars?: number;
+  more: (n: number) => string;
+}): string {
+  const build = (opts: {
+    body: readonly string[];
+    hidden: number;
+    delta: boolean;
+    wave: boolean;
+    forecast: boolean;
+    tags: boolean;
+  }): string =>
+    [
+      input.headline,
+      ...(opts.delta && input.deltaLine ? ["", input.deltaLine] : []),
+      "",
+      ...opts.body,
+      ...(opts.hidden > 0 ? [input.more(opts.hidden)] : []),
+      ...(opts.wave && input.waveLine ? ["", input.waveLine] : []),
+      ...(opts.forecast && input.forecast ? ["", input.forecast] : []),
+      "",
+      input.footer,
+      ...(opts.tags && input.tags ? [input.tags] : []),
+    ].join("\n");
+
+  const full = {
+    body: input.bodyLines,
+    hidden: 0,
+    delta: true,
+    wave: true,
+    forecast: true,
+    tags: true,
+  };
+  const limit = input.maxChars;
+  let text = build(full);
+  if (limit === undefined || text.length <= limit) return text;
+
+  // Черга поступок, від найменш цінної до найболючішої.
+  const steps: (() => void)[] = [
+    () => (full.tags = false),
+    () => (full.forecast = false),
+    () => (full.wave = false),
+    () => (full.delta = false),
+  ];
+  for (const step of steps) {
+    step();
+    text = build(full);
+    if (text.length <= limit) return text;
+  }
+
+  // Лишились самі області — ріжемо найспокійніші з хвоста (вони вже
+  // відсортовані за кількістю цілей), але хоча б одну лишаємо завжди:
+  // пост без жодної області не варто слати взагалі.
+  for (let keep = input.bodyLines.length - 1; keep >= 1; keep--) {
+    full.body = input.bodyLines.slice(0, keep);
+    full.hidden = input.bodyLines.length - keep;
+    text = build(full);
+    if (text.length <= limit) return text;
+  }
+  return text;
 }
 
 function total(m: Map<ThreatType, number>): number {

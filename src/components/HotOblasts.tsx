@@ -25,7 +25,7 @@ export default function HotOblasts({ threats }: { threats: Threat[] }): React.Re
   if (top.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute bottom-10 left-1/2 z-[600] -translate-x-1/2">
+    <div className="pointer-events-none absolute bottom-24 left-1/2 z-[600] -translate-x-1/2 max-w-[88%]">
       <div className="flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-background/90 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-300 shadow-lg backdrop-blur">
         <span className="text-amber-400">🔥</span>
         {top.map(([name, n], i) => (

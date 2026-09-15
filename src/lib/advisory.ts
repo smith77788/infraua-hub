@@ -19,7 +19,8 @@ import {
   type CredibilityAssessment,
   type SourceRole,
 } from "./source-credibility";
-import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
+import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta";
+import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 
 // ── Румби (для напрямку й сторони вікон) ─────────────────────────────────
 export const COMPASS_8 = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"] as const;
@@ -245,6 +246,18 @@ export interface PersonalThreat {
   inbound: boolean;
   /** Оцінка часу підльоту до моєї точки, хв (лише для inbound). */
   etaMin: number | null;
+  /**
+   * Вилка часу підльоту, хв — від найранішого до найпізнішого.
+   *
+   * Джерело саме називає, з якою точністю знає позицію (від 4 до 45 км), і ця
+   * невизначеність ріже В ОБИДВА боки: ціль може бути вже на сорок пʼять
+   * кілометрів ближче, ніж показано. Саме тому вилка тут потрібна не заради
+   * акуратності формулювань — її нижній край є найбезпечнішим прочитанням, і
+   * рішення про рівень тривоги береться з нього.
+   */
+  etaRangeMin: [number, number] | null;
+  /** Швидкість заміряна джерелом, а не взята з таблиці типових. */
+  speedMeasured: boolean;
 }
 
 export interface PersonalAssessment {
@@ -261,6 +274,14 @@ export interface PersonalAssessment {
   nearest: PersonalThreat[];
   inboundCount: number;
   minutesToNearest: number | null;
+  /**
+   * Найбезпечніше прочитання часу до найближчої вхідної цілі, хв.
+   *
+   * Нижній край вилки: ціль може бути ближчою, ніж її позначка. Рівень
+   * тривоги рахується саме з цього числа — поспішити з попередженням безпечно,
+   * запізнитися ні, і ця асиметрія тут та сама, що й у передтривозі.
+   */
+  minutesToNearestLow: number | null;
   /**
    * Відстань до найближчої цілі ПОЗА радіусом, км. `null` — поза радіусом
    * порожньо теж. Потрібне, щоб «у радіусі нічого» не читалось як «у країні
@@ -289,13 +310,28 @@ export function personalAssessment(
     const toThreat = bearingDeg(point, threat);
     let inbound = false;
     let etaMin: number | null = null;
+    let etaRangeMin: [number, number] | null = null;
+    const q = threat.quality ?? EMPTY_QUALITY;
     if (threat.heading != null) {
       // Ціль іде в мій бік, якщо азимут ВІД неї НА мене близький до її курсу.
       const bearingThreatToMe = bearingDeg(threat, point);
       if (angularDiff(bearingThreatToMe, threat.heading) <= sector) {
         inbound = true;
-        const speed = SPEED_KMH[threat.type ?? "unknown"] || 250;
+        // Заміряна швидкість цієї цілі б'є таблицю типових для класу.
+        const speed = q.speedKmh ?? SPEED_KMH[threat.type ?? "unknown"] ?? 250;
         etaMin = Math.round((d / speed) * 60);
+        const u = displayRadiusKm(q);
+        /*
+         * Вилка ширшає з двох боків одночасно: ми не знаємо точно, ДЕ ціль, і
+         * не знаємо точно, ЩО це. Позначка «шахед» покриває і поршневу
+         * «Герань» (185 км/год), і реактивну (до 600) — канал пише про них
+         * однаково. Найраніший приліт = ближче й швидше.
+         */
+        const [slow, fast] = speedRangeFor(threat.type, q.speedKmh);
+        etaRangeMin = [
+          Math.round((Math.max(0, d - u) / fast) * 60),
+          Math.round(((d + u) / slow) * 60),
+        ];
       }
     }
     return {
@@ -304,6 +340,8 @@ export function personalAssessment(
       bearingToThreat: Math.round(toThreat),
       inbound,
       etaMin,
+      etaRangeMin,
+      speedMeasured: q.speedKmh !== null,
     };
   });
 
@@ -323,12 +361,16 @@ export function personalAssessment(
   const minutesToNearest = inboundList.length
     ? Math.min(...inboundList.map((s) => s.etaMin ?? Infinity))
     : null;
+  const minutesToNearestLow = inboundList.length
+    ? Math.min(...inboundList.map((s) => s.etaRangeMin?.[0] ?? s.etaMin ?? Infinity))
+    : null;
 
   return {
     point,
     nearest,
     inboundCount: inboundList.length,
     minutesToNearest: minutesToNearest === Infinity ? null : minutesToNearest,
+    minutesToNearestLow: minutesToNearestLow === Infinity ? null : minutesToNearestLow,
     nearestBeyondKm,
     sky: skyState(threats, point, radiusKm),
   };
@@ -368,7 +410,15 @@ export function dangerIndex(a: PersonalAssessment): DangerIndex {
     const near = a.sky.nearestKm;
     percent = near == null ? 0 : near < 30 ? 22 : near < 60 ? 14 : near < 100 ? 8 : 3;
   } else {
-    const m = a.minutesToNearest ?? 30;
+    /*
+     * Рівень береться з НАЙБЕЗПЕЧНІШОГО прочитання, а не з середнього.
+     *
+     * Позначка цілі відома з точністю, яку називає саме джерело, і ціль може
+     * бути вже ближче. Рахувати рівень із середини вилки означає систематично
+     * запізнюватися рівно на половину невизначеності — тобто на чверть години
+     * там, де джерело заявило ±45 км.
+     */
+    const m = a.minutesToNearestLow ?? a.minutesToNearest ?? 30;
     const base = m <= 5 ? 95 : m <= 10 ? 85 : m <= 20 ? 65 : m <= 30 ? 45 : 32;
     // Кілька вхідних гірше за одну, але з швидким насиченням.
     percent = Math.min(100, base + Math.min(a.inboundCount - 1, 4) * 4);

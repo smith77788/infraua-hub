@@ -67,6 +67,37 @@ function filePath(): string {
 }
 
 /**
+ * Маленькі позначки на тому — щоб «зроблено сьогодні» пережило перезапуск.
+ *
+ * Дедуп у памʼяті процесу (модульна змінна) не працює там, де процес не один і
+ * не вічний: кожен ізолят/репліка/редеплой стартує з чистим станом, і «щоденна»
+ * дія повторюється щоразу. Саме так щоденна копія підписників перетворювалась
+ * на спам щогодини. Позначка лягає поруч із підписниками на той самий том, тож
+ * «вже надіслано за сьогодні» бачать усі виконання. На ефемерному сховищі запис
+ * тихо падає — і це нормально: там і дедупити нема на чому.
+ */
+export async function readMarker(name: string): Promise<string | null> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const value = (await readFile(`${dataDir().replace(/\/$/, "")}/${name}`, "utf8")).trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeMarker(name: string, value: string): Promise<void> {
+  try {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const dir = dataDir().replace(/\/$/, "");
+    await mkdir(dir, { recursive: true });
+    await writeFile(`${dir}/${name}`, value, "utf8");
+  } catch {
+    /* ефемерне сховище — дедупити нема де, тихо ігноруємо */
+  }
+}
+
+/**
  * Чи переживуть підписки редеплой.
  *
  * `default` — ні: файл ляже в ефемерну файлову систему контейнера. Решта

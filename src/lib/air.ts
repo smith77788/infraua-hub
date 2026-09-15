@@ -4,6 +4,8 @@
  * — активні інциденти (позначки повітряних цілей за даними OSINT-каналів).
  */
 
+import type { ThreatQuality } from "./threat-quality";
+
 /** Перетворення Web Mercator (EPSG:3857, метри) → WGS84 [lat, lon]. */
 export function mercToLatLon(x: number, y: number): [number, number] {
   const lon = (x / 20037508.34) * 180;
@@ -63,6 +65,38 @@ export function classifyThreatType(text: string): ThreatType {
 }
 
 // Порядок «серйозності» — при злитті/виборі перемагає важчий тип.
+/** Усі допустимі значення типу — джерело правди для нормалізації з мережі. */
+const THREAT_TYPES: ReadonlySet<string> = new Set<ThreatType>([
+  "shahed",
+  "reactive",
+  "cruise",
+  "missile",
+  "ballistic",
+  "kab",
+  "recon",
+  "aircraft",
+  "unknown",
+]);
+
+/**
+ * Звести тип, що прийшов ззовні, до відомого.
+ *
+ * Типи приходять із мережі, а таблиці підстановки (`Record<ThreatType, …>`)
+ * припускають, що ключ завжди свій. Припущення трималося на типізації, якої в
+ * рантаймі немає: варто джерелу віддати незнайоме значення — і пошук у таблиці
+ * кидає виняток.
+ *
+ * Знайдено перебором граничних входів: невідомий тип валив `renderChannelPost`
+ * ЦІЛКОМ. Тобто одна дивна ціль позбавляла поста весь канал — у продукті, де
+ * мовчання і є найгіршою поразкою.
+ *
+ * Нормалізація на межі дешевша за оборону кожної таблиці окремо: невідоме
+ * стає `unknown`, що чесно й означає «тип не визначено».
+ */
+export function normalizeThreatType(raw: unknown): ThreatType {
+  return typeof raw === "string" && THREAT_TYPES.has(raw) ? (raw as ThreatType) : "unknown";
+}
+
 const TYPE_SEVERITY: Record<ThreatType, number> = {
   ballistic: 8,
   missile: 7,
@@ -101,6 +135,25 @@ export interface Threat {
   heading?: number;
   /** Рівень впевненості джерела: low/medium/high. */
   confidence?: string;
+  /**
+   * Що джерело каже про власну точність: радіус невизначеності, чи
+   * підтверджена позиція, чи курс лише припущений, чи є заміряна швидкість.
+   *
+   * Довго губилося, і саме через це карта малювала позначку ±45 км крапкою, а
+   * коридор підльоту з припущеного курсу — як розрахунок. Див. threat-quality.ts.
+   */
+  quality?: ThreatQuality;
+  /**
+   * Спостережений трек із джерела — де ціль РЕАЛЬНО була.
+   *
+   * Не плутати з екстраполяцією: тут лише зафіксовані положення, і тільки їх
+   * можна малювати суцільною лінією.
+   */
+  trail?: { lat: number; lon: number; t: string }[];
+  /** Ціль над морем — джерело позначає це окремо. */
+  sea?: boolean;
+  /** Область (регіон), якщо джерело її дає — для аналізу активності по областях. */
+  region?: string;
 }
 
 function threatDistanceKm(a: Threat, b: Threat): number {

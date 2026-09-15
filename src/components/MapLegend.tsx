@@ -77,9 +77,25 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
             <Swatch color={t.color} /> {t.label}
           </div>
         ))}
+        {/*
+          Легенда мусить пояснювати те, чого не видно з вигляду. Коло довкола
+          цілі й густота пунктиру — не оформлення, а два різні твердження про
+          те, наскільки джерело впевнене; людина, яка прочитає їх як прикрасу,
+          повірить позначці більше, ніж варто.
+        */}
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-          Яскравість = свіжість (свіжі пульсують). Пунктир від цілі — курс. Тип визначається з
-          тексту OSINT-каналів; «—» — тип невідомий.
+          Яскравість = свіжість (свіжі пульсують). Тип визначається з тексту OSINT-каналів; «—» —
+          тип невідомий.
+        </p>
+        <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+          <b className="text-foreground">Коло довкола цілі</b> — розкид позиції, як його називає
+          джерело (суцільний контур) або наша обережна оцінка, коли джерело змовчало (пунктирний).
+          Ціль — десь у цьому колі, а не в його центрі.
+        </p>
+        <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+          <b className="text-foreground">Лінія від цілі</b> — курс: густий пунктир, коли його
+          спостерігали, рідкий і блідий — коли джерело його лише припускає. Суцільна лінія — трек,
+          тобто де ціль була насправді.
         </p>
       </div>
 
@@ -87,6 +103,13 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         Шари
       </p>
       <div className="grid grid-cols-1 gap-1 text-[11px]">
+        <div className="flex items-center gap-2">
+          <Swatch color="#34d399" /> Укриття: метро, обладнані сховища, підземні паркінги
+        </div>
+        <p className="-mt-0.5 mb-1 text-[10px] leading-snug text-muted-foreground">
+          Не державний реєстр — лише те, що розмічено на відкритій карті. Поруч може бути ближче
+          укриття, якого тут немає.
+        </p>
         <div className="flex items-center gap-2">
           <span
             className="inline-block h-2.5 w-4 rounded-[2px] border"

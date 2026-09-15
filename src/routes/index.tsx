@@ -27,6 +27,7 @@ import {
   HelpCircle,
   Search,
   Share2,
+  Shield,
   Table2,
   Waypoints,
   X,
@@ -58,14 +59,18 @@ import {
   getFacilities,
   getPowerLines,
   getFacilityTiles,
+  getShelters,
   getThreats,
+  SHELTER_MAX_SPAN_DEG,
 } from "@/lib/infra.functions";
 import { platformEntityId } from "@/lib/cases";
 import { useSituationalFeeds } from "@/hooks/useSituationalFeeds";
+import { useAirActivityHistory } from "@/hooks/useAirActivityHistory";
 import { useInitData } from "@/hooks/use-telegram";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import { projectThreats } from "@/lib/threat-eta";
+import { reportAirActivity } from "@/lib/platform-read.functions";
 import { type RaidFrame, frameAt, recordFrame } from "@/lib/raid-replay";
 import {
   buildThreatGraph,
@@ -331,6 +336,14 @@ function Console() {
   const [linkView, setLinkView] = useState<"list" | "graph">("list");
   const [showFrontline, setShowFrontline] = useState(true);
   const [showFires, setShowFires] = useState(false);
+  /*
+   * Укриття увімкнені за замовчуванням: для цивільної консолі «куди сховатись»
+   * — не додатковий шар, а одна з головних відповідей, і людина не має шукати
+   * перемикач під тривогою. Запит іде рівно по видимій області карти, а не по
+   * всій країні; відповідь кешується на боці сервера, тож повторні перегляди
+   * району безкоштовні.
+   */
+  const [showShelters, setShowShelters] = useState(true);
   // Шар обʼєктів інфраструктури ВИМКНЕНИЙ за замовчуванням: консоль тепер
   // передусім повітряний радар, і сотні позначок перекривали б обстановку.
   // Вмикається перемикачем «Обʼєкти інфраструктури». Стосується показу на
@@ -502,6 +515,36 @@ function Console() {
     [threats, allFacilities],
   );
 
+  // Сплеск активності: поточна кількість цілей проти власної норми. Відповідає
+  // на «це вже налiт чи звичайний фон» — те, чого одне число «N цілей» не каже.
+  // Локальна база — на пристрої (localStorage). Коли платформа під'єднана,
+  // надсилаємо лічильник туди й беремо кросдевайсну, багатоденну базу з тому
+  // Railway; платформа мовчить → лишаємось на локальній.
+  const localSurge = useAirActivityHistory(threats.length, !threatsQuery.isLoading);
+  const platformConfigured = palanterQuery.data?.configured ?? false;
+  // Розбивка активності по областях — джерело дає область на позначці.
+  const regionCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of threats) if (t.region) m.set(t.region, (m.get(t.region) ?? 0) + 1);
+    return [...m.entries()].map(([region, count]) => ({ region, count }));
+  }, [threats]);
+  const reportAirFn = useServerFn(reportAirActivity);
+  const airServerQuery = useQuery({
+    queryKey: ["air-surge"],
+    queryFn: () => reportAirFn({ data: { count: threats.length, regions: regionCounts } }),
+    enabled: platformConfigured && !threatsQuery.isLoading,
+    refetchInterval: 60_000,
+    staleTime: 60_000,
+  });
+  const airSurge =
+    airServerQuery.data?.ok && airServerQuery.data.data ? airServerQuery.data.data : localSurge;
+  // Найгостріша область зі сплеском (лише коли база — серверна): назвати регіон
+  // корисніше, ніж лише загальне число.
+  const topSurgeRegion =
+    airServerQuery.data?.ok && airServerQuery.data.data?.regions?.length
+      ? airServerQuery.data.data.regions[0]
+      : undefined;
+
   const atRiskList = useMemo(
     () =>
       [...riskMap.entries()]
@@ -528,6 +571,49 @@ function Console() {
   const impactedIds = useMemo(() => outage?.lost ?? new Set<string>(), [outage]);
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
+
+  /*
+   * Укриття вантажаться для того, що ЗАРАЗ на екрані.
+   *
+   * Була груба помилка: запит будувався навколо ОБРАНОГО обʼєкта (а без вибору
+   * — навколо жорстко заданого центру Києва) і накривав прямокутник 11×11 км.
+   * На огляді країни це кілька пікселів, а якщо дивитись на Львів — приходили
+   * київські точки. Шар вмикався й не показував нічого, і це виглядало як
+   * «укриттів немає», хоча вони були.
+   *
+   * Тепер прямокутник — видима область карти. Ширше за розумну межу запит не
+   * йде: перелік укриттів на всю країну — це десятки тисяч точок, серед яких
+   * нічого не знайти, тож замість них консоль просить наблизити карту.
+   */
+  const [viewport, setViewport] = useState<{
+    box: { south: number; west: number; north: number; east: number };
+    zoom: number;
+  } | null>(null);
+
+  const shelterBox = useMemo(() => {
+    if (!viewport) return null;
+    const { box } = viewport;
+    const tooWide =
+      box.north - box.south > SHELTER_MAX_SPAN_DEG || box.east - box.west > SHELTER_MAX_SPAN_DEG;
+    return tooWide ? null : box;
+  }, [viewport]);
+
+  const sheltersFn = useServerFn(getShelters);
+  const sheltersQuery = useQuery({
+    // Округлення до сотої градуса: інакше кожен піксель руху карти — новий
+    // ключ і новий запит.
+    queryKey: [
+      "shelters",
+      shelterBox ? shelterBox.south.toFixed(2) : "",
+      shelterBox ? shelterBox.west.toFixed(2) : "",
+      shelterBox ? shelterBox.north.toFixed(2) : "",
+      shelterBox ? shelterBox.east.toFixed(2) : "",
+    ],
+    queryFn: () => sheltersFn({ data: shelterBox! }),
+    enabled: showShelters && shelterBox !== null,
+    staleTime: 6 * 60 * 60 * 1000,
+  });
+  const shelters = useMemo(() => sheltersQuery.data?.shelters ?? [], [sheltersQuery.data]);
 
   /*
    * Зіставлення «ідентифікатор платформи → обʼєкт консолі» для приколотих у
@@ -882,6 +968,29 @@ function Console() {
       />
 
       {/*
+        Сплеск активності: поточна кількість цілей різко вища за власну норму
+        (історія на пристрої). Показуємо лише коли справді ненормально — банер,
+        що висить завжди, перестають помічати.
+      */}
+      {airSurge.level !== "normal" ? (
+        <div
+          className={`z-10 flex shrink-0 items-center gap-2 border-b px-4 py-1.5 ${
+            airSurge.level === "surge"
+              ? "border-red-500/50 bg-red-500/10 text-red-300"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+          }`}
+          title="Порівняння поточної кількості повітряних цілей із власною нормою за попередні години"
+        >
+          <AlertTriangle className="size-3 shrink-0" />
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em]">
+            {airSurge.level === "surge" ? "Сплеск активності" : "Активність підвищена"}:{" "}
+            {airSurge.current} цілей проти норми ~{airSurge.baseline} (×{airSurge.ratio})
+            {topSurgeRegion ? ` · пік: ${topSurgeRegion.region} (×${topSurgeRegion.ratio})` : ""}
+          </span>
+        </div>
+      ) : null}
+
+      {/*
         Активний фокус завжди видимий і знімається одним рухом. Мовчазний
         фільтр гірший за його відсутність: порожня карта читається як
         відсутність даних, а не як застосована умова.
@@ -1037,6 +1146,20 @@ function Console() {
               <Activity className="size-3.5" /> Пожежі (NASA FIRMS, 24 год)
               {fires.length > 0 ? (
                 <span className="ml-auto font-mono text-[10px] opacity-70">{fires.length}</span>
+              ) : null}
+            </button>
+
+            <button
+              onClick={() => setShowShelters((v) => !v)}
+              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors ${
+                showShelters
+                  ? "border-cyan-500/60 text-cyan-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              <Shield className="size-3.5" /> Укриття (OSM)
+              {showShelters && shelters.length > 0 ? (
+                <span className="ml-auto font-mono text-[10px] opacity-70">{shelters.length}</span>
               ) : null}
             </button>
 
@@ -1218,6 +1341,8 @@ function Console() {
                     impactedIds={impactedIds}
                     selectedId={selectedId}
                     onSelect={(f) => setSelectedId(f.id)}
+                    shelters={showShelters ? shelters : []}
+                    onViewport={(box, zoom) => setViewport({ box, zoom })}
                   />
                 </Suspense>
               </ClientOnly>
@@ -1308,10 +1433,40 @@ function Console() {
                   else if (key === "links") setShowLinks((v) => !v);
                   else if (key === "frontline") setShowFrontline((v) => !v);
                   else if (key === "fires") setShowFires((v) => !v);
+                  else if (key === "shelters") setShowShelters((v) => !v);
                   else if (key === "graph") setShowGraph((v) => !v);
                 }}
               />
               <MapLegend showInfra={!infraDisabled} />
+
+              {/*
+                Порожній шар мусить пояснювати себе. Без цього рядка ввімкнене
+                «Укриття» на огляді країни виглядало як «укриттів немає» —
+                саме так дефект і виглядав ззовні.
+              */}
+              {/*
+                Підказка укриттів — компактний чип, а не банер на пів-карти:
+                укриття увімкнені за замовчуванням, тож на огляді країни великий
+                напис «наблизьте» висів би постійно й перекривав цілі. На огляді
+                країни його взагалі не показуємо (бічний перемикач і так каже, що
+                шар увімкнено); чип зʼявляється лише коли є що сказати по ділу —
+                шукаємо / знайдено N / джерело мовчить / тут не розмічено.
+                «Джерело не відповіло» і «тут нічого не розмічено» — різні
+                речення: друге стверджує про світ те, чого ми не знаємо.
+              */}
+              {showShelters && shelterBox !== null ? (
+                <div className="pointer-events-none absolute inset-x-0 top-16 z-[500] flex justify-center px-3">
+                  <span className="max-w-[80%] truncate rounded-full border border-emerald-500/40 bg-background/85 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-emerald-300 backdrop-blur-sm">
+                    {sheltersQuery.isFetching
+                      ? "укриття: шукаємо…"
+                      : shelters.length
+                        ? `укриттів поруч: ${shelters.length}`
+                        : sheltersQuery.data?.degraded
+                          ? "укриття: джерело не відповіло"
+                          : "укриттів тут не розмічено"}
+                  </span>
+                </div>
+              ) : null}
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">
@@ -1453,11 +1608,28 @@ function Console() {
                         <span className="block font-mono text-[10px] text-muted-foreground">
                           {AIR_TYPE_LABEL[p.threat.type ?? "unknown"]} · {p.distanceKm} км · відхил.{" "}
                           {p.offAxisDeg}°
+                          {/*
+                            Коридор, побудований із припущеного курсу, — здогадка,
+                            підписана як розрахунок. Позначаємо це там само, де
+                            людина читає час, а не в довідці.
+                          */}
+                          {p.courseObserved ? "" : " · курс припущений"}
+                          {p.speedMeasured ? " · швидкість заміряна" : ""}
                         </span>
                       </span>
                       <span className="shrink-0 text-right font-mono">
                         <span className="block text-[13px] font-semibold text-red-300">
-                          {p.etaMin < 1 ? "<1" : `~${p.etaMin}`}
+                          {/*
+                            Вилка замість одного числа, коли вона широка: позиція
+                            цілі відома з точністю, яку називає саме джерело, і
+                            на швидкості шахеда сорок пʼять кілометрів — це
+                            чверть години різниці.
+                          */}
+                          {p.etaRangeMin[1] - p.etaRangeMin[0] >= 3
+                            ? `${p.etaRangeMin[0]}–${p.etaRangeMin[1]}`
+                            : p.etaMin < 1
+                              ? "<1"
+                              : `~${p.etaMin}`}
                         </span>
                         <span className="block text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
                           хв

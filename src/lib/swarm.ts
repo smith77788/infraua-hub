@@ -1,7 +1,18 @@
 /**
  * Напрямок «хвилі» рою — куди зміщується маса цілей і які області на черзі.
  *
- * Береться круговий (циркулярний) середній курс усіх цілей, що мають heading.
+ * Береться круговий (циркулярний) середній курс цілей зі СПОСТЕРЕЖЕНИМ курсом.
+ *
+ * Саме спостереженим, і це не дрібниця. Джерело позначає частину курсів як
+ * припущені (`presumptiveCourse`), і в живій відповіді таких було вісім із
+ * пʼятнадцяти. Припущені курси мають властивість, яка тут особливо шкідлива:
+ * вони УЗГОДЖЕНІ між собою, бо виводяться з того самого загального напрямку
+ * нальоту. Тобто вони не просто додають шуму — вони роздувають міру
+ * узгодженості `R`, яка й вирішує, чи взагалі давати прогноз. Прогноз
+ * виглядав тим упевненішим, чим менше під ним було спостережень.
+ *
+ * Тому в розрахунок ідуть лише спостережені курси, а скільки їх було —
+ * повертається разом із прогнозом, щоб канал міг це сказати.
  * Прогноз даємо ТІЛЬКИ коли напрямок справді виражений (курси збігаються) і
  * цілей достатньо — інакше мовчимо: хибний прогноз гірший за його відсутність.
  * Наступні області — проєкція центра мас уперед по цьому курсу на найближчі
@@ -11,14 +22,22 @@
 import type { Threat } from "./air";
 import { distanceKm } from "./infra-types";
 import { bearingDeg } from "./threat-eta";
+import { courseIsObserved, EMPTY_QUALITY } from "./threat-quality";
 
 export interface SwarmForecast {
   /** Домінантний курс рою, градуси (0 = Пн). */
   heading: number;
   /** Румб українською: «на північний захід». */
   course: string;
-  /** Скільки цілей із курсом увійшло. */
+  /** Скільки цілей зі СПОСТЕРЕЖЕНИМ курсом увійшло в розрахунок. */
   count: number;
+  /**
+   * Скільки цілей із курсом було відкинуто як припущені.
+   *
+   * Потрібне не для звіту, а для тексту: «прогноз за чотирма спостереженими
+   * курсами» і «за чотирма з дванадцяти» — різні за вагою твердження.
+   */
+  presumed: number;
   /** Області, ймовірно наступні на шляху (0..3). */
   next: string[];
 }
@@ -57,9 +76,11 @@ export function swarmForecast(
   const minCount = opts.minCount ?? 3;
   const minConcentration = opts.minConcentration ?? 0.6;
 
-  const withCourse = threats.filter(
+  const anyCourse = threats.filter(
     (t) => typeof t.heading === "number" && Number.isFinite(t.heading),
   );
+  const withCourse = anyCourse.filter((t) => courseIsObserved(t.quality ?? EMPTY_QUALITY));
+  const presumed = anyCourse.length - withCourse.length;
   if (withCourse.length < minCount) return null;
 
   // Циркулярне середнє курсів + довжина результанта R (0..1) як міра узгодженості.
@@ -93,5 +114,5 @@ export function swarmForecast(
     .slice(0, 3)
     .map(({ c }) => c.name);
 
-  return { heading, course: coursePhrase(heading), count: n, next: scored };
+  return { heading, course: coursePhrase(heading), count: n, presumed, next: scored };
 }
