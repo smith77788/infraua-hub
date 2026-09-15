@@ -1007,17 +1007,34 @@ async function holdQuietNotice(
  * якщо пост ще «живий» (у межах вікна редагування); застарілий не воскрешаємо,
  * бо редагувати похований у стрічці пост уже пізно, і нова хвиля має новий пост.
  */
+interface ChannelState {
+  wave: WaveState | null;
+  lastPostAt: number;
+  /** Добова статистика й дедуп підсумку — щоб підсумок виходив і після редеплою. */
+  currentDay?: DayStats;
+  pendingDigest?: DayStats | null;
+  digestPostedFor?: string | null;
+}
+
 async function hydrateLiveState(now: number): Promise<void> {
   if (liveStateHydrated) return;
   liveStateHydrated = true;
   const raw = await readMarker("live-post");
   if (!raw) return;
   try {
-    const s = JSON.parse(raw) as { wave: WaveState | null; lastPostAt: number };
+    const s = JSON.parse(raw) as Partial<ChannelState>;
     if (s.wave && typeof s.lastPostAt === "number" && now - s.lastPostAt <= LIVE_POST_MAX_MS) {
       wave = s.wave;
       lastChannelPost = { ...lastChannelPost, at: s.lastPostAt };
     }
+    // Добова статистика й дедуп підсумку теж мають пережити редеплой: інакше
+    // підсумок доби не виходить, якщо перезапуск стався між зміною доби і 9:00
+    // (pendingDigest скидався в null), а накопичення доби фрагментувалось.
+    // Далі rollKyivDay сам розбереться зі зміною доби, а digestPostedFor не дасть
+    // подвоїти підсумок.
+    if (s.currentDay && typeof s.currentDay.date === "string") currentDay = s.currentDay;
+    if (s.pendingDigest !== undefined) pendingDigest = s.pendingDigest;
+    if (typeof s.digestPostedFor === "string") digestPostedFor = s.digestPostedFor;
   } catch {
     /* бита позначка — ігноруємо, починаємо з чистого стану */
   }
@@ -1032,7 +1049,14 @@ async function runChannelTick(
   try {
     return await runChannelTickCore(opts);
   } finally {
-    await writeMarker("live-post", JSON.stringify({ wave, lastPostAt: lastChannelPost.at }));
+    const state: ChannelState = {
+      wave,
+      lastPostAt: lastChannelPost.at,
+      currentDay,
+      pendingDigest,
+      digestPostedFor,
+    };
+    await writeMarker("live-post", JSON.stringify(state));
   }
 }
 
