@@ -342,6 +342,7 @@ function Console() {
    * навантажувати Overpass заради шару, який більшість не відкриє.
    */
   const [showShelters, setShowShelters] = useState(false);
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lon: number } | null>(null);
   // Шар обʼєктів інфраструктури ВИМКНЕНИЙ за замовчуванням: консоль тепер
   // передусім повітряний радар, і сотні позначок перекривали б обстановку.
   // Вмикається перемикачем «Обʼєкти інфраструктури». Стосується показу на
@@ -571,11 +572,13 @@ function Console() {
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
 
   /*
-   * Укриття навколо обраного обʼєкта — або навколо Києва, поки нічого не
-   * обрано. Прив'язка саме до вибору, а не до центру карти: центр змінюється
-   * від кожного руху миші, і запит ганявся б за ним.
+   * Укриття навколо обраного обʼєкта; якщо нічого не обрано — навколо того, куди
+   * дивиться людина (центр карти), а не завжди Києва: інакше, відкривши шар над
+   * іншим містом, вона бачила б київські укриття поза екраном і вирішила б, що
+   * поблизу немає нічого. Центр приходить уже округленим і лише на `moveend`,
+   * тож запит не ганяється за кожним рухом.
    */
-  const shelterPoint = selected ?? { lat: 50.45, lon: 30.52 };
+  const shelterPoint = selected ?? mapCenter ?? { lat: 50.45, lon: 30.52 };
   const sheltersFn = useServerFn(getShelters);
   const sheltersQuery = useQuery({
     queryKey: ["shelters", Math.round(shelterPoint.lat * 50), Math.round(shelterPoint.lon * 50)],
@@ -1298,6 +1301,7 @@ function Console() {
                     selectedId={selectedId}
                     onSelect={(f) => setSelectedId(f.id)}
                     shelters={showShelters ? shelters : []}
+                    {...(showShelters ? { onViewportCenter: setMapCenter } : {})}
                   />
                 </Suspense>
               </ClientOnly>

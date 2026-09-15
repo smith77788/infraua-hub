@@ -66,6 +66,8 @@ interface Props {
   onSelect: (f: Facility) => void;
   /** Укриття навколо точки перегляду. Порожньо — шар просто не малюється. */
   shelters?: Shelter[];
+  /** Центр видимої карти — щоб вантажити укриття там, куди дивиться людина. */
+  onViewportCenter?: (c: { lat: number; lon: number }) => void;
 }
 
 /** Мінімальні SVG-гліфи (у стилі lucide) для кожної категорії. */
@@ -706,6 +708,30 @@ function FlyTo({ facility }: { facility: Facility | null }) {
 }
 
 /**
+ * Повідомляє центр видимої карти нагору — щоб укриття вантажились там, куди
+ * людина дивиться, а не лише навколо обраного обʼєкта чи Києва за умовчанням.
+ * Центр округлюється (~1 км), тож дрібне посування не смикає запит.
+ */
+function ViewportReporter({ onCenter }: { onCenter: (c: { lat: number; lon: number }) => void }) {
+  const map = useMap();
+  const last = useRef("");
+  const report = () => {
+    const c = map.getCenter();
+    const lat = Math.round(c.lat * 100) / 100;
+    const lon = Math.round(c.lng * 100) / 100;
+    const key = `${lat},${lon}`;
+    // Лише коли округлений центр справді змінився — інакше кожен moveend
+    // перемальовував би маршрут-god-компонент дарма.
+    if (key === last.current) return;
+    last.current = key;
+    onCenter({ lat, lon });
+  };
+  useEffect(report, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useMapEvents({ moveend: report, zoomend: report });
+  return null;
+}
+
+/**
  * Окупована територія і повітряна тривога — різні речі й мають виглядати
  * по-різному. Тон приглушений навмисно: насичений червоний лишається за
  * тривогою, бо на карті має бути рівно один колір, що означає «зараз».
@@ -731,6 +757,7 @@ export default function InfraMap({
   selectedId,
   onSelect,
   shelters = [],
+  onViewportCenter,
 }: Props) {
   const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
@@ -995,6 +1022,8 @@ export default function InfraMap({
           </Popup>
         </CircleMarker>
       ))}
+
+      {onViewportCenter ? <ViewportReporter onCenter={onViewportCenter} /> : null}
     </MapContainer>
   );
 }
