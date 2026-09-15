@@ -140,3 +140,44 @@ export const getPlatformConflicts = createServerFn({ method: "GET" }).handler(
     };
   },
 );
+
+export interface AirSurge {
+  current: number;
+  baseline: number;
+  ratio: number;
+  level: "normal" | "elevated" | "surge";
+  samples: number;
+  updatedAt: string | null;
+}
+
+export interface AirSurgeResult {
+  configured: boolean;
+  ok: boolean;
+  error?: string;
+  data?: AirSurge;
+}
+
+/**
+ * Записує поточну кількість активних повітряних цілей у платформу й повертає
+ * оцінку сплеску відносно бази, що живе на постійному томі Railway.
+ *
+ * Кросдевайсний, багатоденний двійник клієнтського `useAirActivityHistory`:
+ * той тримає історію на пристрої (localStorage), цей — на сервері, тож база
+ * переживає перезавантаження й спільна для всіх, хто дивиться консоль. Коли
+ * платформа не під'єднана — `configured:false`, і консоль лишається на
+ * локальній історії.
+ */
+export const reportAirActivity = createServerFn({ method: "POST" })
+  .validator((input: unknown): { count: number } => {
+    const c = Number((input as { count?: unknown } | undefined)?.count);
+    return { count: Number.isFinite(c) && c >= 0 ? Math.round(c) : 0 };
+  })
+  .handler(async ({ data }): Promise<AirSurgeResult> => {
+    if (!isPlatformConfigured()) return { configured: false, ok: false };
+    const res = await platformFetch("/api/platform/ingest/air", {
+      method: "POST",
+      body: JSON.stringify({ count: data.count }),
+    });
+    if (!res.ok) return { configured: true, ok: false, ...(res.error ? { error: res.error } : {}) };
+    return { configured: true, ok: true, data: res.body as AirSurge };
+  });

@@ -67,6 +67,7 @@ import { useInitData } from "@/hooks/use-telegram";
 import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import { projectThreats } from "@/lib/threat-eta";
+import { reportAirActivity } from "@/lib/platform-read.functions";
 import { type RaidFrame, frameAt, recordFrame } from "@/lib/raid-replay";
 import {
   buildThreatGraph,
@@ -503,10 +504,23 @@ function Console() {
     [threats, allFacilities],
   );
 
-  // Сплеск активності: поточна кількість цілей проти власної норми (історія на
-  // пристрої). Відповідає на «це вже налiт чи звичайний фон» — те, чого одне
-  // число «N цілей» не каже.
-  const airSurge = useAirActivityHistory(threats.length, !threatsQuery.isLoading);
+  // Сплеск активності: поточна кількість цілей проти власної норми. Відповідає
+  // на «це вже налiт чи звичайний фон» — те, чого одне число «N цілей» не каже.
+  // Локальна база — на пристрої (localStorage). Коли платформа під'єднана,
+  // надсилаємо лічильник туди й беремо кросдевайсну, багатоденну базу з тому
+  // Railway; платформа мовчить → лишаємось на локальній.
+  const localSurge = useAirActivityHistory(threats.length, !threatsQuery.isLoading);
+  const platformConfigured = palanterQuery.data?.configured ?? false;
+  const reportAirFn = useServerFn(reportAirActivity);
+  const airServerQuery = useQuery({
+    queryKey: ["air-surge"],
+    queryFn: () => reportAirFn({ data: { count: threats.length } }),
+    enabled: platformConfigured && !threatsQuery.isLoading,
+    refetchInterval: 60_000,
+    staleTime: 60_000,
+  });
+  const airSurge =
+    airServerQuery.data?.ok && airServerQuery.data.data ? airServerQuery.data.data : localSurge;
 
   const atRiskList = useMemo(
     () =>
