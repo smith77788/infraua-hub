@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Повітряна обстановка — InfraUA</title>
+    <!--
+      Вбудовуваний віджет повітряної обстановки.
+
+      Будь-який сайт вставляє його одним рядком:
+        <iframe src="https://ВАШ-ДОМЕН/widget.html" style="border:0;width:340px;height:420px"></iframe>
+
+      Самодостатній: без збірки, без зовнішніх залежностей. Тягне дані з
+      /api/air/snapshot того самого домену (тож CORS не потрібен) і сам малює
+      мапу. Дані OSINT — не офіційне джерело; про це прямо сказано внизу.
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #0b0f16;
+        color: #cbd5e1;
+        font: 12px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        padding: 8px;
+      }
+      .head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .title {
+        font-weight: 600;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        color: #e2e8f0;
+      }
+      .count {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        color: #67e8f9;
+      }
+      .count.hot {
+        color: #ffd23f;
+      }
+      svg {
+        width: 100%;
+        height: auto;
+        display: block;
+        border: 1px solid #1e2a38;
+        border-radius: 6px;
+        background: #0b0f16;
+      }
+      .foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-top: 6px;
+        font-size: 9.5px;
+        color: #64748b;
+      }
+      .foot a {
+        color: #67e8f9;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .stamp {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .stale {
+        color: #f59e0b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="head">
+      <span class="title">🛰 Повітряна обстановка</span>
+      <span class="count" id="count">…</span>
+    </div>
+    <svg id="map" viewBox="0 0 600 400" role="img" aria-label="Мапа повітряної обстановки">
+      <rect width="600" height="400" fill="#0b0f16" />
+      <path id="outline" fill="#0f1a24" stroke="#22d3ee" stroke-width="1.6" stroke-linejoin="round" />
+      <g id="dots"></g>
+    </svg>
+    <div class="foot">
+      <span class="stamp" id="stamp">завантаження…</span>
+      <a id="more" href="/" target="_blank" rel="noopener">повний радар →</a>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+        var OUTLINE = [[52.37,33.19],[52.04,32.11],[52.01,30.93],[51.6,30.5],[51.38,30.36],[51.38,29.32],[51.46,28.73],[51.56,28.04],[51.6,27.72],[51.8,26.48],[51.9,24.93],[51.65,23.67],[50.95,23.97],[50.14,23.35],[49.09,22.56],[48.39,22.24],[47.98,22.84],[48.02,23.53],[47.82,24.83],[48.24,26.62],[48.37,27.05],[48.49,27.58],[48.14,28.3],[48.13,28.84],[47.82,29.2],[47.43,29.19],[47.13,29.49],[46.88,29.88],[46.44,30.03],[46.35,29.6],[46.49,29.26],[46.05,29.01],[45.57,28.49],[45.32,28.35],[45.42,29.21],[45.47,29.81],[46.56,31.5],[46.3,31.73],[46.24,31.57],[46.05,33.58],[45.3,32.67],[44.81,33.52],[44.77,34.65],[45.1,35.6],[45.35,36.64],[45.36,35.69],[46.16,35.01],[46.47,36.07],[46.61,36.74],[47.04,38.16],[47.58,38.31],[47.96,39.82],[48.27,39.92],[48.8,39.98],[49.05,39.69],[49.52,40.04],[49.89,39.19],[50.01,38.69],[50.06,37.88],[50.35,36.93],[50.35,35.62],[50.81,35.42],[51.23,34.96],[51.37,34.34],[51.97,34.2],[52.32,33.5]];
+        var COLOR = {
+          shahed: "#ffd23f", reactive: "#ff8c1a", cruise: "#ff6a2a", missile: "#ff4d4d",
+          ballistic: "#ff2d2d", kab: "#ffb020", recon: "#22d3ee", aircraft: "#38bdf8", unknown: "#ffb020"
+        };
+        var W = 600, PAD = 12;
+        var lats = OUTLINE.map(function (p) { return p[0]; });
+        var lons = OUTLINE.map(function (p) { return p[1]; });
+        var latMin = Math.min.apply(null, lats), latMax = Math.max.apply(null, lats);
+        var lonMin = Math.min.apply(null, lons), lonMax = Math.max.apply(null, lons);
+        var K = Math.cos(((latMin + latMax) / 2) * Math.PI / 180);
+        var scale = (W - 2 * PAD) / ((lonMax - lonMin) * K);
+        var H = Math.round((latMax - latMin) * scale + 2 * PAD);
+        function proj(lat, lon) {
+          return [
+            Math.round((PAD + (lon - lonMin) * K * scale) * 10) / 10,
+            Math.round((PAD + (latMax - lat) * scale) * 10) / 10
+          ];
+        }
+        var svg = document.getElementById("map");
+        svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+        svg.querySelector("rect").setAttribute("height", H);
+        var d = OUTLINE.map(function (p, i) {
+          var xy = proj(p[0], p[1]);
+          return (i === 0 ? "M" : "L") + xy[0] + "," + xy[1];
+        }).join(" ") + " Z";
+        document.getElementById("outline").setAttribute("d", d);
+
+        var dotsEl = document.getElementById("dots");
+        var countEl = document.getElementById("count");
+        var stampEl = document.getElementById("stamp");
+        var SVGNS = "http://www.w3.org/2000/svg";
+
+        function draw(snap) {
+          while (dotsEl.firstChild) dotsEl.removeChild(dotsEl.firstChild);
+          var n = snap.threats.length;
+          countEl.textContent = n === 0 ? "чисто" : String(n);
+          countEl.className = "count" + (n > 0 ? " hot" : "");
+          for (var i = 0; i < snap.threats.length; i++) {
+            var t = snap.threats[i];
+            if (typeof t.lat !== "number" || typeof t.lon !== "number") continue;
+            var xy = proj(t.lat, t.lon);
+            var col = COLOR[t.type] || COLOR.unknown;
+            var glow = document.createElementNS(SVGNS, "circle");
+            glow.setAttribute("cx", xy[0]); glow.setAttribute("cy", xy[1]);
+            glow.setAttribute("r", 7); glow.setAttribute("fill", col);
+            glow.setAttribute("opacity", "0.25");
+            dotsEl.appendChild(glow);
+            var dot = document.createElementNS(SVGNS, "circle");
+            dot.setAttribute("cx", xy[0]); dot.setAttribute("cy", xy[1]);
+            dot.setAttribute("r", 3.2); dot.setAttribute("fill", col);
+            dot.setAttribute("stroke", "#0a0e14"); dot.setAttribute("stroke-width", "1");
+            dotsEl.appendChild(dot);
+          }
+        }
+
+        function ago(ms) {
+          var m = Math.round(ms / 60000);
+          if (m < 1) return "щойно";
+          if (m < 60) return m + " хв тому";
+          return Math.round(m / 60) + " год тому";
+        }
+
+        var lastAt = 0;
+        function tick() {
+          fetch("/api/air/snapshot", { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (snap) {
+              draw(snap);
+              lastAt = snap.at || Date.now();
+              stampEl.classList.remove("stale");
+              stampEl.textContent = "OSINT · оновлено " + ago(Date.now() - lastAt);
+            })
+            .catch(function () {
+              stampEl.classList.add("stale");
+              stampEl.textContent = lastAt
+                ? "звʼязок втрачено · дані " + ago(Date.now() - lastAt)
+                : "немає звʼязку";
+            });
+        }
+        tick();
+        setInterval(tick, 20000);
+        // Освіжаємо підпис віку навіть без нових даних.
+        setInterval(function () {
+          if (lastAt) {
+            var stale = Date.now() - lastAt > 3 * 60000;
+            stampEl.classList.toggle("stale", stale);
+            stampEl.textContent =
+              (stale ? "⚠ " : "OSINT · оновлено ") +
+              (stale ? "дані застигли · " : "") + ago(Date.now() - lastAt);
+          }
+        }, 30000);
+      })();
+    </script>
+  </body>
+</html>
