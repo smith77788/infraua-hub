@@ -30,6 +30,18 @@ export interface Lexicon {
   tail(serious: boolean, seed: number): string;
   /** «— у бік: Полтава (~11 хв), уважно!» */
   towards(parts: string[]): string;
+  /**
+   * Ціль іде на центр ТІЄЇ САМОЇ області, у якій вона зараз.
+   *
+   * Окреме формулювання, бо довідник орієнтирів і групування користуються
+   * одним переліком обласних центрів: група каже «ціль найближча до Полтави»,
+   * а рядок напрямку — «летить на Полтаву», і виходить тавтологія «Полтавщина
+   * — у бік: Полтавщина». Відомість при цьому НЕ зайва: людям у самому центрі
+   * важливо знати, що йде на них. Тож не викидаємо її, а називаємо як є.
+   */
+  towardsOwnCentre(time: string): string;
+  /** Тільки час, без назви міста — для `towardsOwnCentre`. */
+  etaTime(minutes: number, range?: readonly [number, number]): string;
   /** «…і ще 4 області» */
   more(n: number): string;
   /** «Полтава (~11 хв)» */
@@ -170,6 +182,8 @@ export const UK: Lexicon = {
   headline: (kind, seed) => pick(UK_HEAD[kind], seed),
   tail: (serious, seed) => pick(serious ? UK_TAIL_SERIOUS : UK_TAIL_LIGHT, seed),
   towards: (parts) => ` — у бік: ${parts.join(", ")}, уважно!`,
+  towardsOwnCentre: (time) => ` — на обласний центр (${time}), уважно!`,
+  etaTime: (minutes, range) => etaPhraseUk(minutes, range),
   more: (n) => `…і ще ${n} ${pluralUk(n, "область", "області", "областей")}`,
   eta: (city, minutes, range) => `${city} (${etaPhraseUk(minutes, range)})`,
   wave: (i, next) => `🧭 хвиля йде ${UK_COURSE[i % 8]} — на черзі: ${next.join(", ")}`,
@@ -250,6 +264,8 @@ export const EN: Lexicon = {
   headline: (kind, seed) => pick(EN_HEAD[kind], seed),
   tail: (serious, seed) => pick(serious ? EN_TAIL_SERIOUS : EN_TAIL_LIGHT, seed),
   towards: (parts) => ` — heading for ${parts.join(", ")}`,
+  towardsOwnCentre: (time) => ` — heading for the regional centre (${time})`,
+  etaTime: (minutes, range) => etaPhraseEn(minutes, range),
   more: (n) => `…and ${n} more ${n === 1 ? "region" : "regions"}`,
   eta: (city, minutes, range) => `${city} (${etaPhraseEn(minutes, range)})`,
   wave: (i, next) => `🧭 swarm moving ${EN_COURSE[i % 8]} — next: ${next.join(", ")}`,

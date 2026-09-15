@@ -460,11 +460,21 @@ interface ChannelTickResult {
   status?: number;
 }
 
-/** Підпис під фото обмежений 1024 символами — довгий текст стискаємо до шапки. */
-function captionFor(text: string, targets: number): string {
-  return text.length <= 1024
-    ? text
-    : `${text.split("\n")[0]}\n<i>всього в небі: ${targets} · за даними OSINT</i>`;
+/** Стеля підпису до фото в Telegram. */
+const TELEGRAM_CAPTION_LIMIT = 1024;
+
+/**
+ * Останній запобіжник довжини підпису.
+ *
+ * Текст уже зібрано під стелю (див. `assemblePost`), тож сюди довгий рядок
+ * потрапити не має. Але Telegram відхиляє надто довгий підпис цілком — тобто
+ * пост не вийде взагалі, — і мовчання гірше за обрізаний хвіст. Тому лишаємо
+ * грубе відсікання як страховку, а не як спосіб роботи.
+ */
+function captionFor(text: string): string {
+  if (text.length <= TELEGRAM_CAPTION_LIMIT) return text;
+  console.error(`Підпис довший за стелю (${text.length}) — відсікаємо хвіст`);
+  return `${text.slice(0, TELEGRAM_CAPTION_LIMIT - 1)}…`;
 }
 
 /** Публічна адреса карти для кнопки під постом. Немає — кнопки просто не буде. */
@@ -513,7 +523,7 @@ async function sendChannelUpdate(
   if (png) {
     const form = new FormData();
     form.append("chat_id", channel);
-    form.append("caption", captionFor(text, targets));
+    form.append("caption", captionFor(text));
     form.append("parse_mode", "HTML");
     if (silent) form.append("disable_notification", "true");
     if (keyboard) form.append("reply_markup", JSON.stringify(keyboard));
@@ -576,7 +586,7 @@ async function editChannelUpdate(
         JSON.stringify({
           type: "photo",
           media: "attach://photo",
-          caption: captionFor(text, targets),
+          caption: captionFor(text),
           parse_mode: "HTML",
         }),
       );
@@ -593,7 +603,7 @@ async function editChannelUpdate(
         body: JSON.stringify({
           chat_id: channel,
           message_id: messageId,
-          caption: captionFor(text, targets),
+          caption: captionFor(text),
           parse_mode: "HTML",
           ...(keyboard ? { reply_markup: keyboard } : {}),
         }),
@@ -943,9 +953,19 @@ async function runChannelTick(
   // картини. Власний кулдаун усередині не дає йому смітити.
   if (!opts.dryRun) await maybeCityAlert(token, channel, smoothed, now);
   const forecast = renderForecast(forecastWave(smoothed));
+  /*
+   * Стеля підпису задається ТУТ, бо пост іде підписом до картинки.
+   *
+   * Раніше він рендерився без обмеження, а перевищення різалося вже перед
+   * відправкою — і різалося тупо, лишаючи шапку й підвал. У каналі це давало
+   * «14 цілей у небі» без жодної названої області саме тоді, коли наліт
+   * великий. Тепер обмеження знає той, хто збирає текст, і жертвує спершу
+   * найменш цінним (див. assemblePost).
+   */
   const post = renderChannelPost(smoothed, {
     previous: lastChannelPost.snapshot,
     ...(forecast ? { forecast } : {}),
+    maxChars: TELEGRAM_CAPTION_LIMIT,
   });
 
   if (!opts.dryRun) rollKyivDay(now);

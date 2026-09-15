@@ -51,14 +51,19 @@ describe("renderChannelPost", () => {
     const post = renderChannelPost([
       threat({ lat: 49.3, lon: 34.55, type: "shahed", heading: 0 }),
     ])!;
-    expect(post.text).toContain("у бік: Полтавщина");
+    /*
+     * Ціль у Полтавщині, що йде на Полтаву, називається «на обласний центр».
+     * Раніше тут стояло «у бік: Полтавщина» — тавтологія, бо групування й
+     * довідник напрямків користуються одним переліком обласних центрів.
+     */
+    expect(post.text).toContain("на обласний центр");
     /*
      * Час до міста подається вилкою, коли вона широка, і одним числом, коли
      * вузька. Для шахеда вона широка завжди: «шахед» покриває і 185 км/год,
      * і 600, а позиція відома з точністю, яку називає джерело. Одне число тут
      * ішло б у канал на всю країну як вимір.
      */
-    expect(post.text).toMatch(/у бік: Полтавщина \((~\d+ хв|\d+–\d+ хв|може бути вже поруч)\)/);
+    expect(post.text).toMatch(/на обласний центр \((~\d+ хв|\d+–\d+ хв|може бути вже поруч)\)/);
   });
 
   it("шапка веде найгострішим: ракета важливіша за мопед", () => {
@@ -343,5 +348,119 @@ describe("час до міста: вилка, слова або одне чис�
       }),
     ])!;
     expect(post.text).toMatch(/\(~\d+ хв\)/);
+  });
+});
+
+/*
+ * Найгірша вада, знайдена в живому каналі, і тест саме на неї.
+ *
+ * Пост іде підписом до картинки, а підпис у Telegram обмежений 1024 символами.
+ * Перевищення різалося тупо — лишались шапка й підвал:
+ *
+ *     🚀 Ракетна небезпека!
+ *     всього в небі: 14 · за даними OSINT
+ *
+ * Чотирнадцять цілей і жодної названої області. Вада зворотна за знаком: що
+ * більший наліт, то менше пост повідомляє, бо саме у великий наліт текст і
+ * переростає стелю.
+ */
+describe("пост втискається у стелю, не втрачаючи головного", () => {
+  /** Великий наліт: багато областей, щоб текст гарантовано переріс стелю. */
+  const bigRaid = () => {
+    const spots: [number, number][] = [
+      [50.45, 30.52],
+      [49.99, 36.23],
+      [46.47, 30.73],
+      [48.46, 35.04],
+      [49.84, 24.03],
+      [50.9, 34.8],
+      [49.59, 34.55],
+      [47.84, 35.14],
+      [48.62, 22.3],
+      [46.97, 32.0],
+      [50.62, 26.25],
+      [48.92, 24.71],
+    ];
+    return spots.map(([lat, lon], i) =>
+      threat({ id: `t${i}`, lat, lon, type: "shahed", heading: 0, reports: 1 }),
+    );
+  };
+
+  it("без стелі текст справді переростає 1024 символи", () => {
+    const post = renderChannelPost(bigRaid(), { forecast: "🔮 За курсом далі: Київщина" })!;
+    expect(post.text.length).toBeGreaterThan(1024);
+  });
+
+  it("зі стелею вкладається", () => {
+    const post = renderChannelPost(bigRaid(), {
+      forecast: "🔮 За курсом далі: Київщина",
+      maxChars: 1024,
+    })!;
+    expect(post.text.length).toBeLessThanOrEqual(1024);
+  });
+
+  it("області виживають — це головний вміст поста", () => {
+    const post = renderChannelPost(bigRaid(), {
+      forecast: "🔮 За курсом далі: Київщина",
+      maxChars: 1024,
+    })!;
+    expect(post.text).toContain("📍");
+    // І не одна-єдина: стеля ріже хвіст, а не весь перелік.
+    expect((post.text.match(/📍/g) ?? []).length).toBeGreaterThan(3);
+  });
+
+  it("жертвує спершу хештегами, а не областями", () => {
+    const post = renderChannelPost(bigRaid(), {
+      forecast: "🔮 За курсом далі: Київщина",
+      maxChars: 1024,
+    })!;
+    const dropped = !post.text.includes("#шахеди");
+    // Якщо щось відрізано, то саме хештеги йдуть першими.
+    if (post.text.length > 900) expect(dropped).toBe(true);
+  });
+
+  it("зрізані області згортаються в «і ще N», а не зникають мовчки", () => {
+    const post = renderChannelPost(bigRaid(), { maxChars: 520 })!;
+    expect(post.text.length).toBeLessThanOrEqual(520);
+    expect(post.text).toMatch(/і ще \d+/);
+  });
+
+  it("шапка й підвал лишаються завжди", () => {
+    const post = renderChannelPost(bigRaid(), { maxChars: 400 })!;
+    expect(post.text.split("\n")[0]!.length).toBeGreaterThan(0);
+    expect(post.text).toContain("всього в небі");
+  });
+
+  it("малий пост стеля не чіпає", () => {
+    const small = renderChannelPost([threat({ lat: 50.45, lon: 30.52, type: "shahed" })], {
+      maxChars: 1024,
+    })!;
+    const plain = renderChannelPost([threat({ lat: 50.45, lon: 30.52, type: "shahed" })])!;
+    expect(small.text).toBe(plain.text);
+  });
+});
+
+/*
+ * Знайдено в живому каналі: «📍 м. Київ: 2 шахеди курсом на північ — у бік:
+ * м. Київ (4–14 хв)». Ціль уже над містом, а рядок обіцяє, що вона туди
+ * прилетить — тобто подає як новину те, що вже сталося.
+ */
+describe("ціль над містом не «летить у бік» цього міста", () => {
+  it("ціль у Києві не адресує сама себе", () => {
+    // Київ: 50.45, 30.52. Ціль трохи південніше, курсом на північ — тобто
+    // через центр міста, у якому вона вже й перебуває.
+    const post = renderChannelPost([
+      threat({ lat: 50.4, lon: 30.52, type: "shahed", heading: 0 }),
+    ])!;
+    const kyivLine = post.text.split("\n").find((l) => l.includes("м. Київ"))!;
+    expect(kyivLine).not.toContain("у бік");
+  });
+
+  it("але з сусідньої області — летить, і це кажемо", () => {
+    // Київщина південніше міста: попередження доречне.
+    const post = renderChannelPost([
+      threat({ lat: 50.1, lon: 30.52, type: "shahed", heading: 0 }),
+    ])!;
+    expect(post.text).toContain("у бік: м. Київ");
   });
 });
