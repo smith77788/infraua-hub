@@ -9,7 +9,7 @@ import {
   SPEED_RANGE_KMH,
 } from "./threat-eta";
 import type { CategoryId, Facility } from "./infra-types";
-import type { Threat } from "./air";
+import type { Threat, ThreatType } from "./air";
 
 function fac(id: string, category: CategoryId, lat: number, lon: number): Facility {
   return { id, name: id, category, lat, lon, source: "test" };
@@ -241,7 +241,7 @@ describe("швидкість діапазоном — тип цілі теж н�
   const target: Facility[] = [
     { id: "pp", name: "ТЕЦ", category: "power_plant", lat: 51, lon: 30, source: "test" },
   ];
-  const at = (type: Threat["type"]) =>
+  const at = (type: ThreatType) =>
     projectThreats([threat("a", 50, 30, { heading: 0, type })], target)[0]!;
 
   it("невідомий різновид шахеда дає вилку в рази, а не відсотки", () => {
