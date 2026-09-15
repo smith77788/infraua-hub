@@ -50,6 +50,7 @@ import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import RaidReplay from "@/components/RaidReplay";
+import WaveForecast from "@/components/WaveForecast";
 import OfflineBanner from "@/components/OfflineBanner";
 import { useOnline } from "@/hooks/useConnection";
 import { airConnection } from "@/lib/connection-status";
@@ -1439,6 +1440,7 @@ function Console() {
 
               <PersonalThreatPanel threats={threats} weather={feeds.weather} />
               <HotOblasts threats={threats} />
+              <WaveForecast frames={raidFrames} />
 
               <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
               <TimelinePlayer onCursor={setPlayCursor} />
