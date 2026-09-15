@@ -511,16 +511,28 @@ function Console() {
   // Railway; платформа мовчить → лишаємось на локальній.
   const localSurge = useAirActivityHistory(threats.length, !threatsQuery.isLoading);
   const platformConfigured = palanterQuery.data?.configured ?? false;
+  // Розбивка активності по областях — джерело дає область на позначці.
+  const regionCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of threats) if (t.region) m.set(t.region, (m.get(t.region) ?? 0) + 1);
+    return [...m.entries()].map(([region, count]) => ({ region, count }));
+  }, [threats]);
   const reportAirFn = useServerFn(reportAirActivity);
   const airServerQuery = useQuery({
     queryKey: ["air-surge"],
-    queryFn: () => reportAirFn({ data: { count: threats.length } }),
+    queryFn: () => reportAirFn({ data: { count: threats.length, regions: regionCounts } }),
     enabled: platformConfigured && !threatsQuery.isLoading,
     refetchInterval: 60_000,
     staleTime: 60_000,
   });
   const airSurge =
     airServerQuery.data?.ok && airServerQuery.data.data ? airServerQuery.data.data : localSurge;
+  // Найгостріша область зі сплеском (лише коли база — серверна): назвати регіон
+  // корисніше, ніж лише загальне число.
+  const topSurgeRegion =
+    airServerQuery.data?.ok && airServerQuery.data.data?.regions?.length
+      ? airServerQuery.data.data.regions[0]
+      : undefined;
 
   const atRiskList = useMemo(
     () =>
@@ -919,6 +931,7 @@ function Console() {
           <span className="font-mono text-[10px] uppercase tracking-[0.12em]">
             {airSurge.level === "surge" ? "Сплеск активності" : "Активність підвищена"}:{" "}
             {airSurge.current} цілей проти норми ~{airSurge.baseline} (×{airSurge.ratio})
+            {topSurgeRegion ? ` · пік: ${topSurgeRegion.region} (×${topSurgeRegion.ratio})` : ""}
           </span>
         </div>
       ) : null}

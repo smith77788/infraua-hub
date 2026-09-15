@@ -68,6 +68,36 @@ describe('AirActivityStore (in-memory)', () => {
   });
 });
 
+describe('AirActivityStore (per-oblast)', () => {
+  it('names the spiking oblast even when the total looks calm', () => {
+    const s = new AirActivityStore();
+    const now = T0 + 20 * BUCKET_MS;
+    // Baseline: Kharkiv quiet at 2, Lviv quiet at 1, total flat.
+    for (let i = 12; i >= 1; i--) {
+      s.record(3, new Date(now - i * BUCKET_MS), { Харківська: 2, Львівська: 1 });
+    }
+    // Now Kharkiv jumps to 12; total also rises but the oblast is the story.
+    s.record(13, new Date(now), { Харківська: 12, Львівська: 1 });
+    const regions = s.regionSurges(new Date(now));
+    expect(regions[0]!.region).toBe('Харківська');
+    expect(regions[0]!.level).toBe('surge');
+    // A quiet oblast is not news — it is not returned.
+    expect(regions.some((r) => r.region === 'Львівська')).toBe(false);
+  });
+
+  it('ignores malformed region entries', () => {
+    const s = new AirActivityStore();
+    // Negative / non-finite counts and empty names are dropped, not stored.
+    const r = s.record(5, new Date(T0), { "": 3, Одеська: -1, Київська: 4 } as Record<
+      string,
+      number
+    >);
+    expect(r.current).toBe(5);
+    // Only Kyiv survived sanitising; but with one sample it stays normal.
+    expect(s.regionSurges(new Date(T0))).toHaveLength(0);
+  });
+});
+
 describe('AirActivityStore (persistence)', () => {
   it('reloads observations from disk and keeps the baseline', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'air-store-'));
