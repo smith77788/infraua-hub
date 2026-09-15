@@ -524,6 +524,26 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
 }
 
 /**
+ * Публічна видача повітряної обстановки для вбудовування.
+ *
+ * Той самий кешований фід, що й у консолі (тож зайвого навантаження на джерело
+ * немає), приведений до публічної форми. CORS відкритий — це відкриті дані;
+ * короткий кеш, бо обстановка змінюється щохвилини.
+ */
+async function airSnapshotResponse(): Promise<Response> {
+  const { publicAirSnapshot } = await import("./lib/public-snapshot");
+  const threats = await fetchThreatsCached(30_000);
+  return new Response(JSON.stringify(publicAirSnapshot(threats)), {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "cache-control": "public, max-age=15",
+    },
+  });
+}
+
+/**
  * Автовідання Telegram-каналу штучним інтелектом замість людини.
  *
  * Канал у стилі народних моніторів («Ванёк»): бере ті самі повітряні цілі, що
@@ -3377,6 +3397,17 @@ export default {
       } catch (error) {
         console.error(error);
         return json({ posted: false, reason: "internal error" }, 500);
+      }
+    }
+
+    // Публічний знімок повітряної обстановки — щоб радар вбудовували інші.
+    // Відкритий, з CORS: дані ті самі, що на публічній мапі.
+    if (pathname === "/api/air/snapshot") {
+      try {
+        return await airSnapshotResponse();
+      } catch (error) {
+        console.error(error);
+        return json({ error: "internal error" }, 500);
       }
     }
 
