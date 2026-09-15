@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
 import {
-  type Circle,
+  OK_FRESH_MS,
   makeCircleCode,
   normalizeCircleCode,
-  OK_FRESH_MS,
   renderCircle,
   renderPeerOk,
+  type Circle,
 } from "./circle";
 
 const circle: Circle = {
@@ -80,5 +80,49 @@ describe("renderCircle", () => {
 describe("renderPeerOk", () => {
   it("один рядок — це сповіщення, а не звіт", () => {
     expect(renderPeerOk("Мама", "Родина").split("\n")).toHaveLength(1);
+  });
+});
+
+/*
+ * Повідомлення кола шлються з `parse_mode: "HTML"`, а імена — і своє, і назву
+ * кола — людина задає сама. Без екранування це давало три поразки, і
+ * найгірша тиха: зламана розмітка змушує Telegram відхилити повідомлення
+ * ЦІЛКОМ, тобто «я в порядку» просто не доходить до рідних — а саме заради
+ * цього рядка коло й існує.
+ */
+describe("коло: усе від людини йде через екранування", () => {
+  it("чуже посилання не стає посиланням", () => {
+    const out = renderPeerOk('<a href="https://phish.example">Мама</a>', "Родина");
+    expect(out).not.toContain("<a href");
+    expect(out).toContain("&lt;a href");
+  });
+
+  it("підроблений текст від імені бота не проходить", () => {
+    const out = renderPeerOk("Мама", "Родина</b> ⚠️ <b>УВАГА");
+    // Після екранування в рядку лишаються ЛИШЕ наші власні теги.
+    expect(out.match(/<\/?b>/g) ?? []).toHaveLength(2);
+  });
+
+  it("зламана розмітка не ламає повідомлення", () => {
+    // `<b` без закриття відхиляється Telegram разом з усім повідомленням.
+    const out = renderPeerOk("<b", "Родина");
+    expect(out).toContain("&lt;b");
+    expect(out.match(/<\/?b>/g) ?? []).toHaveLength(2);
+  });
+
+  it("перелік кола теж екранує імена й назву", () => {
+    const circle = { code: "ABC234", name: "<i>Родина</i>", ownerChatId: 1, members: [1] };
+    const out = renderCircle(
+      circle as never,
+      [{ chatId: 1, name: "<script>x</script>", okAt: null }],
+      Date.now(),
+    );
+    expect(out).not.toContain("<i>Родина</i>");
+    expect(out).not.toContain("<script>");
+    expect(out).toContain("&lt;script&gt;");
+  });
+
+  it("звичайне імʼя лишається звичайним", () => {
+    expect(renderPeerOk("Мама", "Родина")).toBe("✅ <b>Мама</b> у порядку · Родина");
   });
 });

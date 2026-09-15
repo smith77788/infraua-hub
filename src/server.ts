@@ -1612,7 +1612,7 @@ async function circleCommand(
     await putSubscriber({ ...sub, circle: circle.code, displayName: name }, true);
     return {
       text:
-        `✅ Ви в колі <b>${circle.name}</b>.\n\n` +
+        `✅ Ви в колі <b>${escapeHtml(circle.name)}</b>.\n\n` +
         "Підпишіться, щоб вас упізнавали: <code>/circle імʼя Мама</code>",
     };
   }
