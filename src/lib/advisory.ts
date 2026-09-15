@@ -14,6 +14,8 @@
 
 import type { Threat } from "./air";
 import { distanceKm } from "./infra-types";
+import { ALERT_CHANCE_THRESHOLD, closestApproach, passChance } from "./approach";
+import type { MotionState } from "./track-filter";
 import {
   assessCredibility,
   type CredibilityAssessment,
@@ -242,7 +244,12 @@ export interface PersonalThreat {
   distanceKm: number;
   /** Азимут із моєї точки НА ціль (де вона зараз). */
   bearingToThreat: number;
-  /** Ціль іде в мій бік (у межах inboundSectorDeg від свого курсу). */
+  /**
+   * Ціль іде в мій бік.
+   *
+   * Там, де рух оцінено з фіксів, це означає «шанс пройти ближче за радіус
+   * тривоги вищий за поріг»; де руху ще не видно — стару перевірку сектора.
+   */
   inbound: boolean;
   /** Оцінка часу підльоту до моєї точки, хв (лише для inbound). */
   etaMin: number | null;
@@ -258,6 +265,16 @@ export interface PersonalThreat {
   etaRangeMin: [number, number] | null;
   /** Швидкість заміряна джерелом, а не взята з таблиці типових. */
   speedMeasured: boolean;
+  /**
+   * Шанс, що ОЦІНЕНА ТРАЄКТОРІЯ пройде ближче за радіус тривоги.
+   *
+   * Не ймовірність влучання, не прогноз роботи ППО — лише геометрія оцінки
+   * руху, порахована на розкиді, заміряному з власних фіксів цілі. Є тільки
+   * там, де рух узагалі видно.
+   */
+  chance?: number;
+  /** На скільки ціль промине точку за середньою оцінкою, км. */
+  missKm?: number;
 }
 
 export interface PersonalAssessment {
@@ -299,11 +316,36 @@ export interface PersonalAssessment {
 export function personalAssessment(
   threats: readonly Threat[],
   point: { lat: number; lon: number },
-  opts: { radiusKm?: number; limit?: number; inboundSectorDeg?: number } = {},
+  opts: {
+    radiusKm?: number;
+    limit?: number;
+    inboundSectorDeg?: number;
+    /**
+     * Оцінений рух цілі за спостереженими фіксами (`track-filter`).
+     *
+     * Коли він є, «вхідна» перестає бути перевіркою сектора й стає задачею про
+     * найближче зближення. Сектор ±60° зараховував як «іде на вас» ціль, що
+     * промине за тридцять кілометрів, — звідси половина зайвих сповіщень.
+     *
+     * Коли руху ще не видно (перший фікс), лишається перевірка сектора: гірша
+     * оцінка краща за відсутність оцінки.
+     */
+    motionOf?: (threat: Threat) => MotionState | null;
+    /**
+     * Наскільки близько — це вже близько, км.
+     *
+     * Окремо від `radiusKm`, і це не дрібниця. Радіус спостереження каже, що
+     * людина хоче БАЧИТИ (50–100 км); радіус тривоги — на якій відстані проліт
+     * її вже стосується. Злити їх означало б рахувати шанс «пройде ближче за
+     * сто кілометрів», який справджується майже завжди й тому нічого не каже.
+     */
+    concernKm?: number;
+  } = {},
 ): PersonalAssessment {
   const radiusKm = opts.radiusKm ?? 150;
   const limit = opts.limit ?? 6;
   const sector = opts.inboundSectorDeg ?? 60;
+  const concernKm = opts.concernKm ?? Math.min(radiusKm, 15);
 
   const scored: PersonalThreat[] = threats.map((threat) => {
     const d = distanceKm(point, threat);
@@ -311,8 +353,32 @@ export function personalAssessment(
     let inbound = false;
     let etaMin: number | null = null;
     let etaRangeMin: [number, number] | null = null;
+    let chance: number | undefined;
+    let missKm: number | undefined;
     const q = threat.quality ?? EMPTY_QUALITY;
-    if (threat.heading != null) {
+
+    const motion = opts.motionOf?.(threat) ?? null;
+    if (motion && motion.origin !== "none") {
+      // Рух цілі видно з її власних фіксів — значить, питання стає точним:
+      // не «чи в секторі», а «на скільки промине й коли буде на траверзі».
+      const a = closestApproach(motion, point);
+      chance = passChance(motion, point, concernKm);
+      missKm = Math.round(a.missKm);
+      if (a.approaching && a.etaMin !== null) {
+        inbound = chance >= ALERT_CHANCE_THRESHOLD;
+        etaMin = Math.round(a.etaMin);
+        // Вилка ширшає з ТРЬОХ боків: похибка заміряної швидкості (звідси
+        // a.etaLow/High), невпевненість у позиції (u) і те, що ціль могла
+        // прискоритись. Найраніший приліт — ближче й швидше.
+        const u = displayRadiusKm(q);
+        const lowSpeed = Math.max(1, motion.speedKmh - motion.speedSigma);
+        const highSpeed = motion.speedKmh + motion.speedSigma;
+        etaRangeMin = [
+          Math.round((Math.max(0, a.alongKm - u) / highSpeed) * 60),
+          Math.round(((a.alongKm + u) / lowSpeed) * 60),
+        ];
+      }
+    } else if (threat.heading != null) {
       // Ціль іде в мій бік, якщо азимут ВІД неї НА мене близький до її курсу.
       const bearingThreatToMe = bearingDeg(threat, point);
       if (angularDiff(bearingThreatToMe, threat.heading) <= sector) {
@@ -342,6 +408,8 @@ export function personalAssessment(
       etaMin,
       etaRangeMin,
       speedMeasured: q.speedKmh !== null,
+      ...(chance !== undefined ? { chance } : {}),
+      ...(missKm !== undefined ? { missKm } : {}),
     };
   });
 

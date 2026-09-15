@@ -73,13 +73,39 @@ export function etaPhrase(etaMin: number | null): string {
   return `, ~${etaMin} хв до вас`;
 }
 
+/**
+ * Час у рядку цілі — вилкою, коли вона широка.
+ *
+ * Те саме правило, що й у самому сповіщенні: одне число там, де насправді
+ * інтервал, читається як вимір, хоч ним не є.
+ */
+function etaPart(n: PersonalThreat): string {
+  const r = n.etaRangeMin;
+  if (r && r[1] > ETA_HONEST_LIMIT_MIN) return ", далеко — понад годину";
+  if (r && r[1] - r[0] >= 3) return `, ${r[0]}–${r[1]} хв до вас`;
+  return etaPhrase(n.etaMin);
+}
+
+/**
+ * Один рядок про ціль.
+ *
+ * Найважливіше тут — слово ПРОМИНЕ. Досі рядок знав лише два стани: «іде на
+ * вас» або мовчання, і перший стояв біля всього, що потрапило в сектор ±60° —
+ * зокрема біля цілі, яка пройде за тридцять кілометрів. Тепер, коли рух цілі
+ * видно з її власних фіксів, промах рахується — і людина бачить різницю між
+ * «на вас» і «повз вас», яка досі була стерта.
+ */
 function threatLine(n: PersonalThreat): string {
   const type = n.threat.type ?? "unknown";
   const dir = compass(n.bearingToThreat);
-  return (
-    `${TYPE_EMOJI[type]} ${TYPE_NAME[type]} — ${n.distanceKm} км на ${dir}` +
-    (n.inbound ? `, <b>іде на вас</b>${etaPhrase(n.etaMin)}` : "")
-  );
+  const head = `${TYPE_EMOJI[type]} ${TYPE_NAME[type]} — ${n.distanceKm} км на ${dir}`;
+  if (n.inbound) return `${head}, <b>іде на вас</b>${etaPart(n)}`;
+  // Проліт повз показуємо лише тоді, коли ціль справді наближається: для тієї,
+  // що вже віддаляється, «промине за 20 км» — не інформація, а шум.
+  if (n.missKm !== undefined && n.etaMin !== null && n.missKm >= 3) {
+    return `${head} · промине за ~${n.missKm} км`;
+  }
+  return head;
 }
 
 /**

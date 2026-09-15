@@ -324,3 +324,43 @@ describe("renderShelters", () => {
     expect(renderShelters([s()], "МЕЖА")).toContain("МЕЖА");
   });
 });
+
+describe("«на вас» більше не означає «в секторі»", () => {
+  function withMotion(missKm: number, etaMin: number | null, inbound: boolean) {
+    const { assess } = cards([inbound ? inbound0() : outbound0()]);
+    const n = assess.nearest[0]!;
+    return renderPersonal(
+      {
+        ...assess,
+        nearest: [{ ...n, inbound, missKm, etaMin, etaRangeMin: null }],
+      },
+      dangerIndex(assess),
+      "моя точка",
+      50,
+    );
+  }
+  function inbound0() {
+    return inbound("a", "shahed", 20);
+  }
+  function outbound0() {
+    return { ...inbound("a", "shahed", 20), heading: 180 };
+  }
+
+  it("ціль, що промине збоку, так і підписана — а не «іде на вас»", () => {
+    const text = withMotion(22, 14, false);
+    expect(text).toContain("промине за ~22 км");
+    expect(text).not.toContain("іде на вас");
+  });
+
+  it("близький проліт не захаращує рядок зайвим числом", () => {
+    expect(withMotion(1, 14, false)).not.toContain("промине");
+  });
+
+  it("ціль, що віддаляється, не отримує «промине»", () => {
+    expect(withMotion(22, null, false)).not.toContain("промине");
+  });
+
+  it("вхідна ціль лишається вхідною", () => {
+    expect(withMotion(0, 14, true)).toContain("іде на вас");
+  });
+});

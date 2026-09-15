@@ -88,6 +88,7 @@ import { kyivDate, kyivHour } from "./lib/kyiv";
 import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
 import { buildGeoIndex, candidatesFor } from "./lib/geo-index";
+import { estimateMotion, type MotionState } from "./lib/track-filter";
 import { deliver, type Envelope, Priority } from "./lib/delivery";
 import { capacityFor, renderCapacity, USEFUL_WINDOW_MS } from "./lib/capacity";
 import {
@@ -422,6 +423,57 @@ async function botUsername(token: string): Promise<string | null> {
 let threatCache: { at: number; threats: Threat[] } | null = null;
 
 /**
+ * Памʼять треків — спільне джерело руху для бота й каналу.
+ *
+ * Джерело віддає лише поточну позицію: куди ціль летить, воно каже полем
+ * `heading`, яке оновлюється рідко й нічого не каже про власну похибку. Але
+ * послідовні опитування самі складаються в трек, і з нього рух ВИВОДИТЬСЯ —
+ * разом із розкидом, тобто з чесною мірою невпевненості.
+ *
+ * Тримається в одному місці навмисно. Раніше канал вів власну історію для
+ * картинки, а бот не вів жодної; два споживачі того самого факту з різною
+ * памʼяттю — це два різні уявлення про те, куди летить одна ціль.
+ */
+const trackMemory = {
+  fixes: new Map<string, FixPoint[]>(),
+  motions: new Map<string, MotionState>(),
+  types: new Map<string, ThreatType>(),
+};
+
+/** Скільки тримати трек після зникнення цілі з видачі. */
+// Довше за оцінку руху (25 хв) навмисно: із цього самого треку складається
+// картинка-реконструкція під відбоєм, а хвиля триває всю ніч.
+const TRACK_KEEP_MS = 12 * 60 * 60 * 1000;
+
+function rememberTracks(threats: readonly Threat[], now: number): void {
+  trackMemory.fixes = updateHistory(trackMemory.fixes, threats, now, {
+    maxAgeMs: TRACK_KEEP_MS,
+    maxPoints: 60,
+    minMoveKm: 1,
+  });
+  for (const t of threats) trackMemory.types.set(t.id, t.type ?? "unknown");
+  // Оцінка рахується ОДИН раз на опитування, а не на кожного підписника: вона
+  // залежить лише від цілі, і повторювати її мільйон разів було б тією самою
+  // помилкою, що й повний перебір відстаней.
+  const fresh = new Map<string, MotionState>();
+  for (const t of threats) {
+    const fixes = trackMemory.fixes.get(t.id);
+    if (!fixes) continue;
+    const state = estimateMotion(fixes, now, {
+      type: t.type ?? "unknown",
+      reportedHeading: t.heading,
+    });
+    if (state) fresh.set(t.id, state);
+  }
+  trackMemory.motions = fresh;
+}
+
+/** Рух цілі для оцінок. `null` — рух ще не спостережено. */
+function motionOf(threat: Threat): MotionState | null {
+  return trackMemory.motions.get(threat.id) ?? null;
+}
+
+/**
  * Офіційні тривоги — спільний кеш для каналу й `/status`.
  *
  * `null` означає «не вдалося дізнатися», і це навмисно не зводиться до
@@ -458,6 +510,9 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   try {
     const threats = (await fetchNeptunThreats(controller.signal)) ?? [];
     threatCache = { at: now, threats };
+    // Трек росте з кожного опитування — саме тому памʼять оновлюється тут, а
+    // не в котромусь зі споживачів: пропущене опитування це розрив у лінії.
+    rememberTracks(threats, now);
     return threats;
   } catch {
     // Збій джерела не має стирати останню відому картину: краще дані на
@@ -737,26 +792,10 @@ function shouldPostSilently(types: ReadonlySet<ThreatType>, now: number): boolea
   return hour >= 23 || hour < 7;
 }
 
-/**
- * Спостережені треки цілей для картинки каналу.
- *
- * Джерело віддає лише поточну позицію; історію складає `updateHistory` з
- * послідовних опитувань — той самий модуль, що вже малює сліди на карті.
- */
-let channelTracks = new Map<string, FixPoint[]>();
-/**
- * Тип кожного треку окремо від точок.
- *
- * Колір лінії має відповідати тому, що летіло. Малювати всі шляхи як шахедні
- * означало б показати ракетний удар кольором «мопеда» — і це вже не помилка
- * оформлення, а неправда про те, що було.
- */
-let channelTrackTypes = new Map<string, ThreatType>();
-
 function trackLines(threats: readonly Threat[]): { type: ThreatType; points: FixPoint[] }[] {
   const byId = new Map(threats.map((t) => [t.id, t] as const));
   const out: { type: ThreatType; points: FixPoint[] }[] = [];
-  for (const [id, points] of channelTracks) {
+  for (const [id, points] of trackMemory.fixes) {
     const t = byId.get(id);
     if (!t || points.length < 2) continue;
     out.push({ type: t.type ?? "unknown", points });
@@ -955,11 +994,12 @@ async function closeWave(
   // немає (нічого не летить), але видно всі шляхи, якими хвиля пройшла. Це те,
   // чого вранці не дає жоден монітор: одна картинка замість сімдесяти постів.
   const { renderSituationPng } = await import("./lib/situation-image");
-  const routeLines = [...channelTracks.entries()]
+  const routeLines = [...trackMemory.fixes.entries()]
     .filter(([, points]) => points.length >= 2)
-    .map(([id, points]) => ({ type: channelTrackTypes.get(id) ?? "unknown", points }));
-  channelTracks = new Map();
-  channelTrackTypes = new Map();
+    .map(([id, points]) => ({ type: trackMemory.types.get(id) ?? "unknown", points }));
+  trackMemory.fixes = new Map();
+  trackMemory.types = new Map();
+  trackMemory.motions = new Map();
   const sent = await sendChannelUpdate(
     token,
     channel,
@@ -1100,11 +1140,9 @@ async function runChannelTickCore(
   // навіть коли не постимо: пропущений тик — це розрив у лінії.
   // Довший строк і більше точок, ніж на карті: тут трек має пережити цілу
   // нічну хвилю, бо з нього складається картинка під відбоєм.
-  channelTracks = updateHistory(channelTracks, smoothed, now, {
-    maxAgeMs: 12 * 60 * 60 * 1000,
-    maxPoints: 60,
-  });
-  for (const t of smoothed) channelTrackTypes.set(t.id, t.type ?? "unknown");
+  // Історію веде спільна памʼять треків (rememberTracks) — та сама, з якої
+  // рахується рух для персональних оцінок. Два споживачі того самого факту з
+  // власними копіями історії — це два різні уявлення про одну ціль.
   // Адресний сигнал по місту — незалежно від того, чи загальний пост «суттєвий»:
   // ціль на підльоті варта окремого попередження навіть без зміни оглядової
   // картини. Власний кулдаун усередині не дає йому смітити.
@@ -1444,7 +1482,7 @@ async function personalCard(
 ): Promise<{ text: string; keyboard: unknown } | null> {
   if (!sub.point) return null;
   const threats = await fetchThreatsCached(60_000);
-  const assess = personalAssessment(threats, sub.point, { radiusKm: sub.radiusKm });
+  const assess = personalAssessment(threats, sub.point, { radiusKm: sub.radiusKm, motionOf });
   const danger = dangerIndex(assess);
   // Чи діє офіційна тривога над точкою. `null` — джерело мовчить, і це так і
   // передається далі: невідоме не зводиться ні до «діє», ні до «знято».
@@ -2157,7 +2195,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       continue;
     }
 
-    const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm });
+    const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
     const danger = dangerIndex(assess);
     const decision = decideAlert(sub, assess, danger, now, hour);
     if (!decision.send) {

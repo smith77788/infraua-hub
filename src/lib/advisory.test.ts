@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
+import { estimateMotion, type Fix } from "./track-filter";
+
 import type { Threat } from "./air";
 import {
   compass,
@@ -298,5 +300,70 @@ describe("особиста оцінка — невизначеність дже�
     expect(a.nearest[0]!.inbound).toBe(false);
     expect(a.nearest[0]!.etaRangeMin).toBeNull();
     expect(a.minutesToNearestLow).toBeNull();
+  });
+});
+
+describe("оцінка руху витісняє перевірку сектора", () => {
+  const point = { lat: 50.0, lon: 30.0 };
+  /** Ціль на південь від точки, іде на північ — тобто просто на неї. */
+  function northbound(lonOffsetKm: number): { threat: Threat; fixes: Fix[] } {
+    const lon = 30 + lonOffsetKm / 71.6;
+    const fixes: Fix[] = Array.from({ length: 5 }, (_, i) => ({
+      lat: 49.335 + (180 * ((i * 120_000) / 3_600_000)) / 111.32,
+      lon,
+      ts: i * 120_000,
+    }));
+    const last = fixes[fixes.length - 1]!;
+    return {
+      threat: {
+        id: "t",
+        name: "ціль",
+        lat: last.lat,
+        lon: last.lon,
+        source: "neptun.in.ua",
+        count: 1,
+        since: "",
+        expires: "",
+        type: "shahed",
+        heading: 0,
+      },
+      fixes,
+    };
+  }
+
+  it("ціль, що промине за 30 км, більше не вважається вхідною", () => {
+    // Сектор ±60° зараховував її як «іде на вас» — звідси половина зайвих
+    // сповіщень. Тепер рахується справжній промах.
+    const { threat, fixes } = northbound(30);
+    const motion = estimateMotion(fixes, 480_000, { type: "shahed" });
+    const a = personalAssessment([threat], point, {
+      radiusKm: 100,
+      concernKm: 15,
+      motionOf: () => motion,
+    });
+    expect(a.nearest[0]!.missKm).toBeGreaterThan(25);
+    expect(a.inboundCount).toBe(0);
+  });
+
+  it("ціль у лоб лишається вхідною — і несе шанс та межі часу", () => {
+    const { threat, fixes } = northbound(0);
+    const motion = estimateMotion(fixes, 480_000, { type: "shahed" });
+    const n = personalAssessment([threat], point, {
+      radiusKm: 100,
+      concernKm: 15,
+      motionOf: () => motion,
+    }).nearest[0]!;
+    expect(n.inbound).toBe(true);
+    expect(n.chance!).toBeGreaterThan(0.5);
+    const [low, high] = n.etaRangeMin!;
+    expect(low).toBeLessThanOrEqual(n.etaMin!);
+    expect(high).toBeGreaterThanOrEqual(n.etaMin!);
+  });
+
+  it("руху ще не видно — лишається стара перевірка сектора, а не мовчання", () => {
+    // Гірша оцінка краща за відсутність оцінки: перший фікс теж має щось казати.
+    const { threat } = northbound(0);
+    const a = personalAssessment([threat], point, { radiusKm: 150, motionOf: () => null });
+    expect(a.inboundCount).toBe(1);
   });
 });
