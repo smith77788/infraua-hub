@@ -147,7 +147,10 @@ import {
   leaveCircle,
   putCircle,
   putSubscriber,
+  readMarker,
   stats as subscriberStats,
+  writeMarker,
+  isDurable as subscribersDurable,
 } from "./lib/subscriber-store";
 
 type ServerEntry = {
@@ -2139,10 +2142,23 @@ let backupSentFor: string | null = null;
 async function maybeBackup(token: string, now: number): Promise<void> {
   const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
   if (!owner) return;
-  const today = kyivDate(new Date(now));
-  if (backupSentFor === today) return;
   if (kyivHour(new Date(now)) < DIGEST_HOUR) return;
+  // Ефемерне сховище — копію слати НЕ треба: там і бекапити нема чого (підписки
+  // й так зникнуть), а дедуп у памʼяті скидається щоізоляту, тож копія летіла б
+  // щоразу. Саме це й був спам щогодини.
+  if (!subscribersDurable()) return;
+  const today = kyivDate(new Date(now));
+  if (backupSentFor === today) return; // швидкий шлях у межах одного процесу
+  // Стійкий дедуп: позначка на тому бачиться всіма ізолятами/реплiками/після
+  // редеплою — на відміну від модульної змінної.
+  if ((await readMarker("last-backup")) === today) {
+    backupSentFor = today;
+    return;
+  }
   backupSentFor = today;
+  // Пишемо ПЕРЕД надсиланням: якщо два виконання зійшлися, друге побачить
+  // позначку й не надішле дубль.
+  await writeMarker("last-backup", today);
   await sendBackup(token, Number(owner));
 }
 

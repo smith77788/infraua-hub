@@ -12,7 +12,36 @@
  *
  * Запуск: node scripts/build-shelters.mjs
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+
+/*
+ * Контур України для відсіву зайвого за кордоном.
+ *
+ * Прямокутник UA_BBOX навмисно ширший за країну (див. нижче), тож у метро-запит
+ * потрапляли Бухарест, Кишинів, Мінськ, Краснодар — 39% першого набору були
+ * НЕ українські. Тут ми беремо той самий контур, що малює карту (одне джерело
+ * істини), і лишаємо тільки точки всередині нього.
+ */
+const UA_POLY = (() => {
+  const src = readFileSync(new URL("../src/lib/ua-outline.ts", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("["), src.lastIndexOf("]") + 1);
+  const pts = [];
+  const re = /\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]/g;
+  let m;
+  while ((m = re.exec(body))) pts.push([Number(m[1]), Number(m[2])]); // [lat, lon]
+  return pts;
+})();
+
+/** Точка [lat, lon] всередині контуру України (ray casting; x=lon, y=lat). */
+function insideUA(lat, lon) {
+  let hit = false;
+  for (let i = 0, j = UA_POLY.length - 1; i < UA_POLY.length; j = i++) {
+    const [yi, xi] = UA_POLY[i];
+    const [yj, xj] = UA_POLY[j];
+    if (yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
 
 const ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -85,6 +114,8 @@ for (const [kind, filters] of PARTS) {
     const lat = el.lat ?? el.center?.lat;
     const lon = el.lon ?? el.center?.lon;
     if (typeof lat !== "number" || typeof lon !== "number") continue;
+    // Відсів зарубіжного: прямокутник ширший за країну, полігон — точний.
+    if (!insideUA(lat, lon)) continue;
     const tags = el.tags ?? {};
     // Закрите для входу укриття не рятує — не возимо його з собою.
     if (tags.access === "no" || tags.access === "private") continue;
