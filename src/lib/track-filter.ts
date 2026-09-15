@@ -25,6 +25,19 @@
  *
  * ## Де межа
  *
+ * ## Одна підгонка на весь проєкт
+ *
+ * Сам вектор швидкості рахує `trajectory.estimateVelocity` — метод найменших
+ * квадратів у локальній системі координат. Він з'явився в паралельній сесії
+ * раніше за цей модуль і математично кращий за посегментне усереднення, з
+ * якого цей починався: підгонка складових уникає задачі про середнє кутів
+ * узагалі, а R² дає готову міру якості.
+ *
+ * Тому тут лишився ШАР РІШЕНЬ, а не другий спосіб рахувати те саме (AGENTS.md
+ * §7): відсів помилок ототожнення, походження курсу, кутова швидкість
+ * розвороту й розклад невизначеності на «вздовж» і «впоперек» — те, чого
+ * потребує `approach.ts` і чого підгонка сама по собі не дає.
+ *
  * Далі цієї межі без НОВИХ ДАНИХ не пройти. Ми маємо позиції, які хтось
  * побачив і встиг повідомити, з точністю до населеного пункту й частотою в
  * хвилини. Кращу оцінку дає не кращий алгоритм, а радар або ADS-B — тобто
@@ -33,8 +46,9 @@
  */
 
 import { distanceKm } from "./infra-types";
-import { bearingDeg, SPEED_KMH } from "./threat-eta";
+import { SPEED_KMH } from "./threat-eta";
 import type { ThreatType } from "./air";
+import { estimateVelocity, type TrackFix } from "./trajectory";
 
 export interface Fix {
   lat: number;
@@ -73,10 +87,6 @@ export interface MotionState {
 
 /** Скільки часу фікс лишається вартим уваги при оцінці руху. */
 export const FIX_WINDOW_MS = 25 * 60 * 1000;
-/** Менший зсув вважаємо шумом позиції, а не рухом. */
-const MIN_SEGMENT_KM = 1.5;
-/** Коротший відрізок часу дає ділення на майже нуль — швидкість вибухає. */
-const MIN_SEGMENT_MS = 20_000;
 
 /**
  * Фізична стеля швидкості за типом — удвічі від крейсерської.
@@ -90,13 +100,6 @@ function maxPlausibleKmh(type: ThreatType | undefined): number {
   return (SPEED_KMH[type ?? "unknown"] ?? SPEED_KMH.unknown) * 2;
 }
 
-interface Segment {
-  speedKmh: number;
-  headingDeg: number;
-  midTs: number;
-  dtMs: number;
-}
-
 /**
  * Найменша різниця кутів зі знаком, у проміжку (−180; 180].
  *
@@ -107,35 +110,6 @@ interface Segment {
 export function angleDelta(from: number, to: number): number {
   const d = (((to - from) % 360) + 360) % 360;
   return d > 180 ? d - 360 : d;
-}
-
-/**
- * Циркулярне середнє курсів із вагами.
- *
- * Звичайне арифметичне тут не працює: середнє між 350° і 10° дорівнює 180°,
- * тобто рівно протилежному напрямку. Помилка, яка на картинці виглядає як
- * ціль, що летить назад.
- */
-function weightedMeanHeading(values: readonly { headingDeg: number; w: number }[]): {
-  mean: number;
-  sigma: number;
-} {
-  let sx = 0;
-  let sy = 0;
-  let wsum = 0;
-  for (const { headingDeg, w } of values) {
-    const rad = (headingDeg * Math.PI) / 180;
-    sx += Math.sin(rad) * w;
-    sy += Math.cos(rad) * w;
-    wsum += w;
-  }
-  if (wsum === 0) return { mean: 0, sigma: 180 };
-  const mean = ((Math.atan2(sx, sy) * 180) / Math.PI + 360) % 360;
-  // Довжина результанта R: 1 — курси збігаються, 0 — розкидані рівномірно.
-  // Кругове стандартне відхилення √(−2 ln R) — стандартна міра для кутів.
-  const R = Math.min(1, Math.hypot(sx, sy) / wsum);
-  const sigma = R <= 1e-6 ? 180 : Math.min(180, (Math.sqrt(-2 * Math.log(R)) * 180) / Math.PI);
-  return { mean, sigma };
 }
 
 /**
@@ -158,23 +132,11 @@ export function estimateMotion(
   const last = recent[recent.length - 1];
   if (!last) return null;
 
-  const cap = maxPlausibleKmh(opts.type);
-  const segments: Segment[] = [];
-  for (let i = 1; i < recent.length; i++) {
-    const a = recent[i - 1]!;
-    const b = recent[i]!;
-    const dtMs = b.ts - a.ts;
-    if (dtMs < MIN_SEGMENT_MS) continue;
-    const d = distanceKm(a, b);
-    if (d < MIN_SEGMENT_KM) continue; // стояла на місці — напрямку тут немає
-    const speedKmh = d / (dtMs / 3_600_000);
-    if (speedKmh > cap) continue; // стрибок: майже напевно не та сама ціль
-    segments.push({ speedKmh, headingDeg: bearingDeg(a, b), midTs: (a.ts + b.ts) / 2, dtMs });
-  }
-
+  const clean = rejectJumps(recent, opts.type);
+  const fitted = fitMotion(clean, opts.type);
   const fallbackSpeed = SPEED_KMH[opts.type ?? "unknown"] ?? SPEED_KMH.unknown;
 
-  if (segments.length === 0) {
+  if (!fitted) {
     // Руху ще не видно. Лишається те, що сказало джерело — і це чесно
     // позначається: оцінка спирається на чуже твердження, не на спостереження.
     const reported = opts.reportedHeading;
@@ -208,51 +170,126 @@ export function estimateMotion(
     };
   }
 
-  const halfLifeMs = 5 * 60 * 1000;
-  const weighted = segments.map((s) => ({
-    ...s,
-    w: Math.pow(0.5, (now - s.midTs) / halfLifeMs),
-  }));
-  const wsum = weighted.reduce((n, s) => n + s.w, 0) || 1;
+  return { ...fitted, lat: last.lat, lon: last.lon, at: last.ts, origin: "observed" };
+}
 
-  const speedKmh = weighted.reduce((n, s) => n + s.speedKmh * s.w, 0) / wsum;
-  const speedVar = weighted.reduce((n, s) => n + s.w * (s.speedKmh - speedKmh) ** 2, 0) / wsum;
-  const { mean: headingDeg, sigma: headingScatter } = weightedMeanHeading(weighted);
-
-  // Розворот: як швидко міняється курс між сусідніми відрізками. Це не окрема
-  // модель, а спостережена величина — і саме вона каже, наскільки далеко
-  // можна вести ціль прямою.
-  let turnRateDegMin = 0;
-  if (weighted.length >= 2) {
-    let sum = 0;
-    let n = 0;
-    for (let i = 1; i < weighted.length; i++) {
-      const a = weighted[i - 1]!;
-      const b = weighted[i]!;
-      const dtMin = (b.midTs - a.midTs) / 60_000;
-      if (dtMin <= 0.5) continue;
-      sum += angleDelta(a.headingDeg, b.headingDeg) / dtMin;
-      n += 1;
+/**
+ * Відсів помилок ототожнення.
+ *
+ * Два звіти про «ту саму» ціль із різних кінців області дають відрізок на
+ * 900 км/год для шахеда. Це не прискорення, це різні цілі під одним
+ * ідентифікатором — і така точка отруює підгонку сильніше за будь-який шум,
+ * бо метод найменших квадратів тягнеться саме до викидів.
+ *
+ * Поріг per-type, а не глобальний: 900 км/год цілком правдоподібні для ракети
+ * й неможливі для «мопеда».
+ */
+function rejectJumps(sorted: readonly Fix[], type: ThreatType | undefined): Fix[] {
+  const cap = maxPlausibleKmh(type);
+  const out: Fix[] = [];
+  for (const f of sorted) {
+    const prev = out[out.length - 1];
+    if (prev) {
+      const dtH = (f.ts - prev.ts) / 3_600_000;
+      if (dtH > 0 && distanceKm(prev, f) / dtH > cap) continue;
     }
-    if (n > 0) turnRateDegMin = sum / n;
+    out.push(f);
   }
+  return out;
+}
 
-  // Одного відрізка замало, щоб побачити розкид: беремо консервативну оцінку
-  // замість нуля. Нульова похибка при одному вимірі — це не впевненість, це
-  // відсутність перевірки.
-  const oneSegment = weighted.length < 2;
+/**
+ * Підгонка руху + заміряна похибка.
+ *
+ * Вектор дає `estimateVelocity` (найменші квадрати). Похибки беруться з
+ * ЗАЛИШКІВ цієї ж підгонки — тобто з того, наскільки реальні фікси розійшлися
+ * з прямою. Це вимір, а не налаштування: рівний політ дає вузьке віяло, а
+ * ціль, що крутить, — широке, і жодної константи для цього не треба.
+ */
+function fitMotion(
+  clean: readonly Fix[],
+  type: ThreatType | undefined,
+): Omit<MotionState, "lat" | "lon" | "at" | "origin"> | null {
+  const asTrack: TrackFix[] = clean.map((f) => ({ lat: f.lat, lon: f.lon, t: f.ts }));
+  const v = estimateVelocity(asTrack, { windowMs: FIX_WINDOW_MS, minSpanSec: 20 });
+  if (!v) return null;
+
+  const first = clean[0]!;
+  const lastFix = clean[clean.length - 1]!;
+  const spanH = (lastFix.ts - first.ts) / 3_600_000;
+  const kLon = Math.cos((first.lat * Math.PI) / 180) * 111.32;
+  const rad = (v.bearingDeg * Math.PI) / 180;
+  const uE = Math.sin(rad);
+  const uN = Math.cos(rad);
+
+  // Залишки розкладаємо на «вздовж» і «впоперек» — саме в цих осях вони й
+  // потрібні: перші кажуть про похибку швидкості, другі — про похибку курсу.
+  let alongSq = 0;
+  let crossSq = 0;
+  let n = 0;
+  let meanDist = 0;
+  for (const f of clean) {
+    const dtH = (f.ts - first.ts) / 3_600_000;
+    const e = (f.lon - first.lon) * kLon;
+    const nk = (f.lat - first.lat) * 111.32;
+    const predicted = v.speedKmh * dtH;
+    const along = e * uE + nk * uN;
+    const cross = e * uN - nk * uE;
+    alongSq += (along - predicted) ** 2;
+    crossSq += cross ** 2;
+    meanDist += Math.abs(along);
+    n += 1;
+  }
+  const alongRms = Math.sqrt(alongSq / Math.max(1, n));
+  const crossRms = Math.sqrt(crossSq / Math.max(1, n));
+  meanDist = Math.max(1, meanDist / Math.max(1, n));
+
+  // Похибка швидкості — розкид уздовж, віднесений до тривалості спостереження.
+  const speedSigma = Math.max(v.speedKmh * 0.05, spanH > 0 ? alongRms / spanH : v.speedKmh * 0.3);
+  // Похибка курсу — кут, під яким видно поперечний розкид із пройденої відстані.
+  const headingSigma = Math.max(3, Math.min(60, (Math.atan2(crossRms, meanDist) * 180) / Math.PI));
+
   return {
-    lat: last.lat,
-    lon: last.lon,
-    at: last.ts,
-    speedKmh,
-    headingDeg,
-    speedSigma: oneSegment ? speedKmh * 0.3 : Math.max(Math.sqrt(speedVar), speedKmh * 0.08),
-    headingSigma: oneSegment ? 20 : Math.max(headingScatter, 4),
-    turnRateDegMin,
-    segments: weighted.length,
-    origin: "observed",
+    speedKmh: v.speedKmh,
+    headingDeg: v.bearingDeg,
+    speedSigma,
+    headingSigma,
+    turnRateDegMin: turnRate(clean, type),
+    segments: clean.length - 1,
   };
+}
+
+/**
+ * Кутова швидкість розвороту — за двома половинами треку.
+ *
+ * Підгонка сама по собі дає одну пряму й розвороту не бачить зовсім: ціль, що
+ * описала дугу, і ціль, що летіла прямо, можуть дати той самий середній
+ * вектор. Тому курс рахується окремо для першої й другої половини, а різниця
+ * між ними, віднесена до часу, і є розворотом.
+ *
+ * Це та величина, що каже, наскільки далеко взагалі можна вести ціль прямою.
+ */
+function turnRate(clean: readonly Fix[], type: ThreatType | undefined): number {
+  if (clean.length < 4) return 0;
+  const mid = Math.floor(clean.length / 2);
+  const firstHalf = clean.slice(0, mid + 1);
+  const secondHalf = clean.slice(mid);
+  const a = estimateVelocity(
+    firstHalf.map((f) => ({ lat: f.lat, lon: f.lon, t: f.ts })),
+    { windowMs: FIX_WINDOW_MS, minSpanSec: 10 },
+  );
+  const b = estimateVelocity(
+    secondHalf.map((f) => ({ lat: f.lat, lon: f.lon, t: f.ts })),
+    { windowMs: FIX_WINDOW_MS, minSpanSec: 10 },
+  );
+  void type;
+  if (!a || !b) return 0;
+  const dtMin =
+    ((secondHalf[secondHalf.length - 1]!.ts + secondHalf[0]!.ts) / 2 -
+      (firstHalf[firstHalf.length - 1]!.ts + firstHalf[0]!.ts) / 2) /
+    60_000;
+  if (dtMin <= 0.5) return 0;
+  return angleDelta(a.bearingDeg, b.bearingDeg) / dtMin;
 }
 
 export interface Projection {
