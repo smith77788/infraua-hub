@@ -17,6 +17,7 @@
  */
 
 import type { ThreatType } from "./air";
+import { normalizeThreatType } from "./air";
 
 export type LangCode = "uk" | "en";
 
@@ -175,7 +176,9 @@ function etaPhraseEn(minutes: number, range?: readonly [number, number]): string
 export const UK: Lexicon = {
   code: "uk",
   typeName(type, n) {
-    const [one, few, many] = UK_TYPE[type];
+    // Подвійний запобіжник: тип уже нормалізовано на межі, але саме цей пошук
+    // валив увесь пост каналу, тож тут він не має права кидати виняток.
+    const [one, few, many] = UK_TYPE[normalizeThreatType(type)];
     return pluralUk(n, one, few, many);
   },
   course: (i) => `курсом ${UK_COURSE[i % 8]}`,
@@ -257,7 +260,7 @@ const EN_TAG: Partial<Record<ThreatType, string>> = {
 export const EN: Lexicon = {
   code: "en",
   typeName(type, n) {
-    const [one, many] = EN_TYPE[type];
+    const [one, many] = EN_TYPE[normalizeThreatType(type)];
     return n === 1 ? one : many;
   },
   course: (i) => `heading ${EN_COURSE[i % 8]}`,

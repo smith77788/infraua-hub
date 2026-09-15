@@ -65,6 +65,38 @@ export function classifyThreatType(text: string): ThreatType {
 }
 
 // Порядок «серйозності» — при злитті/виборі перемагає важчий тип.
+/** Усі допустимі значення типу — джерело правди для нормалізації з мережі. */
+const THREAT_TYPES: ReadonlySet<string> = new Set<ThreatType>([
+  "shahed",
+  "reactive",
+  "cruise",
+  "missile",
+  "ballistic",
+  "kab",
+  "recon",
+  "aircraft",
+  "unknown",
+]);
+
+/**
+ * Звести тип, що прийшов ззовні, до відомого.
+ *
+ * Типи приходять із мережі, а таблиці підстановки (`Record<ThreatType, …>`)
+ * припускають, що ключ завжди свій. Припущення трималося на типізації, якої в
+ * рантаймі немає: варто джерелу віддати незнайоме значення — і пошук у таблиці
+ * кидає виняток.
+ *
+ * Знайдено перебором граничних входів: невідомий тип валив `renderChannelPost`
+ * ЦІЛКОМ. Тобто одна дивна ціль позбавляла поста весь канал — у продукті, де
+ * мовчання і є найгіршою поразкою.
+ *
+ * Нормалізація на межі дешевша за оборону кожної таблиці окремо: невідоме
+ * стає `unknown`, що чесно й означає «тип не визначено».
+ */
+export function normalizeThreatType(raw: unknown): ThreatType {
+  return typeof raw === "string" && THREAT_TYPES.has(raw) ? (raw as ThreatType) : "unknown";
+}
+
 const TYPE_SEVERITY: Record<ThreatType, number> = {
   ballistic: 8,
   missile: 7,
