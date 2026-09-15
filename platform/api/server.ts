@@ -532,16 +532,36 @@ app.post('/api/platform/ingest/infraua', (req, res) => {
  * audit line for each would bury the meaningful actions it exists to record.
  */
 app.post('/api/platform/ingest/air', (req, res) => {
-  const count = Number((req.body ?? {}).count);
+  const body = req.body ?? {};
+  const count = Number(body.count);
   if (!Number.isFinite(count) || count < 0) {
     return res.status(400).json({ error: 'count is required and must be a non-negative number' });
   }
-  res.status(201).json(airActivity.record(count));
+  // regions may arrive as [{region, count}] (what the console sends) or as a
+  // plain {region: count} map; both fold to the same record.
+  const regions = parseRegions(body.regions);
+  const total = airActivity.record(count, new Date(), regions);
+  res.status(201).json({ ...total, regions: airActivity.regionSurges() });
 });
 
 app.get('/api/platform/air/anomalies', (_req, res) => {
-  res.json(airActivity.surge());
+  res.json({ ...airActivity.surge(), regions: airActivity.regionSurges() });
 });
+
+/** Accepts the console's [{region,count}] array or a {region:count} map. */
+function parseRegions(raw: unknown): Record<string, number> | undefined {
+  if (Array.isArray(raw)) {
+    const out: Record<string, number> = {};
+    for (const r of raw) {
+      const name = (r as { region?: unknown })?.region;
+      const c = Number((r as { count?: unknown })?.count);
+      if (typeof name === 'string' && name && Number.isFinite(c)) out[name] = c;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+  if (raw && typeof raw === 'object') return raw as Record<string, number>;
+  return undefined;
+}
 
 /**
  * Re-runs the standing queries right after data lands.

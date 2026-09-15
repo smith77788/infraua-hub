@@ -120,6 +120,8 @@ export interface Threat {
   trail?: { lat: number; lon: number; t: string }[];
   /** Ціль над морем — джерело позначає це окремо. */
   sea?: boolean;
+  /** Область (регіон), якщо джерело її дає — для аналізу активності по областях. */
+  region?: string;
 }
 
 function threatDistanceKm(a: Threat, b: Threat): number {

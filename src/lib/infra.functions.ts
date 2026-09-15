@@ -680,6 +680,7 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
       quality: readQuality(t),
       ...(trail ? { trail } : {}),
       ...(t.sea === true ? { sea: true } : {}),
+      ...(t.region ? { region: t.region } : {}),
     });
   }
   return out;

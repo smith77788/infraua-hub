@@ -141,7 +141,8 @@ export const getPlatformConflicts = createServerFn({ method: "GET" }).handler(
   },
 );
 
-export interface AirSurge {
+export interface RegionSurge {
+  region: string;
   current: number;
   baseline: number;
   ratio: number;
@@ -150,11 +151,28 @@ export interface AirSurge {
   updatedAt: string | null;
 }
 
+export interface AirSurge {
+  current: number;
+  baseline: number;
+  ratio: number;
+  level: "normal" | "elevated" | "surge";
+  samples: number;
+  updatedAt: string | null;
+  /** Області зі сплеском/підвищенням, найгостріші перші (порожньо — тиша). */
+  regions?: RegionSurge[];
+}
+
 export interface AirSurgeResult {
   configured: boolean;
   ok: boolean;
   error?: string;
   data?: AirSurge;
+}
+
+/** Пара «область → кількість» для надсилання розбивки активності. */
+export interface RegionCount {
+  region: string;
+  count: number;
 }
 
 /**
@@ -168,15 +186,27 @@ export interface AirSurgeResult {
  * локальній історії.
  */
 export const reportAirActivity = createServerFn({ method: "POST" })
-  .validator((input: unknown): { count: number } => {
-    const c = Number((input as { count?: unknown } | undefined)?.count);
-    return { count: Number.isFinite(c) && c >= 0 ? Math.round(c) : 0 };
+  .validator((input: unknown): { count: number; regions: RegionCount[] } => {
+    const v = (input ?? {}) as { count?: unknown; regions?: unknown };
+    const c = Number(v.count);
+    const regions = Array.isArray(v.regions)
+      ? v.regions
+          .map((r) => {
+            const region = (r as { region?: unknown })?.region;
+            const rc = Number((r as { count?: unknown })?.count);
+            return typeof region === "string" && region && Number.isFinite(rc) && rc >= 0
+              ? { region, count: Math.round(rc) }
+              : null;
+          })
+          .filter((x): x is RegionCount => x !== null)
+      : [];
+    return { count: Number.isFinite(c) && c >= 0 ? Math.round(c) : 0, regions };
   })
   .handler(async ({ data }): Promise<AirSurgeResult> => {
     if (!isPlatformConfigured()) return { configured: false, ok: false };
     const res = await platformFetch("/api/platform/ingest/air", {
       method: "POST",
-      body: JSON.stringify({ count: data.count }),
+      body: JSON.stringify({ count: data.count, regions: data.regions }),
     });
     if (!res.ok) return { configured: true, ok: false, ...(res.error ? { error: res.error } : {}) };
     return { configured: true, ok: true, data: res.body as AirSurge };
