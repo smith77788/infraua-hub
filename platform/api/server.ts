@@ -1590,9 +1590,34 @@ app.post('/api/platform/cases/:id/notes', (req, res) => {
 
 app.post('/api/platform/cases/:id/pin', (req, res) => {
   const view = req.viewer!;
-  const { entityIds } = req.body ?? {};
+  const { entityIds, entities } = req.body ?? {};
   if (!Array.isArray(entityIds) || entityIds.length === 0) {
     return res.status(400).json({ error: 'entityIds must be a non-empty array' });
+  }
+
+  // Pinning a specific object the analyst chose is a deliberate, scoped action
+  // on their own CASE - not the bulk acceptance of a national infrastructure
+  // picture that the INFRA_LAYERS gate exists to control. So when the client
+  // sends the objects themselves, we upsert exactly those here, gate-free, at
+  // PUBLIC (the OSM data is open) and clamped to the caller's clearance. Without
+  // this, pinning failed with 404 on any deployment that keeps the bulk gate
+  // off, because the node the pin refers to had never entered the graph.
+  if (Array.isArray(entities) && entities.length > 0) {
+    const marks = resolveWriteCompartments(req);
+    if ('error' in marks) return res.status(403).json({ error: marks.error });
+    const level = Math.min(ClearanceLevel.PUBLIC, req.callerClearance!);
+    try {
+      const ingested = infraUA.ingest(
+        { facilities: entities, retrievedAt: new Date().toISOString() } as InfraUAPayload,
+        'infraua-console-pin',
+        'infrastructure',
+        level,
+        marks.compartments
+      );
+      documents.appendMany(ingested.documents);
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   // Resolve against the caller's own view, so an id they cannot see can never

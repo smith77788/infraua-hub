@@ -124,6 +124,19 @@ export default function PlatformPanel({ onClose }: { onClose: () => void }) {
               </p>
             ) : null}
           </div>
+        ) : a?.data && a.data.totals.nodes === 0 ? (
+          <div className="mx-auto max-w-md rounded border border-border bg-card/50 p-4 text-center">
+            <Network className="mx-auto mb-2 size-5 text-muted-foreground" />
+            <p className="text-[12px] leading-relaxed text-foreground">
+              Граф платформи поки порожній — аналітиці нема з чого рахувати.
+            </p>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              Наповнити його можна двома шляхами: приколоти обʼєкти до справ (працює завжди) або
+              натиснути «Передати картину» — для гуртового прийому мають бути увімкнені шари
+              інфраструктури на платформі (у боті команда{" "}
+              <span className="font-mono">/layers on</span>).
+            </p>
+          </div>
         ) : a?.data ? (
           <div className="mx-auto max-w-3xl space-y-6">
             <section>
