@@ -1573,6 +1573,41 @@ export interface SheltersPayload {
 /** Півсторона прямокутника пошуку, градуси (~5.5 км по широті). */
 const SHELTER_BOX_DEG = 0.05;
 
+/**
+ * Укриття навколо точки — звичайна функція, а не лише серверна.
+ *
+ * Бот ходить сюди з вебхука, консоль — через серверну функцію нижче. Один шлях
+ * на двох: якби кожен мав свій, вони б розійшлися в тому, що вважають
+ * укриттям, і людина отримала б у боті одну відповідь, а на карті іншу.
+ */
+export async function fetchShelters(lat: number, lon: number): Promise<SheltersPayload> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25_000);
+  try {
+    const elements = await overpass(
+      shelterQuery({
+        south: lat - SHELTER_BOX_DEG,
+        west: lon - SHELTER_BOX_DEG,
+        north: lat + SHELTER_BOX_DEG,
+        east: lon + SHELTER_BOX_DEG,
+      }),
+      controller.signal,
+    );
+    const shelters = elements.map((el) => toShelter(el)).filter((x): x is Shelter => x !== null);
+    // Порожньо після успішного запиту — теж відповідь: у цьому районі на
+    // відкритій карті нічого не розмічено. `degraded` тоді false, бо джерело
+    // відповіло; решту скаже застереження про покриття.
+    return { shelters, caveat: COVERAGE_CAVEAT, degraded: elements.length === 0 };
+  } catch {
+    return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const getShelters = createServerFn({ method: "GET" })
   .validator((input: unknown): { lat: number; lon: number } => {
     const o = (input ?? {}) as { lat?: unknown; lon?: unknown };
@@ -1580,30 +1615,4 @@ export const getShelters = createServerFn({ method: "GET" })
     const lon = typeof o.lon === "number" && Number.isFinite(o.lon) ? o.lon : Number.NaN;
     return { lat, lon };
   })
-  .handler(async ({ data }): Promise<SheltersPayload> => {
-    if (!Number.isFinite(data.lat) || !Number.isFinite(data.lon)) {
-      return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25_000);
-    try {
-      const elements = await overpass(
-        shelterQuery({
-          south: data.lat - SHELTER_BOX_DEG,
-          west: data.lon - SHELTER_BOX_DEG,
-          north: data.lat + SHELTER_BOX_DEG,
-          east: data.lon + SHELTER_BOX_DEG,
-        }),
-        controller.signal,
-      );
-      const shelters = elements.map((el) => toShelter(el)).filter((s): s is Shelter => s !== null);
-      // Порожньо після успішного запиту — це теж відповідь: у цьому районі на
-      // відкритій карті нічого не розмічено. `degraded` тут false, бо джерело
-      // відповіло; застереження про покриття скаже решту.
-      return { shelters, caveat: COVERAGE_CAVEAT, degraded: elements.length === 0 };
-    } catch {
-      return { shelters: [], caveat: COVERAGE_CAVEAT, degraded: true };
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+  .handler(async ({ data }): Promise<SheltersPayload> => fetchShelters(data.lat, data.lon));

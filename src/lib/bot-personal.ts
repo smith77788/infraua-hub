@@ -22,6 +22,7 @@ import { preAlertFooter, preAlertHeader } from "./pre-alert";
 import type { SoundKind } from "./acoustic";
 import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
 import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
+import { KIND_EMOJI, KIND_NOTE, type NearbyShelter } from "./shelters";
 
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
@@ -349,6 +350,7 @@ export const PERSONAL_ACTIONS = {
   radiusPrefix: "km:",
   mute: "mu:1",
   unmute: "mu:0",
+  shelter: "sh",
 } as const;
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
@@ -394,12 +396,14 @@ export function parsePersonalAction(
   | { kind: "night"; value: NightMode }
   | { kind: "radius"; value: number }
   | { kind: "mute"; value: boolean }
+  | { kind: "shelter" }
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
   if (data === PERSONAL_ACTIONS.soundMenu) return { kind: "soundMenu" };
   if (data === PERSONAL_ACTIONS.wantGeo) return { kind: "wantGeo" };
   if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
+  if (data === PERSONAL_ACTIONS.shelter) return { kind: "shelter" };
   if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
     return v === "drone" || v === "explosion" || v === "air-defence"
@@ -445,6 +449,13 @@ export function personalKeyboard(opts: { withOk?: boolean } = {}): {
   inline_keyboard: PersonalButton[][];
 } {
   const rows: PersonalButton[][] = [
+    /*
+     * «Куди сховатися» стоїть першим рядком і окремо.
+     *
+     * Це єдина кнопка, яка відповідає на питання, з яким людина відкриває
+     * бота під тривогою. Решта — про обстановку, і вони важливі потім.
+     */
+    [{ text: "🛡 Куди сховатися", callback_data: PERSONAL_ACTIONS.shelter }],
     [
       { text: "👂 Чую", callback_data: PERSONAL_ACTIONS.soundMenu },
       { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
@@ -469,4 +480,39 @@ export function soundKeyboard(): { inline_keyboard: PersonalButton[][] } {
       [{ text: "← Назад", callback_data: PERSONAL_ACTIONS.refresh }],
     ],
   };
+}
+
+/**
+ * Список укриттів для людини.
+ *
+ * Найближче — перше й окремим рядком, бо під тривогою читають один рядок.
+ * Кожен вид названо чесно: метро це метро, паркінг це паркінг, і жодне з них
+ * не видається за обладнане укриття, якщо воно ним не є.
+ *
+ * Координати даються посиланням на карту, а не текстом: людині треба дійти,
+ * а не запамʼятати число.
+ */
+export function renderShelters(list: readonly NearbyShelter[], caveat: string): string {
+  if (!list.length) {
+    return [
+      "🛡 <b>Поруч нічого не знайдено</b>",
+      "",
+      escapeHtml(caveat),
+      "",
+      "<i>Найбезпечніше з доступного просто зараз — внутрішня кімната без вікон,",
+      "коридор чи ванна: дві стіни між вами й вулицею.</i>",
+    ].join("\n");
+  }
+
+  const lines = ["🛡 <b>Куди сховатися</b>", ""];
+  for (const s of list) {
+    const where = `<a href="https://www.openstreetmap.org/?mlat=${s.lat}&mlon=${s.lon}#map=17/${s.lat}/${s.lon}">на карті</a>`;
+    lines.push(
+      `${KIND_EMOJI[s.kind]} <b>${escapeHtml(s.name)}</b> — ${s.walkMin} хв пішки (${s.distanceKm} км) · ${where}`,
+    );
+    lines.push(`<i>${escapeHtml(KIND_NOTE[s.kind])}</i>`);
+  }
+  lines.push("");
+  lines.push(`<i>${escapeHtml(caveat)}</i>`);
+  return lines.join("\n");
 }

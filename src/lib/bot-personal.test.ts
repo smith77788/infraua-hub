@@ -11,9 +11,11 @@ import {
   renderOblastPicked,
   renderPersonal,
   renderSettings,
+  renderShelters,
   settingsKeyboard,
 } from "./bot-personal";
 import { newSubscriber, type Subscriber } from "./subscribers";
+import type { NearbyShelter } from "./shelters";
 
 const KYIV = { lat: 50.45, lon: 30.52 };
 
@@ -286,5 +288,39 @@ describe("renderAlert — якість даних видно людині", () =
     const text = renderAlert(assess, dangerIndex(assess), "моя точка");
     expect(text).not.toContain("±");
     expect(text).not.toContain("не підтверджена");
+  });
+});
+
+describe("renderShelters", () => {
+  const s = (over: Partial<NearbyShelter> = {}): NearbyShelter => ({
+    id: "n/1",
+    kind: "metro",
+    name: "Арсенальна",
+    lat: 50.444,
+    lon: 30.545,
+    distanceKm: 0.3,
+    walkMin: 4,
+    ...over,
+  });
+
+  it("веде на карту, а не диктує координати", () => {
+    const t = renderShelters([s()], "застереження");
+    expect(t).toContain("openstreetmap.org");
+    expect(t).toContain("4 хв пішки");
+  });
+
+  it("паркінг не видається за обладнане укриття", () => {
+    const t = renderShelters([s({ kind: "underground", name: "Паркінг" })], "з");
+    expect(t).toContain("не обладнане укриття");
+  });
+
+  it("порожній список дає пораду, а не мовчання", () => {
+    const t = renderShelters([], "це не державний реєстр");
+    expect(t).toContain("без вікон");
+    expect(t).toContain("це не державний реєстр");
+  });
+
+  it("застереження про покриття є завжди", () => {
+    expect(renderShelters([s()], "МЕЖА")).toContain("МЕЖА");
   });
 });

@@ -59,6 +59,7 @@ import {
   soundKeyboard,
   renderAlert,
   renderAskPoint,
+  renderShelters,
   renderPersonal,
   personalKeyboard,
   renderPointSaved,
@@ -104,6 +105,7 @@ import {
   renderGate,
   renderStillNotSubscribed,
 } from "./lib/gate";
+import { COVERAGE_CAVEAT, nearestShelters } from "./lib/shelters";
 import {
   canReport,
   corroborate,
@@ -1312,6 +1314,9 @@ async function personalCommand(
   const { command, args, chatId, chatType } = parsed;
   const personalCommands = new Set([
     "my",
+    "shelter",
+    "укриття",
+    "сховатись",
     "radar",
     "me",
     "settings",
@@ -1383,6 +1388,23 @@ async function personalCommand(
       text: sub.muted ? `🔔 Сповіщення знову увімкнені.\n\n${card.text}` : card.text,
       keyboard: card.keyboard,
     };
+  }
+
+  /*
+   * «Куди сховатися» — свідомо ПОЗА гейтом підписки, разом зі `/stop`.
+   *
+   * Гейт існує, щоб канал і бот були одним цілим; це продуктове рішення й
+   * воно доречне. Але поставити умову між людиною під тривогою й дорогою до
+   * укриття — інша річ. Ціна помилки тут не «менше підписників», а людина,
+   * яка читала екран про підписку замість того, щоб іти.
+   */
+  if (command === "shelter" || command === "укриття" || command === "сховатись") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const named = args.trim() ? matchPlace(args.trim()) : null;
+    const point = named ? { lat: named.lat, lon: named.lon } : sub.point;
+    if (!point) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
+    await sendShelters(token, chatId, point);
+    return "handled";
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -1574,6 +1596,30 @@ async function handlePickerPress(
   return true;
 }
 
+/**
+ * Надіслати перелік укриттів навколо точки.
+ *
+ * Джерело може не відповісти, і тоді мовчання — найгірше з можливого: людина
+ * натиснула «куди сховатися» й не отримала нічого. Тому поразка теж говорить,
+ * і говорить корисне — універсальна порада працює без жодних даних.
+ */
+async function sendShelters(
+  token: string,
+  chatId: number,
+  point: { lat: number; lon: number },
+): Promise<void> {
+  try {
+    // Динамічний імпорт, як і для решти даних інфраструктури: модуль тягне за
+    // собою чимало, а вебхук має лишатися легким, поки цього не попросили.
+    const { fetchShelters } = await import("./lib/infra.functions");
+    const payload = await fetchShelters(point.lat, point.lon);
+    const near = nearestShelters(point, payload.shelters, { limit: 4 });
+    await telegramSend(token, chatId, renderShelters(near, payload.caveat));
+  } catch {
+    await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT));
+  }
+}
+
 /** Натискання кнопок персонального радара. `false` — кнопка не наша. */
 async function handlePersonalPress(
   token: string,
@@ -1581,8 +1627,10 @@ async function handlePersonalPress(
 ): Promise<boolean> {
   const action = parsePersonalAction(press.data);
   if (!action) return false;
-  // Пауза сповіщень поза гейтом — з тієї ж причини, що й `/stop`.
-  if (action.kind !== "mute") {
+  // Поза гейтом: пауза сповіщень (як `/stop`) і дорога до укриття. Ставити
+  // умову між людиною під тривогою й укриттям не можна — див. команду
+  // `/shelter` нижче в цьому файлі.
+  if (action.kind !== "mute" && action.kind !== "shelter") {
     const gate = await subscriptionGate(token, press.userId);
     if (gate) {
       await telegramAnswerCallback(token, press.callbackId, "Спершу підпишіться на канал");
@@ -1652,6 +1700,22 @@ async function handlePersonalPress(
     if (card) {
       await telegramEditMessage(token, press.chatId, press.messageId, card.text, card.keyboard);
     }
+    return true;
+  }
+
+  /*
+   * «Куди сховатися». Окремим повідомленням, а не редагуванням картки:
+   * людина під тривогою має тримати обидва — і обстановку, і дорогу, — а
+   * редагування з'їло б перше заради другого.
+   */
+  if (action.kind === "shelter") {
+    if (!sub.point) {
+      await telegramAnswerCallback(token, press.callbackId, "Спершу вкажіть точку");
+      await telegramSend(token, press.chatId, renderAskPoint(), askPointKeyboard());
+      return true;
+    }
+    await telegramAnswerCallback(token, press.callbackId, "Шукаю поруч…");
+    await sendShelters(token, press.chatId, sub.point);
     return true;
   }
 
