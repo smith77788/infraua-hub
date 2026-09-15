@@ -690,3 +690,21 @@ export function callbackToast(action: AdminAction, state: LayersState): string {
       return "Оновлено";
   }
 }
+
+/**
+ * `retry_after` із відповіді Telegram на 429, у секундах.
+ *
+ * Telegram кладе його в `parameters.retry_after`. Розбираємо саме з тіла, а не
+ * з заголовка: заголовок `Retry-After` він ставить не завжди, а тіло — завжди.
+ * Усе, що не схоже на додатне число секунд, дає `null`: чекати «стільки,
+ * скільки сказало сміття» гірше, ніж чекати усталену секунду.
+ */
+export function parseRetryAfter(body: string): number | null {
+  try {
+    const parsed = JSON.parse(body) as { parameters?: { retry_after?: unknown } };
+    const value = parsed.parameters?.retry_after;
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}

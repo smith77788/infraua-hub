@@ -16,6 +16,7 @@ import {
   parseDocument,
   parseLayersArg,
   parseLocation,
+  parseRetryAfter,
   publicCommands,
   purgeKeyboard,
   renderAdminPanel,
@@ -573,5 +574,34 @@ describe("parseChatMember", () => {
   it("chat_member є серед типів, на які підписаний вебхук", () => {
     // Інакше оновлення просто не прийде, і гейт лишиться напівзамкненим.
     expect([...WEBHOOK_UPDATES]).toContain("chat_member");
+  });
+});
+
+/*
+ * 429 губився мовчки в найдорожчому шляху продукту — доставці тривоги.
+ * Оброблявся лише 403, тож повідомлення з 429 писалося в лог і зникало:
+ * людина, якій ішла тривога, просто її не діставала.
+ */
+describe("parseRetryAfter", () => {
+  it("бере retry_after із тіла відповіді Telegram", () => {
+    const body = JSON.stringify({
+      ok: false,
+      error_code: 429,
+      description: "Too Many Requests: retry after 7",
+      parameters: { retry_after: 7 },
+    });
+    expect(parseRetryAfter(body)).toBe(7);
+  });
+
+  it("немає параметра — немає числа", () => {
+    expect(parseRetryAfter(JSON.stringify({ ok: false, error_code: 400 }))).toBeNull();
+  });
+
+  it("сміття не стає строком очікування", () => {
+    // Чекати «стільки, скільки сказало сміття» гірше, ніж усталену секунду.
+    expect(parseRetryAfter("not json")).toBeNull();
+    expect(parseRetryAfter(JSON.stringify({ parameters: { retry_after: "7" } }))).toBeNull();
+    expect(parseRetryAfter(JSON.stringify({ parameters: { retry_after: -3 } }))).toBeNull();
+    expect(parseRetryAfter(JSON.stringify({ parameters: { retry_after: 0 } }))).toBeNull();
   });
 });

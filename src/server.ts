@@ -33,6 +33,7 @@ import {
   renderUnknown,
   escapeHtml,
   purgeKeyboard,
+  parseRetryAfter,
   secretMatches,
   senderId,
 } from "./lib/telegram";
@@ -297,27 +298,74 @@ function consoleUrl(request: Request): string {
   return publicOrigin(request);
 }
 
+/** Скільки чекати на відповідь Telegram, перш ніж вважати виклик мертвим. */
+const TELEGRAM_TIMEOUT_MS = 15_000;
+
+/** Стеля очікування після 429 — довше чекати немає сенсу, краще наступний обхід. */
+const MAX_RETRY_AFTER_S = 30;
+
+/**
+ * Надіслати повідомлення.
+ *
+ * Тут закрито дві вади, і обидві — в найдорожчому шляху продукту, доставці
+ * тривоги.
+ *
+ * **429 губився мовчки.** Telegram обмежує темп і на перевищення відповідає
+ * `429` з полем `retry_after`. Оброблявся лише `403`, тож повідомлення з 429
+ * писалося в лог і зникало: людина, якій ішла тривога, просто її не діставала.
+ * Гірше, обхід продовжував слати в тому ж темпі, поглиблюючи обмеження. Тепер
+ * чекаємо рівно стільки, скільки просить Telegram, і повторюємо ОДИН раз.
+ *
+ * **Не було строку.** `fetch` без таймауту може висіти як завгодно довго, а
+ * обхід підписників захищений прапорцем від перекриття — тож одне зависле
+ * зʼєднання зупиняло ВСІ тривоги до перезапуску процесу. Тепер у кожного
+ * виклику свій строк.
+ */
 async function telegramSend(
   token: string,
   chatId: number,
   text: string,
   replyMarkup?: unknown,
 ): Promise<{ ok: boolean; status: number }> {
-  const response = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    }),
+  const body = JSON.stringify({
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
-  if (!response.ok) {
-    console.error("telegram sendMessage failed", response.status, await response.text());
-  }
-  return { ok: response.ok, status: response.status };
+
+  const attempt = async (): Promise<{ ok: boolean; status: number; retryAfter: number | null }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+      if (response.ok) return { ok: true, status: response.status, retryAfter: null };
+      const raw = await response.text();
+      console.error("telegram sendMessage failed", response.status, raw);
+      return { ok: false, status: response.status, retryAfter: parseRetryAfter(raw) };
+    } catch (err) {
+      // Обрив або строк. Для викликача це така сама поразка, як HTTP-помилка,
+      // але статусу немає — 0 означає «не доїхало».
+      console.error("telegram sendMessage failed", err);
+      return { ok: false, status: 0, retryAfter: null };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const first = await attempt();
+  if (first.ok || first.status !== 429) return { ok: first.ok, status: first.status };
+
+  const wait = Math.min(first.retryAfter ?? 1, MAX_RETRY_AFTER_S);
+  await new Promise((r) => setTimeout(r, wait * 1000));
+  const second = await attempt();
+  return { ok: second.ok, status: second.status };
 }
 
 /**
