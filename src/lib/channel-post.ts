@@ -23,7 +23,8 @@
 import type { Threat, ThreatType } from "./air";
 import { OBLASTS } from "./alerts";
 import { distanceKm } from "./infra-types";
-import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
+import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta";
+import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 import { swarmForecast } from "./swarm";
 import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
 import { verifyThreat } from "./advisory";
@@ -65,7 +66,11 @@ export function oblastOf(lat: number, lon: number): string {
  * Місто в межах `nearKm` і курс у секторі ±`sectorDeg` на нього. ETA — за
  * типовою швидкістю типу цілі (SPEED_KMH): орієнтир, скільки лишилось.
  */
-function loudCity(t: Threat, nearKm = 80, sectorDeg = 40): { name: string; etaMin: number } | null {
+function loudCity(
+  t: Threat,
+  nearKm = 80,
+  sectorDeg = 40,
+): { name: string; etaMin: number; etaRangeMin: [number, number] } | null {
   if (typeof t.heading !== "number") return null;
   let best: { name: string; d: number } | null = null;
   for (const c of CITY_REFS) {
@@ -77,8 +82,20 @@ function loudCity(t: Threat, nearKm = 80, sectorDeg = 40): { name: string; etaMi
     }
   }
   if (!best) return null;
-  const speed = SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
-  return { name: best.name, etaMin: Math.max(1, Math.round((best.d / speed) * 60)) };
+  const q = t.quality ?? EMPTY_QUALITY;
+  const speed = q.speedKmh ?? SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+  // Вилка з тих самих двох причин, що й усюди: не знаємо точно, ДЕ ціль, і не
+  // знаємо точно, ЩО це.
+  const [slow, fast] = speedRangeFor(t.type, q.speedKmh);
+  const u = displayRadiusKm(q);
+  return {
+    name: best.name,
+    etaMin: Math.max(1, Math.round((best.d / speed) * 60)),
+    etaRangeMin: [
+      Math.max(1, Math.round((Math.max(0, best.d - u) / fast) * 60)),
+      Math.max(1, Math.round(((best.d + u) / slow) * 60)),
+    ],
+  };
 }
 
 // Значок типу цілі — щоб пост читався оком, а не суцільним рядком.
@@ -264,7 +281,8 @@ interface Group {
   oblast: string;
   byType: Map<ThreatType, number>;
   /** Місто на курсі → мінімальна ETA (хв). */
-  loud: Map<string, number>;
+  /** Місто → найтерміновіший час до нього: найімовірніший і вилка. */
+  loud: Map<string, { etaMin: number; etaRangeMin: [number, number] }>;
   /** Тип → індекс румба 0..7 (слова дає словник). */
   courses: Map<ThreatType, number>;
   /** Скільки цілей області спираються лише на одне непідтверджене джерело. */
@@ -317,7 +335,11 @@ export function renderChannelPost(
     const loud = loudCity(t);
     if (loud) {
       const prev = g.loud.get(loud.name);
-      if (prev === undefined || loud.etaMin < prev) g.loud.set(loud.name, loud.etaMin);
+      // Порівнюємо за найранішим часом: у переліку має стояти найтерміновіше
+      // з можливого, а не найімовірніше.
+      if (prev === undefined || loud.etaRangeMin[0] < prev.etaRangeMin[0]) {
+        g.loud.set(loud.name, { etaMin: loud.etaMin, etaRangeMin: loud.etaRangeMin });
+      }
     }
   }
 
@@ -354,7 +376,9 @@ export function renderChannelPost(
     // Без прийменника, щоб уникнути відмінка: назви в даних — у називному
     // («Харківщина», «Запоріжжя»), і «громко в Запоріжжя» різало б слух.
     if (g.loud.size) {
-      line += lex.towards([...g.loud.entries()].map(([n, e]) => lex.eta(n, e)));
+      line += lex.towards(
+        [...g.loud.entries()].map(([n, e]) => lex.eta(n, e.etaMin, e.etaRangeMin)),
+      );
     }
     // Позначка стоїть ЛИШЕ коли підтвердження немає в жодної цілі області:
     // часткова слабкість тут не повідомляється, бо «частково непідтверджено»

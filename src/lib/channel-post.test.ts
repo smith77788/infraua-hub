@@ -52,8 +52,13 @@ describe("renderChannelPost", () => {
       threat({ lat: 49.3, lon: 34.55, type: "shahed", heading: 0 }),
     ])!;
     expect(post.text).toContain("у бік: Полтавщина");
-    // ETA до міста — «(~N хв)» за типовою швидкістю типу.
-    expect(post.text).toMatch(/у бік: Полтавщина \(~\d+ хв\)/);
+    /*
+     * Час до міста подається вилкою, коли вона широка, і одним числом, коли
+     * вузька. Для шахеда вона широка завжди: «шахед» покриває і 185 км/год,
+     * і 600, а позиція відома з точністю, яку називає джерело. Одне число тут
+     * ішло б у канал на всю країну як вимір.
+     */
+    expect(post.text).toMatch(/у бік: Полтавщина \((~\d+ хв|\d+–\d+ хв|може бути вже поруч)\)/);
   });
 
   it("шапка веде найгострішим: ракета важливіша за мопед", () => {
@@ -294,5 +299,49 @@ describe("рядок змін читається однозначно", () => {
   it("зникнення цілей не позначається зеленою галочкою — вона читається як відбій", () => {
     expect(after.text).not.toContain("✅");
     expect(after.text).toContain("Цілей більше не бачимо");
+  });
+});
+
+/*
+ * Вилка чесна, але чесність тут не єдина вимога. Коли розкид позиції більший
+ * за відстань до міста, нижній край впирається в нуль і виходить «1–29 хв» —
+ * твердження формально правдиве й порожнє водночас. У нічному пості порожнє
+ * коштує уваги так само, як хибне.
+ */
+describe("час до міста: вилка, слова або одне число", () => {
+  const q = (uncertaintyKm: number, presumptiveCourse = false) => ({
+    uncertaintyKm,
+    position: "approx" as const,
+    lifecycle: "tracking" as const,
+    presumptiveCourse,
+    speedKmh: null,
+  });
+
+  it("розкид більший за відстань — кажемо словами, а не порожнім інтервалом", () => {
+    const post = renderChannelPost([
+      threat({ lat: 49.3, lon: 34.55, type: "shahed", heading: 0, quality: q(45) }),
+    ])!;
+    expect(post.text).toContain("може бути вже поруч");
+    expect(post.text).not.toMatch(/\(1–\d+ хв\)/);
+  });
+
+  it("помірний розкид дає справжню вилку", () => {
+    const post = renderChannelPost([
+      threat({ lat: 49.0, lon: 34.55, type: "shahed", heading: 0, quality: q(4) }),
+    ])!;
+    expect(post.text).toMatch(/\(\d+–\d+ хв\)/);
+  });
+
+  it("заміряна швидкість і мала невизначеність дають одне число", () => {
+    const post = renderChannelPost([
+      threat({
+        lat: 49.35,
+        lon: 34.55,
+        type: "shahed",
+        heading: 0,
+        quality: { ...q(0.5), speedKmh: 185 },
+      }),
+    ])!;
+    expect(post.text).toMatch(/\(~\d+ хв\)/);
   });
 });

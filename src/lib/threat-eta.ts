@@ -240,8 +240,16 @@ export function projectThreats(
 
 export interface CityETA {
   name: string;
-  /** Оцінка часу підльоту до міста, хв (за типовою швидкістю типу). */
+  /** Найімовірніша оцінка часу підльоту до міста, хв. */
   etaMin: number;
+  /**
+   * Вилка часу, хв — від найранішого до найпізнішого.
+   *
+   * Та сама причина, що й усюди: позиція відома з точністю, яку називає
+   * джерело, а «шахед» покриває і 185 км/год, і 600. Одне число тут іде в
+   * канал на всю країну, тож ціна вигаданої точності тут найбільша.
+   */
+  etaRangeMin: [number, number];
   distanceKm: number;
 }
 
@@ -260,7 +268,10 @@ export function citiesOnCourse(
   if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) return [];
   const corridorDeg = opts.corridorDeg ?? 35;
   const maxRangeKm = opts.maxRangeKm ?? 160;
-  const speed = SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+  const q = t.quality ?? EMPTY_QUALITY;
+  const speed = q.speedKmh ?? SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
+  const [slow, fast] = speedRangeFor(t.type, q.speedKmh);
+  const u = displayRadiusKm(q);
   const out: CityETA[] = [];
   for (const c of cities) {
     const d = distanceKm(t, c);
@@ -270,8 +281,14 @@ export function citiesOnCourse(
       name: c.name,
       distanceKm: Math.round(d),
       etaMin: Math.max(1, Math.round((d / speed) * 60)),
+      etaRangeMin: [
+        Math.max(1, Math.round((Math.max(0, d - u) / fast) * 60)),
+        Math.max(1, Math.round(((d + u) / slow) * 60)),
+      ],
     });
   }
-  out.sort((a, b) => a.etaMin - b.etaMin);
+  // Сортуємо за НАЙРАНІШИМ часом: перше місто в переліку — те, куди ціль може
+  // дійти раніше за всіх, а не те, куди вона дійде найімовірніше.
+  out.sort((a, b) => a.etaRangeMin[0] - b.etaRangeMin[0] || a.etaMin - b.etaMin);
   return out.slice(0, opts.limit ?? 3);
 }

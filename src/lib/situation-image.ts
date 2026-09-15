@@ -26,6 +26,7 @@
 import type { Threat, ThreatType } from "./air";
 import { UA_OUTLINE } from "./ua-outline";
 import { UA_OBLASTS } from "./ua-oblasts";
+import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
 
 const W = 1000;
 const PAD = 24;
@@ -68,35 +69,76 @@ const DRONE = "M0,-9 L8,7.5 L0,3.5 L-8,7.5 Z";
 
 type Proj = (lat: number, lon: number) => [number, number];
 
+/** Пікселів на кілометр для оглядової проєкції (SCALE — px на градус широти). */
+const PX_PER_KM = SCALE / 111.32;
+
 function marker(t: Threat): string {
-  return markerWith(t, project);
+  return markerWith(t, project, PX_PER_KM);
 }
 
-function markerWith(t: Threat, proj: Proj): string {
+/**
+ * Позначка цілі на картинці, яку бачить канал.
+ *
+ * Тут виправлено дві речі, і саме тут вони важили найбільше: цю картинку
+ * бачить найбільше людей з усього, що продукт робить, і бачить її швидко —
+ * як факт, а не як оцінку.
+ *
+ * **Ореол став колом невизначеності.** Раніше це був декоративний кружок
+ * сталого радіуса 11 px довкола кожної позначки. Тепер його радіус — той
+ * самий, який називає джерело (від 4 до 45 км), переведений у пікселі. Тобто
+ * розмите коло тепер буквально означає «ціль десь тут», і ціль із розкидом
+ * 45 км більше не виглядає такою ж точною, як ціль із розкидом 4 км.
+ *
+ * **Припущений курс більше не малюється як спостережений.** Джерело позначає
+ * частину курсів припущеними — у живій відповіді таких було вісім із
+ * пʼятнадцяти, — а стрілка дрона малювалась однаково гострою для всіх. Тепер
+ * припущений курс дає порожній контур замість залитого силуету: напрямок
+ * видно, але видно й те, що це здогадка.
+ */
+function markerWith(t: Threat, proj: Proj, pxPerKm: number): string {
   const type: ThreatType = t.type ?? "unknown";
   const [x, y] = proj(t.lat, t.lon);
   const color = COLOR[type];
-  const glow = `<circle cx="${x}" cy="${y}" r="11" fill="${color}" opacity="0.28"/>`;
+  const q = t.quality ?? EMPTY_QUALITY;
   const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
+  const observed = courseIsObserved(q);
+
+  /*
+   * Радіус ореолу — заявлена невизначеність у пікселях, але не менший за саму
+   * позначку: коло, менше за дрон, який у ньому стоїть, не читається як коло
+   * й виглядає як брудна обводка.
+   */
+  const rKm = displayRadiusKm(q);
+  const r = Math.max(11, Math.round(rKm * pxPerKm));
+  const halo =
+    `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.16"/>` +
+    // Заявлений джерелом радіус — тонкий контур; наше припущення, коли
+    // джерело промовчало, лишається без нього.
+    (radiusIsStated(q)
+      ? `<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="${color}" stroke-width="0.8" opacity="0.4"/>`
+      : "");
 
   // Дрон зі СТРІЛКОЮ — лише коли курс відомий. Інакше не вигадуємо напрямок
   // (це й була причина «курс неправильний»): малюємо нейтральну крапку.
   if ((type === "shahed" || type === "reactive") && hasCourse) {
+    const fill = observed ? color : "none";
+    const width = observed ? 1.4 : 1.6;
+    const stroke = observed ? "#0a0e14" : color;
     return (
-      glow +
+      halo +
       `<g transform="translate(${x} ${y}) rotate(${Math.round(t.heading as number)}) scale(0.95)">` +
-      `<path d="${DRONE}" fill="${color}" stroke="#0a0e14" stroke-width="1.4" stroke-linejoin="round"/></g>`
+      `<path d="${DRONE}" fill="${fill}" stroke="${stroke}" stroke-width="${width}" stroke-linejoin="round"/></g>`
     );
   }
   if (type === "shahed" || type === "reactive") {
     return (
-      glow +
+      halo +
       `<circle cx="${x}" cy="${y}" r="5.5" fill="${color}" stroke="#0a0e14" stroke-width="1.4"/>`
     );
   }
   // Ракети/КАБ/інше — компактна позначка-ромб, щоб не плутати з дроном.
   return (
-    glow +
+    halo +
     `<path d="M${x},${y - 8} L${x + 6},${y} L${x},${y + 8} L${x - 6},${y} Z" ` +
     `fill="${color}" stroke="#0a0e14" stroke-width="1.4" stroke-linejoin="round"/>`
   );
@@ -140,6 +182,38 @@ function trackPath(track: TrackLine): string {
   );
 }
 
+/**
+ * Легенда просто в картинці.
+ *
+ * Картинку з каналу пересилають, і підпис при цьому лишається позаду: далі
+ * вона живе сама по собі, у чатах, де ніхто не читав нашого тексту. Тому те,
+ * без чого її можна прочитати неправильно, має бути на ній самій.
+ *
+ * Пояснюємо рівно дві речі, і обидві — про те, чого НЕ видно з вигляду:
+ * розмите коло це розкид позиції, а порожня стрілка — курс, якого ніхто не
+ * спостерігав. Решта (колір за типом) зрозуміла з підпису або неважлива.
+ */
+function legend(showPresumed: boolean): string {
+  const x = PAD + 4;
+  const y = H - PAD - 34;
+  const rows = [
+    `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="#ffd23f" opacity="0.16"/>` +
+      `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="none" stroke="#ffd23f" stroke-width="0.8" opacity="0.4"/>` +
+      `<circle cx="${x + 8}" cy="${y + 4}" r="3" fill="#ffd23f"/>` +
+      `<text x="${x + 24}" y="${y + 8}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+      `коло — розкид позиції, як його називає джерело</text>`,
+  ];
+  if (showPresumed) {
+    rows.push(
+      `<g transform="translate(${x + 8} ${y + 26}) scale(0.62)">` +
+        `<path d="${DRONE}" fill="none" stroke="#ffd23f" stroke-width="1.6" stroke-linejoin="round"/></g>` +
+        `<text x="${x + 24}" y="${y + 30}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+        `порожня стрілка — курс припущений, не спостережений</text>`,
+    );
+  }
+  return rows.join("");
+}
+
 export function situationSvg(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
@@ -153,6 +227,14 @@ export function situationSvg(
   // Треки — ПІД позначками: свіжа позиція має лишатись найпомітнішою.
   const lines = tracks.map(trackPath).join("");
   const markers = threats.map(marker).join("");
+  // Пояснення про припущений курс показуємо лише тоді, коли такі цілі справді
+  // є: легенда про те, чого на картинці немає, — це шум.
+  const anyPresumed = threats.some(
+    (t) =>
+      typeof t.heading === "number" &&
+      Number.isFinite(t.heading) &&
+      !courseIsObserved(t.quality ?? EMPTY_QUALITY),
+  );
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
@@ -163,6 +245,9 @@ export function situationSvg(
     `<path d="${outline} Z" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
     lines +
     markers +
+    // Легенда лише тоді, коли є що пояснювати: підпис до значків, яких на
+    // картинці немає, — це шум, а порожнє небо має читатися як порожнє.
+    (threats.length ? legend(anyPresumed) : "") +
     `</svg>`
   );
 }
@@ -240,7 +325,7 @@ export function situationSvgZoom(
 
   const markers = threats
     .filter((t) => inView(t.lat, t.lon))
-    .map((t) => markerWith(t, pr))
+    .map((t) => markerWith(t, pr, scale / 111.32))
     .join("");
 
   const [cx, cy] = pr(center.lat, center.lon);
