@@ -107,7 +107,18 @@ export default function TimelinePlayer({ onCursor }: Props) {
         className="h-1 flex-1 cursor-pointer accent-primary disabled:cursor-default disabled:opacity-40"
       />
 
-      <span className="w-32 shrink-0 text-right font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+      {/*
+        Ширина підпису мусить поступатися, а не тримати рядок.
+        
+        Було `w-32 shrink-0`: сто двадцять вісім пікселів, які не стискаються
+        нізащо. На екрані 320 px (це iPhone SE та чимало Android) рядок через
+        це виходив за межу на сорок пікселів, і ВСЯ сторінка починала їздити
+        вбік. Заміряно в браузері: scrollWidth 360 проти clientWidth 320.
+        
+        Тепер підпис має стелю, але може стиснутись, а довгу дату обрізає
+        багатокрапкою замість того, щоб ламати розмітку.
+      */}
+      <span className="min-w-0 max-w-32 flex-shrink truncate text-right font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
         {label}
       </span>
     </div>
