@@ -27,6 +27,7 @@ import {
   HelpCircle,
   Search,
   Share2,
+  Shield,
   Table2,
   Waypoints,
   X,
@@ -1145,6 +1146,20 @@ function Console() {
               <Activity className="size-3.5" /> Пожежі (NASA FIRMS, 24 год)
               {fires.length > 0 ? (
                 <span className="ml-auto font-mono text-[10px] opacity-70">{fires.length}</span>
+              ) : null}
+            </button>
+
+            <button
+              onClick={() => setShowShelters((v) => !v)}
+              className={`flex w-full items-center gap-2 rounded border px-2.5 py-1.5 text-xs transition-colors ${
+                showShelters
+                  ? "border-cyan-500/60 text-cyan-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              <Shield className="size-3.5" /> Укриття (OSM)
+              {showShelters && shelters.length > 0 ? (
+                <span className="ml-auto font-mono text-[10px] opacity-70">{shelters.length}</span>
               ) : null}
             </button>
 
