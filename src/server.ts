@@ -750,6 +750,8 @@ let pendingDigest: DayStats | null = null;
 let digestPostedFor: string | null = null;
 /** Коли востаннє давали адресний сигнал по місту (для кулдауна). */
 let cityAlertedAt: Record<string, number> = {};
+/** Чи підтягнули кулдаун міст зі стійкого сховища (раз на процес). */
+let cityCooldownHydrated = false;
 /** Коли востаннє додавали час у добову статистику. */
 let lastAccrualAt = 0;
 /** Коли востаннє щось зробили в каналі — надіслали пост або відредагували. */
@@ -794,6 +796,22 @@ async function maybeCityAlert(
 ): Promise<void> {
   const candidates = cityAlerts(threats, undefined, { limit: 1 });
   if (candidates.length === 0) return;
+  // Кулдаун по місту має пережити редеплой: інакше після кожного перезапуску
+  // процесу памʼять «коли сигналили» скидається, і людину будять удруге по
+  // тому самому місту. Стійка позначка (той самий том, що й підписники) —
+  // джерело істини; на ефемерному сховищі тихо лишаємось на памʼяті процесу.
+  if (!cityCooldownHydrated) {
+    cityCooldownHydrated = true;
+    const raw = await readMarker("city-cooldown");
+    if (raw) {
+      try {
+        const stored = JSON.parse(raw) as Record<string, number>;
+        cityAlertedAt = { ...stored, ...cityAlertedAt };
+      } catch {
+        /* бита позначка — ігноруємо, працюємо з памʼяті */
+      }
+    }
+  }
   const { fresh, lastAlertedAt } = selectFreshCityAlerts(
     candidates,
     cityAlertedAt,
@@ -802,6 +820,9 @@ async function maybeCityAlert(
   );
   cityAlertedAt = lastAlertedAt;
   if (fresh.length === 0) return;
+  // Записуємо ПЕРЕД надсиланням: якщо тік упаде на середині, кулдаун уже
+  // зафіксовано, і повтору не буде.
+  await writeMarker("city-cooldown", JSON.stringify(cityAlertedAt));
 
   try {
     const { renderZoomPng } = await import("./lib/situation-image");
