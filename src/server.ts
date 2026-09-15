@@ -87,6 +87,9 @@ import {
 import { kyivDate, kyivHour } from "./lib/kyiv";
 import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
+import { buildGeoIndex, candidatesFor } from "./lib/geo-index";
+import { deliver, type Envelope, Priority } from "./lib/delivery";
+import { capacityFor, renderCapacity, USEFUL_WINDOW_MS } from "./lib/capacity";
 import {
   buildBackup,
   mergeCircles,
@@ -321,12 +324,23 @@ const MAX_RETRY_AFTER_S = 30;
  * зʼєднання зупиняло ВСІ тривоги до перезапуску процесу. Тепер у кожного
  * виклику свій строк.
  */
+/**
+ * `queued` — виклик із черги розсилки.
+ *
+ * Різниця не косметична. Поодинокий виклик (відповідь на команду) може сам
+ * перечекати 429 і повторити: людина чекає на відповідь, і пауза в секунду їй
+ * непомітна. Виклик із черги так робити НЕ МОЖЕ: 429 означає, що
+ * перевантажений бот цілком, і чекати має вся черга, а не одне повідомлення в
+ * ній. Тому тут ми лише повертаємо `retry_after` нагору — рішення ухвалює той,
+ * хто бачить чергу.
+ */
 async function telegramSend(
   token: string,
   chatId: number,
   text: string,
   replyMarkup?: unknown,
-): Promise<{ ok: boolean; status: number }> {
+  queued = false,
+): Promise<{ ok: boolean; status: number; retryAfterSec?: number }> {
   const body = JSON.stringify({
     chat_id: chatId,
     text,
@@ -361,6 +375,13 @@ async function telegramSend(
 
   const first = await attempt();
   if (first.ok || first.status !== 429) return { ok: first.ok, status: first.status };
+  if (queued) {
+    return {
+      ok: false,
+      status: 429,
+      retryAfterSec: Math.min(first.retryAfter ?? 1, MAX_RETRY_AFTER_S),
+    };
+  }
 
   const wait = Math.min(first.retryAfter ?? 1, MAX_RETRY_AFTER_S);
   await new Promise((r) => setTimeout(r, wait * 1000));
@@ -1977,8 +1998,6 @@ async function handlePersonalPress(
 const ALERT_TICK_EVERY_MS = 90 * 1000;
 /** Пауза між надсиланнями: Telegram приймає до 30 повідомлень на секунду. */
 const ALERT_SEND_GAP_MS = 40;
-/** Стеля на один обхід — щоб один наліт не зʼїв увесь такт. */
-const ALERT_MAX_PER_SWEEP = 400;
 /** Скільки передтривога чекає на сирену, перш ніж перестати рахуватись. */
 const PRE_ALERT_TTL_MS = 60 * 60 * 1000;
 
@@ -1998,6 +2017,84 @@ export interface AlertSweepResult {
  * лише мережа й облік: це навмисно, бо саме сюди найлегше було б протягнути
  * «ну надішлемо про всяк випадок», яке й убиває такі боти.
  */
+/** Що саме несе конверт черги — щоб надсилач знав, кому й що записати після. */
+interface AlertPayload {
+  sub: Subscriber;
+  text: string;
+  keyboard: unknown;
+  decision: ReturnType<typeof decideAlert>;
+  pre: boolean;
+  oblast: string;
+}
+
+const LEVEL_PRIORITY: Record<string, Priority> = {
+  shelter: Priority.Shelter,
+  attention: Priority.Attention,
+  watch: Priority.Watch,
+  calm: Priority.Routine,
+};
+
+/**
+ * Кого взагалі має сенс обраховувати цього такту.
+ *
+ * Раніше — усіх. Для кожного підписника рахувалась відстань до кожної цілі,
+ * тобто O(підписники × цілі), і майже вся ця робота була наперед марною: наліт
+ * стоїть над кількома областями, а решта країни до нього стосунку не має.
+ *
+ * Тепер питання перевернуте: не «які цілі поруч із людиною», а «хто поруч із
+ * ціллю». Підписники розкладаються по просторовій сітці РІВНЯМИ РАДІУСА — той,
+ * хто просив 25 км, і не має перевірятись на сотні.
+ *
+ * Заміряно (рівномірні підписники по містах, хвиля над двома областями,
+ * 18 цілей): 1 000 000 підписників — повний перебір 593 мс проти 229 мс з
+ * індексом плюс 179 мс на побудову; кандидатів 188 831 замість 1 000 000, і
+ * знайдено рівно тих самих 65 169. Тест звіряє збіг із повним перебором.
+ *
+ * Межа названа прямо: коли цілі стоять по всій країні, відсіювати нема чого, і
+ * індекс лише додає роботи. Але в цьому випадку вузьке місце вже не процесор —
+ * мільйон сповіщень на документованих 30/с це дев'ять годин, тобто на три
+ * порядки більше за будь-яку економію тут.
+ */
+function alertCandidates(subs: readonly Subscriber[], threats: readonly Threat[]): Subscriber[] {
+  if (threats.length === 0) return [];
+
+  const byRadius = new Map<number, (Subscriber & { lat: number; lon: number })[]>();
+  for (const sub of subs) {
+    if (!sub.point) continue;
+    const flat = { ...sub, lat: sub.point.lat, lon: sub.point.lon };
+    const bucket = byRadius.get(sub.radiusKm);
+    if (bucket) bucket.push(flat);
+    else byRadius.set(sub.radiusKm, [flat]);
+  }
+
+  const seen = new Set<number>();
+  const out: Subscriber[] = [];
+  for (const [radiusKm, group] of byRadius) {
+    const index = buildGeoIndex(group, 50);
+    for (const cand of candidatesFor(index, threats, radiusKm, (x) => x.chatId)) {
+      if (seen.has(cand.chatId)) continue;
+      seen.add(cand.chatId);
+      out.push(cand);
+    }
+  }
+  return out;
+}
+
+/**
+ * Один обхід підписників.
+ *
+ * Дві архітектурні речі, яких тут не було:
+ *
+ * 1. **Відбір кандидатів** (вище) — щоб обхід не ріс від тих, кого наліт не
+ *    стосується.
+ * 2. **Черга з пріоритетом і строком** замість циклу з паузами. Telegram
+ *    документує ~30 повідомлень/с; коли попередити треба більше людей, ніж
+ *    дозволено, порядок вирішує, хто отримає попередження вчасно. Раніше цей
+ *    порядок задавався тим, як підписники лежали у файлі, а решта мовчки
+ *    відкидалась глухим лічильником «не більше 400 за обхід».
+ *
+ * Рішення «будити чи ні» лишається там, де було, — у чистій `decideAlert`.
+ */
 async function personalAlertSweep(): Promise<AlertSweepResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   const empty: AlertSweepResult = { checked: 0, sent: 0, skipped: 0 };
@@ -2010,14 +2107,20 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   const official = await fetchOfficialAlerts();
   const now = Date.now();
   const hour = kyivHour(new Date(now));
-  let sent = 0;
-  let skipped = 0;
 
-  for (const raw of subs) {
-    if (sent >= ALERT_MAX_PER_SWEEP) {
-      skipped += 1;
-      continue;
-    }
+  // Кандидати за близькістю — плюс ті, у кого лишився стан із минулого разу
+  // (надіслана передтривога, перелік уже оголошених цілей). Їх мало, і без них
+  // прострочена передтривога висіла б вічно, а історія сповіщень не старіла б.
+  const nearThreats = alertCandidates(subs, threats);
+  const nearIds = new Set(nearThreats.map((s) => s.chatId));
+  const stateful = subs.filter(
+    (s) => !nearIds.has(s.chatId) && (s.preAlert || s.lastAlertIds.length > 0),
+  );
+  const considered = [...nearThreats, ...stateful];
+
+  const queue: Envelope<AlertPayload>[] = [];
+
+  for (const raw of considered) {
     const sub = forgetStale(raw, now);
     const point = sub.point;
     if (!point) continue;
@@ -2038,9 +2141,19 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     // звітує заміряним числом, а не обіцянкою.
     if (phase === "official" && sub.preAlert && sub.preAlert.oblast === oblast) {
       const lead = leadMinutes(sub.preAlert.at, now);
-      await telegramSend(token, sub.chatId, renderOfficialConfirmed(oblast, lead));
-      await putSubscriber({ ...sub, preAlert: null });
-      await new Promise((r) => setTimeout(r, ALERT_SEND_GAP_MS));
+      queue.push({
+        chatId: sub.chatId,
+        priority: Priority.Routine,
+        expiresAt: now + USEFUL_WINDOW_MS,
+        payload: {
+          sub,
+          text: renderOfficialConfirmed(oblast, lead),
+          keyboard: undefined,
+          decision: { send: true, reason: "офіційну оголошено", ids: [], level: "watch" },
+          pre: false,
+          oblast,
+        },
+      });
       continue;
     }
 
@@ -2055,25 +2168,61 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     // Поспішити з попередженням безпечно — поспішити з відбоєм смертельно.
     // Тому сирени ми НЕ чекаємо, але й не вдаємо, що вона вже пролунала.
     const pre = phase === "pre";
-    const res = await telegramSend(
-      token,
-      sub.chatId,
-      renderAlert(assess, danger, point.label, { pre, trust: trustLine(assess) }),
-      personalKeyboard(danger.level === "shelter" && sub.circle ? { withOk: true } : {}),
-    );
-    if (res.ok) {
-      sent += 1;
-      const marked = markAlerted(sub, decision, now);
-      await putSubscriber(pre ? { ...marked, preAlert: { at: now, oblast } } : marked);
-    } else if (res.status === 403) {
-      // Бота заблокували або видалили чат. Далі слати — марно витрачати квоту
-      // на кожному обході; ставимо на паузу, налаштування лишаються.
-      await putSubscriber({ ...sub, muted: true });
-    }
-    await new Promise((r) => setTimeout(r, ALERT_SEND_GAP_MS));
+    queue.push({
+      chatId: sub.chatId,
+      priority: LEVEL_PRIORITY[danger.level] ?? Priority.Watch,
+      // Строк придатності — не стільки, скільки не шкода чекати, а стільки,
+      // скільки попередження ще щось означає.
+      expiresAt: now + USEFUL_WINDOW_MS,
+      payload: {
+        sub,
+        text: renderAlert(assess, danger, point.label, { pre, trust: trustLine(assess) }),
+        keyboard: personalKeyboard(
+          danger.level === "shelter" && sub.circle ? { withOk: true } : {},
+        ),
+        decision,
+        pre,
+        oblast,
+      },
+    });
   }
 
-  return { checked: subs.length, sent, skipped };
+  const report = await deliver(
+    queue,
+    async (envelope) => {
+      const { sub, text, keyboard, decision, pre, oblast } = envelope.payload;
+      const res = await telegramSend(token, sub.chatId, text, keyboard, true);
+      if (res.ok) {
+        const marked = markAlerted(sub, decision, Date.now());
+        await putSubscriber(pre ? { ...marked, preAlert: { at: Date.now(), oblast } } : marked);
+      } else if (res.status === 403) {
+        // Бота заблокували або видалили чат. Далі слати — марно витрачати
+        // бюджет, потрібний тим, хто чекає.
+        await putSubscriber({ ...sub, muted: true });
+      }
+      return {
+        ok: res.ok,
+        status: res.status,
+        ...(res.retryAfterSec !== undefined ? { retryAfterSec: res.retryAfterSec } : {}),
+      };
+    },
+    { windowMs: ALERT_TICK_EVERY_MS },
+  );
+
+  if (report.dropped > 0 || report.expired > 0) {
+    // Це не дрібниця в логах, а втрачені попередження. Мовчки не дійти до
+    // кінця черги — те саме, що не надіслати, тільки непомічене.
+    console.warn(
+      `alert sweep: не доставлено ${report.dropped + report.expired}` +
+        ` (бюджет ${report.dropped}, прострочено ${report.expired}) із ${queue.length}`,
+    );
+  }
+
+  return {
+    checked: considered.length,
+    sent: report.sent,
+    skipped: report.dropped + report.expired,
+  };
 }
 
 function startAlertScheduler(): void {
@@ -2469,6 +2618,8 @@ async function adminCommand(
         `Отримують сповіщення: <b>${st.active}</b>`,
         "",
         ...storageLines(st),
+        "",
+        ...renderCapacity(capacityFor(st.active)),
         ...(st.lastError ? ["", `Остання помилка запису: ${escapeHtml(st.lastError)}`] : []),
         "",
         "🔌 <b>Вебхук</b>",
