@@ -58,6 +58,7 @@ import {
   getFacilities,
   getPowerLines,
   getFacilityTiles,
+  getShelters,
   getThreats,
 } from "@/lib/infra.functions";
 import { platformEntityId } from "@/lib/cases";
@@ -333,6 +334,14 @@ function Console() {
   const [linkView, setLinkView] = useState<"list" | "graph">("list");
   const [showFrontline, setShowFrontline] = useState(true);
   const [showFires, setShowFires] = useState(false);
+  /*
+   * Укриття вимкнені за замовчуванням і вантажаться лише на вимогу.
+   *
+   * Запит по них вузький (радіус кілька кілометрів), але він має сенс лише
+   * там, куди людина дивиться. Тягнути його для всіх і завжди означало б
+   * навантажувати Overpass заради шару, який більшість не відкриє.
+   */
+  const [showShelters, setShowShelters] = useState(false);
   // Шар обʼєктів інфраструктури ВИМКНЕНИЙ за замовчуванням: консоль тепер
   // передусім повітряний радар, і сотні позначок перекривали б обстановку.
   // Вмикається перемикачем «Обʼєкти інфраструктури». Стосується показу на
@@ -560,6 +569,21 @@ function Console() {
   const impactedIds = useMemo(() => outage?.lost ?? new Set<string>(), [outage]);
 
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
+
+  /*
+   * Укриття навколо обраного обʼєкта — або навколо Києва, поки нічого не
+   * обрано. Прив'язка саме до вибору, а не до центру карти: центр змінюється
+   * від кожного руху миші, і запит ганявся б за ним.
+   */
+  const shelterPoint = selected ?? { lat: 50.45, lon: 30.52 };
+  const sheltersFn = useServerFn(getShelters);
+  const sheltersQuery = useQuery({
+    queryKey: ["shelters", Math.round(shelterPoint.lat * 50), Math.round(shelterPoint.lon * 50)],
+    queryFn: () => sheltersFn({ data: { lat: shelterPoint.lat, lon: shelterPoint.lon } }),
+    enabled: showShelters,
+    staleTime: 6 * 60 * 60 * 1000,
+  });
+  const shelters = useMemo(() => sheltersQuery.data?.shelters ?? [], [sheltersQuery.data]);
 
   /*
    * Зіставлення «ідентифікатор платформи → обʼєкт консолі» для приколотих у
@@ -1273,6 +1297,7 @@ function Console() {
                     impactedIds={impactedIds}
                     selectedId={selectedId}
                     onSelect={(f) => setSelectedId(f.id)}
+                    shelters={showShelters ? shelters : []}
                   />
                 </Suspense>
               </ClientOnly>
@@ -1363,6 +1388,7 @@ function Console() {
                   else if (key === "links") setShowLinks((v) => !v);
                   else if (key === "frontline") setShowFrontline((v) => !v);
                   else if (key === "fires") setShowFires((v) => !v);
+                  else if (key === "shelters") setShowShelters((v) => !v);
                   else if (key === "graph") setShowGraph((v) => !v);
                 }}
               />

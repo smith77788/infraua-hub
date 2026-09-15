@@ -38,6 +38,7 @@ import {
   type InfraEvent,
 } from "@/lib/infra-types";
 import { roleOfSource } from "@/lib/osint-sources";
+import { KIND_EMOJI, KIND_LABEL, KIND_NOTE, type Shelter } from "@/lib/shelters";
 import {
   courseIsObserved,
   displayRadiusKm,
@@ -63,6 +64,8 @@ interface Props {
   impactedIds: Set<string>;
   selectedId: string | null;
   onSelect: (f: Facility) => void;
+  /** Укриття навколо точки перегляду. Порожньо — шар просто не малюється. */
+  shelters?: Shelter[];
 }
 
 /** Мінімальні SVG-гліфи (у стилі lucide) для кожної категорії. */
@@ -727,6 +730,7 @@ export default function InfraMap({
   impactedIds,
   selectedId,
   onSelect,
+  shelters = [],
 }: Props) {
   const byId = useMemo(() => new Map(facilities.map((f) => [f.id, f])), [facilities]);
   const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
@@ -961,6 +965,36 @@ export default function InfraMap({
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />
+      {/*
+        Укриття. Зелене — єдиний зелений шар на карті, і це навмисно: усе
+        інше тут про загрозу, а це єдине, що про порятунок. Підпис у попапі
+        каже, ЩО це насправді: станція метро й підземний паркінг дають різний
+        захист, і зрівняти їх кольором означало б збрехати кольором.
+      */}
+      {shelters.map((sh) => (
+        <CircleMarker
+          key={sh.id}
+          center={[sh.lat, sh.lon]}
+          radius={sh.kind === "shelter" ? 6 : 4}
+          pathOptions={{
+            color: "#34d399",
+            weight: sh.kind === "shelter" ? 2 : 1.2,
+            fillColor: "#34d399",
+            fillOpacity: sh.kind === "underground" ? 0.25 : 0.5,
+          }}
+        >
+          <Popup>
+            <div className="space-y-1 font-sans text-xs">
+              <p className="font-semibold text-emerald-600">
+                {KIND_EMOJI[sh.kind]} {KIND_LABEL[sh.kind]}
+              </p>
+              <p>{sh.name}</p>
+              <p className="opacity-70">{KIND_NOTE[sh.kind]}</p>
+              {sh.capacity ? <p className="opacity-70">Місткість: {sh.capacity}</p> : null}
+            </div>
+          </Popup>
+        </CircleMarker>
+      ))}
     </MapContainer>
   );
 }
