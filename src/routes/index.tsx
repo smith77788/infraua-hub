@@ -1445,7 +1445,7 @@ function Console() {
                 саме так дефект і виглядав ззовні.
               */}
               {showShelters ? (
-                <div className="pointer-events-none absolute inset-x-0 top-2 z-[500] flex justify-center px-3">
+                <div className="pointer-events-none absolute inset-x-0 top-16 z-[500] flex justify-center px-3">
                   <span className="rounded-full border border-emerald-500/40 bg-background/90 px-3 py-1 text-center font-mono text-[10px] uppercase tracking-[0.1em] text-emerald-300 backdrop-blur-sm">
                     {/*
                       «Джерело не відповіло» і «тут нічого не розмічено» — різні

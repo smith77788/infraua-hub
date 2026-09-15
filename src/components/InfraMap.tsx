@@ -296,12 +296,25 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   return icon;
 }
 
+/**
+ * Прибирає рекламний префікс «Leaflet» з атрибуції — лишається лише кредит
+ * даних (Esri/OSM), якого вимагає ліцензія. Саме посилання «Leaflet» на карті
+ * зайве й ще й налазило на стрічку внизу.
+ */
+function AttributionPrefixOff() {
+  const map = useMap();
+  useEffect(() => {
+    map.attributionControl?.setPrefix(false);
+  }, [map]);
+  return null;
+}
+
 function BaseLayers() {
   return (
     <LayersControl position="topright">
       <LayersControl.BaseLayer checked name="Темна">
         <TileLayer
-          attribution="Tiles &copy; Esri"
+          attribution="&copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
           maxZoom={16}
         />
@@ -337,7 +350,6 @@ function BaseLayers() {
        */}
       <LayersControl.Overlay checked name="Межі областей і міста">
         <TileLayer
-          attribution="Labels &copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
           maxZoom={18}
         />
@@ -809,6 +821,7 @@ export default function InfraMap({
       className="size-full"
       style={{ background: "#0a0e14" }}
     >
+      <AttributionPrefixOff />
       <BaseLayers />
 
       {/*
