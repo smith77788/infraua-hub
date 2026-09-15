@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 
-import { angularDiff, bearingDeg, citiesOnCourse, projectThreats } from "./threat-eta";
+import {
+  angularDiff,
+  bearingDeg,
+  citiesOnCourse,
+  projectThreats,
+  SPEED_KMH,
+  SPEED_RANGE_KMH,
+} from "./threat-eta";
 import type { CategoryId, Facility } from "./infra-types";
 import type { Threat } from "./air";
 
@@ -222,5 +229,78 @@ describe("projectThreats — невизначеність доходить до 
     const [p] = projectThreats([threat("a", 50, 30, { heading: 0, type: "shahed" })], target);
     expect(p!.courseObserved).toBe(true);
     expect(p!.etaRangeMin[1]).toBeGreaterThan(p!.etaRangeMin[0]);
+  });
+});
+
+/*
+ * «Шахед» у каналах — це два різні апарати: поршнева «Герань» понад 185 км/год
+ * і реактивна до 600. Канал пише про обидві однаково. Таблиця з одним числом
+ * 180 казала «пів години» там, де лишалося девʼять хвилин.
+ */
+describe("швидкість діапазоном — тип цілі теж невідомий", () => {
+  const target: Facility[] = [
+    { id: "pp", name: "ТЕЦ", category: "power_plant", lat: 51, lon: 30, source: "test" },
+  ];
+  const at = (type: Threat["type"]) =>
+    projectThreats([threat("a", 50, 30, { heading: 0, type })], target)[0]!;
+
+  it("невідомий різновид шахеда дає вилку в рази, а не відсотки", () => {
+    const p = at("shahed");
+    // Верхня межа діапазону 600 проти нижньої 185 — понад утричі.
+    expect(p.etaRangeMin[1] / Math.max(1, p.etaRangeMin[0])).toBeGreaterThan(2.5);
+  });
+
+  it("найраніший приліт рахується з БИСТРОГО краю", () => {
+    const shahed = at("shahed");
+    const reactive = at("reactive");
+    // Обидва можуть іти 600 км/год, тож найраніший приліт співмірний —
+    // саме це й рятує від «у вас пів години» на реактивному.
+    expect(shahed.etaRangeMin[0]).toBeLessThanOrEqual(reactive.etaRangeMin[0] * 1.3);
+  });
+
+  it("прямо названий реактивний не отримує поршневого хвоста", () => {
+    expect(at("reactive").etaRangeMin[1]).toBeLessThan(at("shahed").etaRangeMin[1]);
+  });
+
+  it("нерозпізнана позначка не тягне балістичний край", () => {
+    // Інакше кожна нерозпізнана ціль світилася б як найтерміновіша, а коли
+    // терміновим позначено все — не позначено нічого.
+    expect(at("unknown").etaRangeMin[0]).toBeGreaterThan(at("ballistic").etaRangeMin[0]);
+  });
+
+  it("заміряна швидкість схлопує діапазон у точку", () => {
+    const [p] = projectThreats(
+      [
+        threat("m", 50, 30, {
+          heading: 0,
+          type: "shahed",
+          quality: {
+            uncertaintyKm: 0.001,
+            position: "confirmed",
+            lifecycle: "tracking",
+            presumptiveCourse: false,
+            speedKmh: 99.4,
+          },
+        }),
+      ],
+      target,
+    );
+    expect(p!.etaRangeMin[1] - p!.etaRangeMin[0]).toBeLessThanOrEqual(1);
+    expect(p!.speedMeasured).toBe(true);
+  });
+
+  it("балістику більше не занижено вдвічі", () => {
+    // Іскандер-М: 2100–2600 м/с. Попереднє одне число 3000 км/год було
+    // заниженим більш ніж удвічі проти нижнього краю.
+    expect(SPEED_RANGE_KMH.ballistic[0]).toBeGreaterThanOrEqual(3000);
+    expect(SPEED_RANGE_KMH.ballistic[1]).toBeGreaterThan(7000);
+  });
+
+  it("середня оцінка лежить усередині свого діапазону", () => {
+    for (const [type, [slow, fast]] of Object.entries(SPEED_RANGE_KMH)) {
+      const typical = SPEED_KMH[type as keyof typeof SPEED_KMH];
+      expect(typical).toBeGreaterThanOrEqual(slow);
+      expect(typical).toBeLessThanOrEqual(fast);
+    }
   });
 });

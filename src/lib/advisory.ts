@@ -19,7 +19,7 @@ import {
   type CredibilityAssessment,
   type SourceRole,
 } from "./source-credibility";
-import { angularDiff, bearingDeg, SPEED_KMH } from "./threat-eta";
+import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta";
 import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 
 // ── Румби (для напрямку й сторони вікон) ─────────────────────────────────
@@ -321,9 +321,16 @@ export function personalAssessment(
         const speed = q.speedKmh ?? SPEED_KMH[threat.type ?? "unknown"] ?? 250;
         etaMin = Math.round((d / speed) * 60);
         const u = displayRadiusKm(q);
+        /*
+         * Вилка ширшає з двох боків одночасно: ми не знаємо точно, ДЕ ціль, і
+         * не знаємо точно, ЩО це. Позначка «шахед» покриває і поршневу
+         * «Герань» (185 км/год), і реактивну (до 600) — канал пише про них
+         * однаково. Найраніший приліт = ближче й швидше.
+         */
+        const [slow, fast] = speedRangeFor(threat.type, q.speedKmh);
         etaRangeMin = [
-          Math.round((Math.max(0, d - u) / speed) * 60),
-          Math.round(((d + u) / speed) * 60),
+          Math.round((Math.max(0, d - u) / fast) * 60),
+          Math.round(((d + u) / slow) * 60),
         ];
       }
     }
