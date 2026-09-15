@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import {
-  fuseThreats,
-  normalizeThreatType,
-  type Threat,
-} from "./air";
+import { fuseThreats, normalizeThreatType, type Threat } from "./air";
 import { renderChannelPost } from "./channel-post";
 
 function t(id: string, lat: number, lon: number, extra: Partial<Threat> = {}): Threat {
@@ -65,7 +61,17 @@ describe("fuseThreats", () => {
  */
 describe("normalizeThreatType — тип із мережі зводиться до відомого", () => {
   it("відомі типи лишаються собою", () => {
-    for (const t of ["shahed", "reactive", "cruise", "missile", "ballistic", "kab", "recon", "aircraft", "unknown"]) {
+    for (const t of [
+      "shahed",
+      "reactive",
+      "cruise",
+      "missile",
+      "ballistic",
+      "kab",
+      "recon",
+      "aircraft",
+      "unknown",
+    ]) {
       expect(normalizeThreatType(t)).toBe(t as never);
     }
   });
@@ -85,8 +91,15 @@ describe("normalizeThreatType — тип із мережі зводиться д
 
   it("пост із невідомим типом будується, а не кидає виняток", () => {
     const t = {
-      id: "x", name: "", lat: 50.45, lon: 30.52, source: "s",
-      count: 1, since: "", expires: "", type: "не-тип" as never,
+      id: "x",
+      name: "",
+      lat: 50.45,
+      lon: 30.52,
+      source: "s",
+      count: 1,
+      since: "",
+      expires: "",
+      type: "не-тип" as never,
     };
     expect(() => renderChannelPost([t])).not.toThrow();
     expect(renderChannelPost([t])).not.toBeNull();
