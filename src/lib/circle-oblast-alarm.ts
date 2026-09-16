@@ -26,8 +26,15 @@
 export interface CircleAlertTarget {
   /** Кому повідомити. */
   chatId: number;
-  /** Про кого. */
-  aboutName: string;
+  /**
+   * Про кого — УСІ разом, одним переліком.
+   *
+   * Не по одному імені на запис, і це не дрібниця оформлення. Родина майже
+   * завжди живе в одному місті: якщо в Харкові четверо рідних, то єдиний, хто
+   * у Львові, дістав би чотири повідомлення підряд про ОДНУ сирену. Саме так і
+   * вчаться не читати повідомлення взагалі — а наступне може бути про нього.
+   */
+  aboutNames: string[];
   oblast: string;
 }
 
@@ -35,6 +42,17 @@ export interface CircleMemberPlace {
   chatId: number;
   name: string;
   oblasts: string[];
+  /**
+   * Чи людина поставила сповіщення на паузу (`/stop`).
+   *
+   * Обовʼязкове поле, а не необовʼязкове: «забув передати» тут означає «мовчки
+   * порушив обіцянку», а такий недогляд не має бути можливим непомітно.
+   *
+   * Важливо, що пауза стосується лише ОТРИМАННЯ. Той, хто поставив паузу, усе
+   * одно лишається тим, ПРО КОГО кажуть рідним: він вимкнув свої сповіщення,
+   * а не зник із кола.
+   */
+  muted: boolean;
 }
 
 /**
@@ -51,13 +69,16 @@ export function circleAlertTargets(
   if (affected.length === 0) return [];
   const out: CircleAlertTarget[] = [];
   for (const watcher of members) {
-    for (const who of affected) {
-      if (who.chatId === watcher.chatId) continue;
-      // Якщо у спостерігача тривога в тій самій області, він уже знає — і
-      // рядок «у мами тривога» під власною сиреною лише заважає.
-      if (watcher.oblasts.includes(oblast)) continue;
-      out.push({ chatId: watcher.chatId, aboutName: who.name, oblast });
-    }
+    // `/stop` обіцяє «сповіщення на паузі» — без цього рядка обіцянка була
+    // порожньою саме для кола, тобто для найчастішого нічного повідомлення.
+    if (watcher.muted) continue;
+    // Якщо у спостерігача тривога в тій самій області, він уже знає — і рядок
+    // «у мами тривога» під власною сиреною лише заважає. Перевірка стосується
+    // спостерігача, тож стоїть тут, а не всередині перебору рідних.
+    if (watcher.oblasts.includes(oblast)) continue;
+    const names = affected.filter((w) => w.chatId !== watcher.chatId).map((w) => w.name);
+    if (names.length === 0) continue;
+    out.push({ chatId: watcher.chatId, aboutNames: names, oblast });
   }
   return out;
 }

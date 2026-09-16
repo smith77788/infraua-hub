@@ -7,7 +7,7 @@ import {
   renderPendingCheckins,
   CIRCLE_ALERT_COOLDOWN_MS,
   type CircleMemberState,
-} from "./circle-alert";
+} from "./circle-threat";
 
 describe("distanceBand", () => {
   it("ніколи не видає точного числа — лише смугу", () => {
@@ -170,7 +170,7 @@ describe("renderPendingCheckins", () => {
   });
 });
 
-describe("межа з circle-alerts (множинним)", () => {
+describe("межа з circle-oblast-alarm", () => {
   const base = {
     name: "Олена",
     circleName: "Родина",

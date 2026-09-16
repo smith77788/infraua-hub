@@ -58,7 +58,7 @@ import {
   decideCircleAlert,
   pendingCheckins,
   renderPendingCheckins,
-} from "./lib/circle-alert";
+} from "./lib/circle-threat";
 import { clampLead, renderLeadHelp, renderLeadSaved } from "./lib/lead-threshold";
 import {
   recordAlarmMinutes,
@@ -157,7 +157,12 @@ import {
   updateAlertStarts,
 } from "./lib/oblast-watch";
 import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
-import { circleAlertTargets, renderRelativeAlarm, renderRelativeClear } from "./lib/circle-alerts";
+import {
+  circleAlertTargets,
+  renderRelativeAlarm,
+  renderRelativeClear,
+  type CircleMemberPlace,
+} from "./lib/circle-oblast-alarm";
 import {
   detectCarrier,
   renderCarrierWarning,
@@ -213,6 +218,7 @@ import {
   forgetStale,
   markAlerted,
   type Subscriber,
+  type SubscriberPoint,
 } from "./lib/subscribers";
 import {
   allCircles,
@@ -2481,6 +2487,22 @@ async function findPlacePoint(query: string): Promise<RoutePoint | null> {
 }
 
 /**
+ * Точка людини — одним виразом для всього коду.
+ *
+ * Досі «чи є в людини точка» питалося двома різними способами: обхід офіційних
+ * тривог дивився на `placesFromLegacy`, а обхід персональних — прямо на
+ * `point`. Поки обидва поля тримає `syncPrimary`, різниці не видно; але запис,
+ * відновлений із копії, кладеться у сховище як є, без синхронізації. Такий
+ * підписник отримував би обласні тривоги й НЕ отримував персональних
+ * попереджень — мовчки, бо ніхто не бачить сповіщення, якого не було.
+ *
+ * Тому спосіб лишається один, і він же лікує розсинхронізований запис.
+ */
+function pointOf(sub: Subscriber, now: number): SubscriberPoint | null {
+  return primaryPlace(placesFromLegacy(sub.point, sub.places, now)) ?? sub.point;
+}
+
+/**
  * Головне місце дублюється в `point`.
  *
  * Не заради сумісності заради сумісності: увесь код, що вміє «точку людини»,
@@ -2670,16 +2692,25 @@ async function officialAlertSweep(): Promise<void> {
   const queue: Envelope<{ chatId: number; text: string; stats: StatsHook | null }>[] = [];
 
   // Коло рідних: хто за ким стежить і в яких вони областях.
-  const circleMembers = new Map<string, { chatId: number; name: string; oblasts: string[] }[]>();
+  const circleMembers = new Map<string, CircleMemberPlace[]>();
   for (const sub of subs) {
+    if (!sub.circle) continue;
     const oblasts = [
       ...new Set(placesFromLegacy(sub.point, sub.places, now).map((p) => oblastOf(p.lat, p.lon))),
     ];
-    if (sub.circle) {
-      const list = circleMembers.get(sub.circle) ?? [];
-      list.push({ chatId: sub.chatId, name: sub.displayName ?? "Хтось", oblasts });
-      circleMembers.set(sub.circle, list);
-    }
+    const list = circleMembers.get(sub.circle) ?? [];
+    /*
+     * Пауза передається, а не відсіюється тут: той, хто натиснув `/stop`, не
+     * має ОТРИМУВАТИ звісток, але лишається тим, ПРО КОГО кажуть рідним.
+     * Відсіяти його на цьому кроці означало б заразом сховати його від сімʼї.
+     */
+    list.push({
+      chatId: sub.chatId,
+      name: sub.displayName ?? "Хтось",
+      oblasts,
+      muted: sub.muted,
+    });
+    circleMembers.set(sub.circle, list);
   }
 
   for (const t of transitions) {
@@ -2739,8 +2770,8 @@ async function officialAlertSweep(): Promise<void> {
             chatId: target.chatId,
             text:
               t.kind === "started"
-                ? renderRelativeAlarm([target.aboutName], t.oblast)
-                : renderRelativeClear([target.aboutName], t.oblast),
+                ? renderRelativeAlarm(target.aboutNames, t.oblast)
+                : renderRelativeClear(target.aboutNames, t.oblast),
             // Тривога в чужій області — не подія власного місяця людини.
             stats: null,
           },
@@ -2930,10 +2961,12 @@ const LEVEL_PRIORITY: Record<string, Priority> = {
 function alertCandidates(subs: readonly Subscriber[], threats: readonly Threat[]): Subscriber[] {
   if (threats.length === 0) return [];
 
+  const now = Date.now();
   const byRadius = new Map<number, (Subscriber & { lat: number; lon: number })[]>();
   for (const sub of subs) {
-    if (!sub.point) continue;
-    const flat = { ...sub, lat: sub.point.lat, lon: sub.point.lon };
+    const point = pointOf(sub, now);
+    if (!point) continue;
+    const flat = { ...sub, lat: point.lat, lon: point.lon };
     const bucket = byRadius.get(sub.radiusKm);
     if (bucket) bucket.push(flat);
     else byRadius.set(sub.radiusKm, [flat]);
@@ -2972,7 +3005,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   const empty: AlertSweepResult = { checked: 0, sent: 0, skipped: 0 };
   if (!token) return empty;
 
-  const subs = (await allSubscribers()).filter((s) => s.point && !s.muted);
+  const subs = (await allSubscribers()).filter((s) => !s.muted && pointOf(s, Date.now()) !== null);
   if (subs.length === 0) return empty;
 
   const threats = await fetchThreatsCached(60_000);
@@ -3008,7 +3041,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
 
   for (const raw of considered) {
     const sub = forgetStale(raw, now);
-    const point = sub.point;
+    const point = pointOf(sub, now);
     if (!point) continue;
 
     const oblast = oblastOf(point.lat, point.lon);
