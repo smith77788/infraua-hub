@@ -76,6 +76,27 @@ describe("renderChannelPost", () => {
     expect(post.text).toContain("курсом на північ");
   });
 
+  it("спільний курс групи — лише коли цілі справді йдуть разом", () => {
+    // Три шахеди в одній області, курси РОЗКИДАНІ: спільного напрямку немає,
+    // тож текст не має вигадувати одного (це й був конфлікт із картинкою).
+    // Усі три в одній області (Полтавщина), курси РОЗКИДАНІ.
+    const scattered = renderChannelPost([
+      threat({ lat: 49.9, lon: 34.9, type: "shahed", heading: 10 }),
+      threat({ lat: 50.0, lon: 35.0, type: "shahed", heading: 130 }),
+      threat({ lat: 49.8, lon: 34.8, type: "shahed", heading: 250 }),
+    ])!;
+    expect(scattered.text).toContain("3 шахеди");
+    expect(scattered.text).not.toContain("курсом");
+
+    // Ті самі три, але курси збіглися на захід — тоді напрямок доречний.
+    const together = renderChannelPost([
+      threat({ lat: 49.9, lon: 34.9, type: "shahed", heading: 265 }),
+      threat({ lat: 50.0, lon: 35.0, type: "shahed", heading: 275 }),
+      threat({ lat: 49.8, lon: 34.8, type: "shahed", heading: 270 }),
+    ])!;
+    expect(together.text).toContain("курсом на захід");
+  });
+
   it("«у бік міста», коли ціль іде на місто поруч", () => {
     // ціль трохи південніше Полтави (49.59,34.55), курс 0° = на неї
     const post = renderChannelPost([

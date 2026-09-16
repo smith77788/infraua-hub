@@ -38,6 +38,36 @@ function courseIndex(heading: number | undefined): number | null {
   return Math.round((((heading % 360) + 360) % 360) / 45) % 8;
 }
 
+/**
+ * СПІЛЬНИЙ курс групи — і лише коли він справді спільний.
+ *
+ * Раніше на всю групу брався курс ПЕРШОЇ цілі: «3 шахеди курсом на захід» —
+ * навіть якщо другий ішов на південь, а третій на північ. На картинці ж кожна
+ * стрілка своя, тож текст і зображення розповідали різне про той самий наліт.
+ *
+ * Тепер рахуємо круговий середній напрямок і його зібраність (довжину
+ * результанта). Розкидані курси спільного напрямку НЕ мають — тоді краще не
+ * називати жодного, ніж назвати чужий: повертаємо `null`, і рядок іде без
+ * «курсом на…», а не з вигаданою одностайністю.
+ */
+function coherentCourse(headings: readonly number[]): number | null {
+  const valid = headings.filter((h) => Number.isFinite(h));
+  if (valid.length === 0) return null;
+  if (valid.length === 1) return courseIndex(valid[0]);
+  let sx = 0;
+  let sy = 0;
+  for (const h of valid) {
+    const r = (h * Math.PI) / 180;
+    sx += Math.cos(r);
+    sy += Math.sin(r);
+  }
+  // Довжина результанта 0..1: близько 1 — курси збіглися, близько 0 — розкидані.
+  const resultant = Math.hypot(sx, sy) / valid.length;
+  if (resultant < 0.75) return null; // приблизно ширше за ±40° — це вже не «спільний»
+  const meanDeg = (Math.atan2(sy, sx) * 180) / Math.PI;
+  return Math.round((((meanDeg % 360) + 360) % 360) / 45) % 8;
+}
+
 interface CityRef {
   name: string;
   lat: number;
@@ -300,8 +330,8 @@ interface Group {
   /** Місто на курсі → мінімальна ETA (хв). */
   /** Місто → найтерміновіший час до нього: найімовірніший і вилка. */
   loud: Map<string, { etaMin: number; etaRangeMin: [number, number] }>;
-  /** Тип → індекс румба 0..7 (слова дає словник). */
-  courses: Map<ThreatType, number>;
+  /** Тип → усі спостережені курси цілей цього типу (для спільного напрямку). */
+  courses: Map<ThreatType, number[]>;
   /** Скільки цілей області спираються лише на одне непідтверджене джерело. */
   weak: number;
   total: number;
@@ -360,8 +390,13 @@ export function renderChannelPost(
     const level = verifyThreat(t, roleOfSource).level;
     g.total += 1;
     if (level === "unverified" || level === "single") g.weak += 1;
-    const course = courseIndex(t.heading);
-    if (course !== null && !g.courses.has(type)) g.courses.set(type, course);
+    // Збираємо ВСІ курси типу в групі — спільний напрямок вирахуємо потім, і
+    // лише якщо він справді спільний (див. coherentCourse).
+    if (typeof t.heading === "number" && Number.isFinite(t.heading)) {
+      const list = g.courses.get(type);
+      if (list) list.push(t.heading);
+      else g.courses.set(type, [t.heading]);
+    }
     const loud = loudCity(t);
     if (loud) {
       const prev = g.loud.get(loud.name);
@@ -397,9 +432,10 @@ export function renderChannelPost(
     }
     if (idx >= maxOblasts) return;
     const parts = entries.map(([type, n]) => {
-      const course = g.courses.get(type);
-      // Значок веде тип, далі — кількість словом у «ванёк»-регістрі й курс.
-      const dir = course === undefined ? "" : ` ${lex.course(course)}`;
+      // Спільний курс — лише коли цілі справді йдуть разом; інакше без напрямку,
+      // щоб текст не суперечив стрілкам на картинці.
+      const course = coherentCourse(g.courses.get(type) ?? []);
+      const dir = course === null ? "" : ` ${lex.course(course)}`;
       return `${TYPE_EMOJI[type]} ${n} ${lex.typeName(type, n)}${dir}`;
     });
     let line = `📍 <b>${g.oblast}</b>: ${parts.join(", ")}`;
