@@ -64,7 +64,7 @@ export default function TimelinePlayer({ onCursor }: Props) {
       });
 
   return (
-    <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-[500] flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
+    <div className="pointer-events-auto flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
       <button
         onClick={() => {
           if (live) setCursor(min + TRAIL_MS);

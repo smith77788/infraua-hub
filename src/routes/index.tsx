@@ -48,6 +48,7 @@ import SituationBar from "@/components/SituationBar";
 import StatusStrip from "@/components/StatusStrip";
 import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
+import MapOverlays from "@/components/MapOverlays";
 import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
 import RaidReplay from "@/components/RaidReplay";
 import WaveForecast from "@/components/WaveForecast";
@@ -1418,137 +1419,137 @@ function Console() {
                 </Suspense>
               </ClientOnly>
 
-              {showFacilities && loading ? (
-                <div className="pointer-events-none absolute inset-x-0 top-3 z-[500] flex justify-center">
-                  <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                    <Loader2 className="size-3 animate-spin" /> Завантаження обʼєктів з
-                    OpenStreetMap
-                  </span>
-                </div>
-              ) : null}
-
               {/*
-                Банер стану джерела — вгорі, не внизу: знизу карти вже стоять
-                легенда (ліворуч) і атрибуція Leaflet (праворуч), і три банери
-                там налазили один на одного. Повідомлення про вимкнені шари тут
-                прибрано як дубль: те саме вже пояснює бічна панель.
+                Усі накладки — через один розкладальник. Доти кожна ставила
+                себе сама («bottom-24», «bottom-[46px]»), тобто вгадувала, що ще
+                є на екрані, і блоки налазили один на одного щоразу, коли
+                здогадка не справджувалась. Тут вони лежать у потоці, а потік
+                накладати елементи не вміє.
               */}
-              {showFacilities &&
-              !infraDisabled &&
-              !loading &&
-              facilitiesQuery.data?.source === "baseline" ? (
-                <div className="pointer-events-none absolute inset-x-0 top-14 z-[500] flex justify-center px-3">
-                  <span className="max-w-full rounded border border-amber-500/50 bg-background/95 px-3 py-2 text-center font-mono text-[10px] leading-snug text-amber-400">
-                    Live-джерело OpenStreetMap недоступне — показано опорний перелік. Натисніть
-                    «Оновити».
-                  </span>
-                </div>
-              ) : null}
-
-              <PersonalThreatPanel threats={threats} weather={feeds.weather} />
-              <HotOblasts threats={threats} />
-              {/*
-                Прогнози руху ховаємо на застиглих/офлайн даних: проєктувати
-                траєкторію зі старих трейлів і подавати як поточну — оманливо.
-                Банер зверху вже каже про застій; тут краще мовчати.
-              */}
-              {airConn.link === "live" || airConn.link === "delayed" ? (
-                <>
-                  <WaveForecast threats={threats} />
-                  <ActiveWaves waves={waves} threats={threats} />
-                </>
-              ) : null}
-
-              <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
-              <TimelinePlayer onCursor={setPlayCursor} />
-              <MapLayers
-                layers={
-                  [
-                    // Шари, що малюють обʼєкти інфраструктури та звʼязки між
-                    // ними, зникають разом із даними: перемикач, який нічого
-                    // не вмикає, — обіцянка, якої консоль не виконає.
-                    ...(infraDisabled
-                      ? []
-                      : [
+              <MapOverlays
+                topLeft={
+                  <>
+                    <PersonalThreatPanel threats={threats} weather={feeds.weather} />
+                    <MapLayers
+                      layers={
+                        [
+                          // Шари, що малюють обʼєкти інфраструктури та звʼязки між
+                          // ними, зникають разом із даними: перемикач, який нічого
+                          // не вмикає, — обіцянка, якої консоль не виконає.
+                          ...(infraDisabled
+                            ? []
+                            : [
+                                {
+                                  key: "facilities",
+                                  label: "Обʼєкти інфраструктури",
+                                  active: showFacilities,
+                                  color: "#67e8f9",
+                                },
+                                {
+                                  key: "links",
+                                  label: "Звʼязки живлення",
+                                  active: showLinks,
+                                  color: "#22d3ee",
+                                },
+                              ]),
                           {
-                            key: "facilities",
-                            label: "Обʼєкти інфраструктури",
-                            active: showFacilities,
-                            color: "#67e8f9",
+                            key: "frontline",
+                            label: "Окупована територія",
+                            active: showFrontline,
+                            disabled: frontline.length === 0,
+                            color: "#9c5561",
                           },
                           {
-                            key: "links",
-                            label: "Звʼязки живлення",
-                            active: showLinks,
-                            color: "#22d3ee",
+                            key: "fires",
+                            label: "Пожежі (FIRMS)",
+                            active: showFires,
+                            disabled: fires.length === 0,
+                            color: "#ff7a1a",
                           },
-                        ]),
-                    {
-                      key: "frontline",
-                      label: "Окупована територія",
-                      active: showFrontline,
-                      disabled: frontline.length === 0,
-                      color: "#9c5561",
-                    },
-                    {
-                      key: "fires",
-                      label: "Пожежі (FIRMS)",
-                      active: showFires,
-                      disabled: fires.length === 0,
-                      color: "#ff7a1a",
-                    },
-                    ...(infraDisabled
-                      ? []
-                      : [
-                          {
-                            key: "graph",
-                            label: "Під загрозою",
-                            active: showGraph,
-                            disabled: threatGraph.nodes.length === 0,
-                            color: "#ff4d4d",
-                          },
-                        ]),
-                  ] satisfies LayerToggle[]
+                          ...(infraDisabled
+                            ? []
+                            : [
+                                {
+                                  key: "graph",
+                                  label: "Під загрозою",
+                                  active: showGraph,
+                                  disabled: threatGraph.nodes.length === 0,
+                                  color: "#ff4d4d",
+                                },
+                              ]),
+                        ] satisfies LayerToggle[]
+                      }
+                      onToggle={(key) => {
+                        if (key === "facilities") setShowFacilities((v) => !v);
+                        else if (key === "links") setShowLinks((v) => !v);
+                        else if (key === "frontline") setShowFrontline((v) => !v);
+                        else if (key === "fires") setShowFires((v) => !v);
+                        else if (key === "shelters") setShowShelters((v) => !v);
+                        else if (key === "graph") setShowGraph((v) => !v);
+                      }}
+                    />
+                    {/*
+                      Прогноз руху ховаємо на застиглих/офлайн даних:
+                      проєктувати траєкторію зі старих трейлів і подавати як
+                      поточну — оманливо. Банер зверху вже каже про застій.
+                    */}
+                    {airConn.link === "live" || airConn.link === "delayed" ? (
+                      <WaveForecast threats={threats} />
+                    ) : null}
+                  </>
                 }
-                onToggle={(key) => {
-                  if (key === "facilities") setShowFacilities((v) => !v);
-                  else if (key === "links") setShowLinks((v) => !v);
-                  else if (key === "frontline") setShowFrontline((v) => !v);
-                  else if (key === "fires") setShowFires((v) => !v);
-                  else if (key === "shelters") setShowShelters((v) => !v);
-                  else if (key === "graph") setShowGraph((v) => !v);
-                }}
+                topCenter={
+                  <>
+                    {showFacilities && loading ? (
+                      <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-center font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        <Loader2 className="size-3 animate-spin" /> Завантаження обʼєктів з
+                        OpenStreetMap
+                      </span>
+                    ) : null}
+                    {showFacilities &&
+                    !infraDisabled &&
+                    !loading &&
+                    facilitiesQuery.data?.source === "baseline" ? (
+                      <span className="max-w-full rounded border border-amber-500/50 bg-background/95 px-3 py-2 text-center font-mono text-[10px] leading-snug text-amber-400">
+                        Live-джерело OpenStreetMap недоступне — показано опорний перелік. Натисніть
+                        «Оновити».
+                      </span>
+                    ) : null}
+                    {/*
+                      Підказка укриттів — компактний чип, а не банер на пів-карти:
+                      укриття увімкнені за замовчуванням, тож на огляді країни
+                      великий напис «наблизьте» висів би постійно. Чип зʼявляється
+                      лише коли є що сказати по ділу. «Джерело не відповіло» і «тут
+                      нічого не розмічено» — різні речення: друге стверджує про
+                      світ те, чого ми не знаємо.
+                    */}
+                    {showShelters && shelterBox !== null ? (
+                      <span className="max-w-full truncate rounded-full border border-emerald-500/40 bg-background/85 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-emerald-300 backdrop-blur-sm">
+                        {sheltersQuery.isFetching
+                          ? "укриття: шукаємо…"
+                          : shelters.length
+                            ? `укриттів поруч: ${shelters.length}`
+                            : sheltersQuery.data?.degraded
+                              ? "укриття: джерело не відповіло"
+                              : "укриттів тут не розмічено"}
+                      </span>
+                    ) : null}
+                  </>
+                }
+                topRight={
+                  airConn.link === "live" || airConn.link === "delayed" ? (
+                    <ActiveWaves waves={waves} threats={threats} />
+                  ) : null
+                }
+                bottomLeft={<MapLegend showInfra={!infraDisabled} />}
+                bottomCenter={<HotOblasts threats={threats} />}
+                bars={
+                  <>
+                    <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
+                    <TimelinePlayer onCursor={setPlayCursor} />
+                  </>
+                }
               />
-              <MapLegend showInfra={!infraDisabled} />
-
-              {/*
-                Порожній шар мусить пояснювати себе. Без цього рядка ввімкнене
-                «Укриття» на огляді країни виглядало як «укриттів немає» —
-                саме так дефект і виглядав ззовні.
-              */}
-              {/*
-                Підказка укриттів — компактний чип, а не банер на пів-карти:
-                укриття увімкнені за замовчуванням, тож на огляді країни великий
-                напис «наблизьте» висів би постійно й перекривав цілі. На огляді
-                країни його взагалі не показуємо (бічний перемикач і так каже, що
-                шар увімкнено); чип зʼявляється лише коли є що сказати по ділу —
-                шукаємо / знайдено N / джерело мовчить / тут не розмічено.
-                «Джерело не відповіло» і «тут нічого не розмічено» — різні
-                речення: друге стверджує про світ те, чого ми не знаємо.
-              */}
-              {showShelters && shelterBox !== null ? (
-                <div className="pointer-events-none absolute inset-x-0 top-16 z-[500] flex justify-center px-3">
-                  <span className="max-w-[80%] truncate rounded-full border border-emerald-500/40 bg-background/85 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-emerald-300 backdrop-blur-sm">
-                    {sheltersQuery.isFetching
-                      ? "укриття: шукаємо…"
-                      : shelters.length
-                        ? `укриттів поруч: ${shelters.length}`
-                        : sheltersQuery.data?.degraded
-                          ? "укриття: джерело не відповіло"
-                          : "укриттів тут не розмічено"}
-                  </span>
-                </div>
-              ) : null}
 
               {showGraph ? (
                 <div className="absolute inset-0 z-[600] flex flex-col bg-background/95 backdrop-blur-sm">

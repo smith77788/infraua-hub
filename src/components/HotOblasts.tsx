@@ -25,8 +25,13 @@ export default function HotOblasts({ threats }: { threats: Threat[] }): React.Re
   if (top.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute bottom-24 left-1/2 z-[600] -translate-x-1/2 max-w-[88%]">
-      <div className="flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-background/90 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-300 shadow-lg backdrop-blur">
+    <div className="pointer-events-none max-w-full">
+      {/*
+        Переносимо рядками, а не ріжемо: «Херсонщина 2», обрізана до «Херсо…», —
+        це мовчазна втрата саме тієї області, яку людина шукала. Рядок нижче
+        коштує кілька пікселів, обрізка коштує змісту.
+      */}
+      <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 rounded-2xl border border-amber-500/40 bg-background/90 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-300 shadow-lg backdrop-blur">
         <span className="text-amber-400">🔥</span>
         {top.map(([name, n], i) => (
           <span key={name} className="whitespace-nowrap">

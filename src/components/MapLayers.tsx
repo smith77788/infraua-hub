@@ -30,7 +30,7 @@ export default function MapLayers({
         onClick={() => setOpen(true)}
         title="Шари карти"
         aria-label="Шари карти"
-        className="absolute left-14 top-2 z-[500] flex items-center gap-1.5 rounded border border-border bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+        className="pointer-events-auto flex items-center gap-1.5 rounded border border-border bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
       >
         <Layers className="size-3.5" /> <span className="hidden sm:inline">Шари</span>
       </button>
@@ -38,7 +38,7 @@ export default function MapLayers({
   }
 
   return (
-    <div className="absolute left-14 top-2 z-[500] w-52 rounded border border-border bg-background/95 p-2 backdrop-blur">
+    <div className="pointer-events-auto w-52 max-w-[80vw] rounded border border-border bg-background/95 p-2 backdrop-blur">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
           Шари карти

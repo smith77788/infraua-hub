@@ -27,6 +27,8 @@ import { UA_OUTLINE } from "@/lib/ua-outline";
 import { UA_OBLASTS } from "@/lib/ua-oblasts";
 import { OBLASTS, type AlertRegion } from "@/lib/alerts";
 import { citiesOnCourse } from "@/lib/threat-eta";
+import { swarmForecast } from "@/lib/swarm-forecast";
+import { forecastCone } from "@/lib/trajectory";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
 import {
@@ -530,6 +532,47 @@ function FacilityLayer({
  * масштабом (щоб не було сотні стрілок), при наближенні — окремі силуети за
  * типом (дрон/ракета/КАБ), із свіжістю як індикатором актуальності.
  */
+/**
+ * Конус прогнозу руху рою на карті — просторова пара до текстової панелі
+ * «Прогноз руху рою». Малюємо ОДИН чесний коридор лише коли рій когерентний
+ * (летить разом): усереднювати курс розсипаних цілей в одну стрілку — брехня,
+ * тож при низькій злагодженості конуса немає (текст тоді каже «урізнобіч»).
+ *
+ * Оцінка — та сама, що в панелі (swarm-forecast: відсів стрибків, лише
+ * спостережений курс), тож карта й панель не можуть розійтися.
+ */
+function ForecastCone({ threats }: { threats: Threat[] }) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(map.getZoom());
+  useMapEvents({ zoomend: () => setZoom(map.getZoom()) });
+  const model = useMemo(() => swarmForecast(threats, Date.now()), [threats]);
+  if (zoom < 7 || !model || model.swarm.coherence < 0.6) return null;
+  const cone = forecastCone(model.centroid, model.swarm);
+  return (
+    <>
+      <Polygon
+        positions={cone.ring}
+        pathOptions={{
+          stroke: false,
+          fillColor: "#22d3ee",
+          fillOpacity: 0.08,
+          interactive: false,
+        }}
+      />
+      <Polyline
+        positions={cone.centerline}
+        pathOptions={{
+          color: "#22d3ee",
+          weight: 1.5,
+          opacity: 0.7,
+          dashArray: "6 6",
+          interactive: false,
+        }}
+      />
+    </>
+  );
+}
+
 function ThreatLayer({ threats }: { threats: Threat[] }) {
   const map = useMap();
   const [zoom, setZoom] = useState(map.getZoom());
@@ -1023,6 +1066,7 @@ export default function InfraMap({
       />
 
       {/* Повітряні цілі (OSINT) — з кластеризацією за масштабом */}
+      <ForecastCone threats={threats} />
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />
