@@ -126,11 +126,20 @@ describe("renderStats — чесно в обидва боки", () => {
     expect(renderStats(null)).toContain("не турбували");
   });
 
-  it("каже прямо, коли випередити не вдалося", () => {
+  it("коли випередити не вдалося — чесно, але з підтримкою, без жала", () => {
     let s = recordAlert(undefined, AT);
     s = recordAlarmMinutes(s, 60, 60, AT);
     const t = renderStats(summarizeMonth(s, AT));
-    expect(t).toContain("не вдалося жодного разу");
+    // Факт не ховається (сирена була раніша), але подано тепло, не докором.
+    expect(t).toContain("сирена звучала раніше за нас");
+    expect(t).toContain("стараємось випередити");
+    expect(t).not.toContain("не вдалося жодного разу");
+  });
+
+  it("підсумок із подіями лишає тепле слово підтримки", () => {
+    let s = recordAlert(undefined, AT);
+    s = recordAlarmMinutes(s, 60, 60, AT);
+    expect(renderStats(summarizeMonth(s, AT))).toContain("Бережіть себе");
   });
 
   it("показує заміряне випередження разом зі знаменником", () => {
