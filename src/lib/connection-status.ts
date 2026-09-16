@@ -116,7 +116,7 @@ export function airConnection(input: AirConnectionInput): AirConnection {
       headline: "Дані застигли",
       detail:
         age === observedAge
-          ? `Джерело не бачило жодної цілі ${ageLabel ?? "давно"}. Позначки на карті — останні відомі, а не поточні.`
+          ? `Останнє спостереження — ${ageLabel ?? "давно"}. Позначки на карті останні відомі, а не поточні.`
           : `Фід не оновлюється ${ageLabel ?? "давно"}. Обстановка могла змінитись — не покладайтесь на цю картину.`,
       ageLabel,
     };
@@ -130,7 +130,7 @@ export function airConnection(input: AirConnectionInput): AirConnection {
       headline: "Оновлення з затримкою",
       detail:
         age === observedAge
-          ? `Джерело не давало нових спостережень ${ageLabel ?? "щойно"}. Позначки могли застаріти.`
+          ? `Останнє спостереження — ${ageLabel ?? "щойно"}. Позначки могли застаріти.`
           : `Останнє оновлення ${ageLabel ?? "щойно"}. Стежимо за відновленням.`,
       ageLabel,
     };

@@ -95,7 +95,8 @@ describe("вік СПОСТЕРЕЖЕННЯ — другий годинник", 
     });
     expect(c.link).toBe("frozen");
     expect(c.banner).toBe(true);
-    expect(c.detail).toContain("не бачило жодної цілі");
+    expect(c.detail).toContain("Останнє спостереження");
+    expect(c.detail).toContain("останні відомі");
   });
 
   it("порожнє небо не оголошується поломкою", () => {
@@ -134,7 +135,7 @@ describe("вік СПОСТЕРЕЖЕННЯ — другий годинник", 
       now: NOW,
     });
     expect(c.link).toBe("delayed");
-    expect(c.detail).toContain("нових спостережень");
+    expect(c.detail).toContain("Останнє спостереження");
   });
 
   it("береться ГІРШИЙ із двох годинників, а не останній названий", () => {
