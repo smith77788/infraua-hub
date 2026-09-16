@@ -29,6 +29,7 @@ import { swarmForecast } from "./swarm";
 import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
 import { verifyThreat } from "./advisory";
 import { roleOfSource } from "./osint-sources";
+import { kyivHour } from "./kyiv";
 
 /** Індекс румба 0..7 за курсом. Слова дає словник — вони різні в різних мовах. */
 function courseIndex(heading: number | undefined): number | null {
@@ -324,10 +325,17 @@ export function renderChannelPost(
      * `assemblePost`.
      */
     maxChars?: number;
+    /**
+     * Момент складання поста — лише для тих формулювань, що залежать від пори
+     * доби (див. `pickHead` у лексиконі). Параметром, а не `Date.now()`
+     * всередині, щоб тест міг перевірити полудень, не чекаючи полудня.
+     */
+    now?: number;
   } = {},
 ): ChannelPost | null {
   if (!threats.length) return null;
   const maxOblasts = opts.maxOblasts ?? 12;
+  const hourKyiv = kyivHour(new Date(opts.now ?? Date.now()));
   const lex = LEXICONS[opts.lang ?? "uk"];
 
   const groups = new Map<string, Group>();
@@ -454,7 +462,7 @@ export function renderChannelPost(
     allTypes,
     lex,
   );
-  const headline = lex.headline(headlineKind(allTypes, shaheds), seed);
+  const headline = lex.headline(headlineKind(allTypes, shaheds), seed, hourKyiv);
   const footer = lex.footer(targets, lex.tail(isRocketish(allTypes) || allTypes.has("kab"), seed));
 
   const text = assemblePost({

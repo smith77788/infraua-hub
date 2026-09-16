@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import type { Threat } from "./air";
 import { channelKeyboard, hashtags, oblastOf, renderChannelPost } from "./channel-post";
+import { kyivHour } from "./kyiv";
 
 function threat(p: Partial<Threat>): Threat {
   return {
@@ -462,5 +463,63 @@ describe("ціль над містом не «летить у бік» цьог�
       threat({ lat: 50.1, lon: 30.52, type: "shahed", heading: 0 }),
     ])!;
     expect(post.text).toContain("у бік: м. Київ");
+  });
+});
+
+describe("пост не бреше про пору доби", () => {
+  /** Київська година в мілісекундах — шукаємо перебором, щоб не гадати з DST. */
+  function atKyivHour(hour: number): number {
+    for (let guess = 0; guess < 24; guess++) {
+      const ms = Date.UTC(2026, 0, 15, guess, 30);
+      if (kyivHour(new Date(ms)) === hour) return ms;
+    }
+    throw new Error(`не знайшов київську годину ${hour}`);
+  }
+
+  /** Рій шахедів: саме той стан, у якому в проді вийшла «Нічна зміна» о 16:49. */
+  function swarm(n: number): Threat[] {
+    return Array.from({ length: n }, (_, i) =>
+      threat({
+        id: `s${i}`,
+        type: "shahed",
+        lat: 49 + (i % 5) * 0.4,
+        lon: 30 + (i % 7) * 0.5,
+        heading: (i * 37) % 360,
+      }),
+    );
+  }
+
+  it("о 16:49 не називає рій нічною зміною", () => {
+    // Справжній пост із каналу: 25 цілей, заголовок «🛸 Нічна зміна шахедів»,
+    // час редагування 16:49. Вибір заголовка йшов за хешем вмісту й про годину
+    // не знав нічого.
+    const post = renderChannelPost(swarm(25), { now: atKyivHour(16) });
+    expect(post).not.toBeNull();
+    expect(post!.text).not.toContain("Нічна зміна");
+  });
+
+  it("жодна денна година не дає нічного заголовка", () => {
+    for (const hour of [6, 8, 11, 14, 17, 19, 21]) {
+      for (let n = 20; n < 32; n++) {
+        const post = renderChannelPost(swarm(n), { now: atKyivHour(hour) });
+        expect(post!.text).not.toContain("Нічна зміна");
+      }
+    }
+  });
+
+  it("уночі нічний заголовок лишається можливим", () => {
+    const heads = new Set<string>();
+    for (const hour of [23, 1, 4]) {
+      for (let n = 20; n < 32; n++) {
+        heads.add(renderChannelPost(swarm(n), { now: atKyivHour(hour) })!.text.split("\n")[0]!);
+      }
+    }
+    expect([...heads].join(" ")).toContain("Нічна зміна");
+  });
+
+  it("без явного часу пост усе одно складається", () => {
+    // Усталене значення — поточний час, а не «невідомо»: пора доби нам відома
+    // завжди, і вдавати незнання тут нема причин.
+    expect(renderChannelPost(swarm(25))).not.toBeNull();
   });
 });

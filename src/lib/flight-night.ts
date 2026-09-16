@@ -17,6 +17,11 @@ import type { DroneWeatherVerdict } from "./drone-weather";
 import type { RhythmSummary } from "./threat-rhythm";
 
 export interface FlightNightInput {
+  /**
+   * Київська година. Не косметика: читаємо ми поточну погоду, і назвати її
+   * «індексом на ніч» о десятій ранку означало б видати її за прогноз.
+   */
+  hourKyiv: number;
   weather: DroneWeatherVerdict;
   /** Загальнонаціональний ритм (агрегат по країні) — може бути невпевненим. */
   rhythm: RhythmSummary | null;
@@ -31,18 +36,43 @@ const BAND_EMOJI = { favorable: "🔴", mixed: "🟡", adverse: "🟢" } as cons
  * пост виходить завжди, але його ТОН залежить від оцінки. Порожнього поста тут
  * не буває: вечірній індекс на те й вечірній, що приходить щовечора.
  */
-export function renderFlightNight(input: FlightNightInput): string {
-  const { weather, rhythm } = input;
-  const emoji = BAND_EMOJI[weather.band];
+/**
+ * Чи доречно називати цей індекс «вечірнім».
+ *
+ * Читаємо ми ПОТОЧНУ погоду, а не прогноз на ніч. Ввечері різниця мала —
+ * умови за кілька годин здебільшого ті самі, і «індекс на ніч» чесний. О
+ * десятій ранку та сама фраза містить уже два твердження, яких у даних немає:
+ * що зараз вечір і що ми знаємо погоду на ніч. Тому вдень заголовок каже
+ * рівно те, що є, — умови зараз.
+ */
+function isEveningOrNight(hourKyiv: number): boolean {
+  return hourKyiv >= 17 || hourKyiv < 6;
+}
 
-  const head =
-    weather.band === "favorable"
+export function renderFlightNight(input: FlightNightInput): string {
+  const { weather, rhythm, hourKyiv } = input;
+  const emoji = BAND_EMOJI[weather.band];
+  const evening = isEveningOrNight(hourKyiv);
+
+  const head = evening
+    ? weather.band === "favorable"
       ? "🌙 <b>Вечірній індекс: погода на боці дронів</b>"
       : weather.band === "adverse"
         ? "🌙 <b>Вечірній індекс: погода проти дронів</b>"
-        : "🌙 <b>Вечірній індекс на ніч</b>";
+        : "🌙 <b>Вечірній індекс на ніч</b>"
+    : weather.band === "favorable"
+      ? "☁️ <b>Зараз погода на боці дронів</b>"
+      : weather.band === "adverse"
+        ? "☁️ <b>Зараз погода проти дронів</b>"
+        : "☁️ <b>Погодні умови для дронів зараз</b>";
 
   const lines = [head, "", `${emoji} <b>Погода:</b> ${weather.label}`];
+  if (!evening) {
+    lines.push(
+      "",
+      "<i>Це умови просто зараз, а не прогноз на ніч. Ближче до вечора запитайте ще раз — тоді число говоритиме саме про найближчу ніч.</i>",
+    );
+  }
   // Дві головні причини — щоб оцінка не була голослівною.
   for (const r of weather.reasons.slice(0, 2)) lines.push(`• ${r}`);
 

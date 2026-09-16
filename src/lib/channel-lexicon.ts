@@ -27,7 +27,11 @@ export interface Lexicon {
   typeName(type: ThreatType, n: number): string;
   /** Румб курсу за індексом 0..7 (0 = Пн, далі за годинниковою). */
   course(index: number): string;
-  headline(kind: HeadlineKind, seed: number): string;
+  /**
+   * Заголовок поста. `hourKyiv` — не косметика: частина варіантів прив'язана
+   * до пори доби, і без години вони брехали б у кожному третьому пості.
+   */
+  headline(kind: HeadlineKind, seed: number, hourKyiv: number): string;
   tail(serious: boolean, seed: number): string;
   /** «— у бік: Полтава (~11 хв), уважно!» */
   towards(parts: string[]): string;
@@ -86,6 +90,39 @@ function pick<T>(arr: readonly T[], seed: number): T {
   return arr[seed % arr.length]!;
 }
 
+/**
+ * Варіант заголовка, який має право зʼявитись лише у свою пору доби.
+ *
+ * Знадобилось після справжньої вади в каналі: серед трьох варіантів рою лежала
+ * «Нічна зміна шахедів», вибір ішов за хешем вмісту поста — і приблизно кожен
+ * третій денний рій оголошував ніч. Заголовок читають першим і часто єдиним;
+ * хибне слово в ньому знецінює все під ним.
+ *
+ * Пора доби — не здогад, а відоме: київська година в нас є. Тому варіант не
+ * викидаємо (він хороший, коли правдивий), а прив'язуємо до вікна.
+ */
+type HeadOption = string | { readonly text: string; readonly hours: readonly [number, number] };
+
+/** Чи година в вікні `[from, to]` включно; вікно може переходити через північ. */
+function inHourWindow(hour: number, [from, to]: readonly [number, number]): boolean {
+  return from <= to ? hour >= from && hour <= to : hour >= from || hour <= to;
+}
+
+/**
+ * Заголовок із пулу, звужений порою доби.
+ *
+ * Якщо жоден прив'язаний варіант не підходить, лишаються безчасові — саме тому
+ * кожен пул мусить мати хоч один безчасовий варіант, і це перевірено тестом.
+ * Порожній пул тут неможливий, але якби став можливим, краще мовчазний збій на
+ * складанні, ніж заголовок, що бреше про час.
+ */
+function pickHead(arr: readonly HeadOption[], seed: number, hourKyiv: number): string {
+  const fits = arr.filter((o) => typeof o === "string" || inHourWindow(hourKyiv, o.hours));
+  const pool = fits.length ? fits : arr.filter((o): o is string => typeof o === "string");
+  const chosen = pick(pool, seed);
+  return typeof chosen === "string" ? chosen : chosen.text;
+}
+
 /* ─── Українська ────────────────────────────────────────────────────────── */
 
 // Множина за українськими правилами (ті самі 3 форми: 1 / 2-4 / 5+).
@@ -120,10 +157,19 @@ const UK_COURSE = [
   "на північний захід",
 ];
 
-const UK_HEAD: Record<HeadlineKind, string[]> = {
+const UK_HEAD: Record<HeadlineKind, HeadOption[]> = {
   rocket: ["🚀 <b>Ракетна небезпека!</b>", "🚀 <b>Увага, ракети!</b>"],
   kab: ["💥 <b>КАБи в повітрі</b>", "💥 <b>Працюють КАБи</b>"],
-  swarm: ["🛸 <b>Шахеди роєм</b>", "🛸 <b>Шахеди пачками</b>", "🛸 <b>Нічна зміна шахедів</b>"],
+  swarm: [
+    "🛸 <b>Шахеди роєм</b>",
+    "🛸 <b>Шахеди пачками</b>",
+    // Пуски зазвичай починаються ввечері й тягнуться до світанку — саме це
+    // вікно фраза й описує. О 14:00 вона просто неправда.
+    { text: "🛸 <b>Нічна зміна шахедів</b>", hours: [22, 5] },
+    // Дзеркальний випадок, і він вартий окремого слова: денний рій — рідкість,
+    // і назвати його денним означає сказати читачеві щось справжнє.
+    { text: "🛸 <b>Шахеди серед дня</b>", hours: [9, 17] },
+  ],
   few: ["🛸 <b>Шахеди в небі</b>", "🛸 <b>Знову шахеди</b>", "🛸 <b>Дзижчать шахеди</b>"],
   calm: ["🛰 <b>Рух у небі</b>", "🛰 <b>Щось літає</b>"],
 };
@@ -182,7 +228,7 @@ export const UK: Lexicon = {
     return pluralUk(n, one, few, many);
   },
   course: (i) => `курсом ${UK_COURSE[i % 8]}`,
-  headline: (kind, seed) => pick(UK_HEAD[kind], seed),
+  headline: (kind, seed, hourKyiv) => pickHead(UK_HEAD[kind], seed, hourKyiv),
   tail: (serious, seed) => pick(serious ? UK_TAIL_SERIOUS : UK_TAIL_LIGHT, seed),
   towards: (parts) => ` — у бік: ${parts.join(", ")}, уважно!`,
   towardsOwnCentre: (time) => ` — на обласний центр (${time}), уважно!`,
@@ -234,7 +280,7 @@ const EN_COURSE = [
   "north-west",
 ];
 
-const EN_HEAD: Record<HeadlineKind, string[]> = {
+const EN_HEAD: Record<HeadlineKind, HeadOption[]> = {
   rocket: ["🚀 <b>Missile threat</b>", "🚀 <b>Missiles inbound</b>"],
   kab: ["💥 <b>Glide bombs in the air</b>"],
   swarm: ["🛸 <b>Shahed swarm</b>", "🛸 <b>Mass drone attack</b>"],
@@ -264,7 +310,7 @@ export const EN: Lexicon = {
     return n === 1 ? one : many;
   },
   course: (i) => `heading ${EN_COURSE[i % 8]}`,
-  headline: (kind, seed) => pick(EN_HEAD[kind], seed),
+  headline: (kind, seed, hourKyiv) => pickHead(EN_HEAD[kind], seed, hourKyiv),
   tail: (serious, seed) => pick(serious ? EN_TAIL_SERIOUS : EN_TAIL_LIGHT, seed),
   towards: (parts) => ` — heading for ${parts.join(", ")}`,
   towardsOwnCentre: (time) => ` — heading for the regional centre (${time})`,
