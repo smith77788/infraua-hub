@@ -178,6 +178,22 @@ export function angularDiff(a: number, b: number): number {
  * ETA перший). Один обʼєкт лишається лише з найшвидшою вхідною ціллю — щоб не
  * дублювати той самий обʼєкт від кількох цілей.
  */
+/**
+ * Чи можна взагалі щось рахувати від цієї позначки.
+ *
+ * Не педантизм, а захист від мовчазного проходу. Порівняння з NaN ХИБНІ ВСІ:
+ * і `d < 3`, і `d > maxRangeKm`, і `off > corridorDeg`. Тому ціль із
+ * нескінченною координатою не відсіювалась жодним фільтром — вона проходила
+ * весь ланцюг і виходила в канал рядком «❗️ Вінниччина — ціль проходить
+ * поруч · Траверз: ~NaN хв». Знайдено фазингом.
+ *
+ * Фільтр «більше за межу» ніколи не ловить того, що поза числами взагалі, —
+ * це треба питати окремо й першим.
+ */
+function hasFinitePosition(p: { lat: number; lon: number }): boolean {
+  return Number.isFinite(p.lat) && Number.isFinite(p.lon);
+}
+
 export function projectThreats(
   threats: Threat[],
   facilities: Facility[],
@@ -195,6 +211,7 @@ export function projectThreats(
 
   const all: ThreatProjection[] = [];
   for (const t of threats) {
+    if (!hasFinitePosition(t)) continue;
     if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) continue;
     const q = t.quality ?? EMPTY_QUALITY;
     // Заміряна швидкість б'є типову: таблиця — це орієнтир для класу, а
@@ -206,8 +223,9 @@ export function projectThreats(
     const uncertainty = displayRadiusKm(q);
     const observed = courseIsObserved(q);
     for (const f of targets) {
+      if (!hasFinitePosition(f)) continue;
       const d = distanceKm(t, f);
-      if (d < 1 || d > maxRangeKm) continue;
+      if (!Number.isFinite(d) || d < 1 || d > maxRangeKm) continue;
       const off = angularDiff(t.heading, bearingDeg(t, f));
       if (off > corridorDeg) continue;
       /*
@@ -300,6 +318,7 @@ export function citiesOnCourse(
     maxMissKm?: number;
   } = {},
 ): CityETA[] {
+  if (!hasFinitePosition(t)) return [];
   if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) return [];
   const corridorDeg = opts.corridorDeg ?? 35;
   const maxRangeKm = opts.maxRangeKm ?? 160;
@@ -310,8 +329,9 @@ export function citiesOnCourse(
   const maxMissKm = opts.maxMissKm ?? 25;
   const out: CityETA[] = [];
   for (const c of cities) {
+    if (!hasFinitePosition(c)) continue;
     const d = distanceKm(t, c);
-    if (d < 3 || d > maxRangeKm) continue;
+    if (!Number.isFinite(d) || d < 3 || d > maxRangeKm) continue;
     const off = angularDiff(t.heading, bearingDeg(t, c));
     if (off > corridorDeg) continue;
     /*

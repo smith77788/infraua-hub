@@ -61,14 +61,26 @@ export const EMPTY_QUALITY: ThreatQuality = {
  */
 export const ASSUMED_UNCERTAINTY_KM = 15;
 
-/** Радіус для показу: заявлений джерелом або консервативне припущення. */
+/**
+ * Радіус для показу: заявлений джерелом або консервативне припущення.
+ *
+ * Функція ТОТАЛЬНА — визначена для будь-якого входу, і це не педантизм.
+ * `readQuality` чистить дані джерела, але тип каже лише `number | null`, а NaN
+ * у TypeScript — цілком законне число. Радіус у NaN не падає й не помітний: він
+ * тихо робить NaN усю вилку часу підльоту, а кожне порівняння з NaN хибне, тож
+ * рішення «будити» просто перестає спрацьовувати. Знайдено фазингом
+ * (`radar-fuzz.test.ts`), і ціна мовчазного відмовляння тут така сама, як у
+ * ненадісланого сповіщення.
+ */
 export function displayRadiusKm(q: ThreatQuality): number {
-  return q.uncertaintyKm ?? ASSUMED_UNCERTAINTY_KM;
+  const km = q.uncertaintyKm;
+  return typeof km === "number" && Number.isFinite(km) && km > 0 ? km : ASSUMED_UNCERTAINTY_KM;
 }
 
 /** Чи радіус — заміряний джерелом, чи наш запасний варіант. */
 export function radiusIsStated(q: ThreatQuality): boolean {
-  return q.uncertaintyKm !== null;
+  const km = q.uncertaintyKm;
+  return typeof km === "number" && Number.isFinite(km) && km > 0;
 }
 
 function parsePosition(raw: unknown): PositionQuality | null {

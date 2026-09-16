@@ -747,7 +747,20 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
   if (!Array.isArray(list)) return null;
   const out: Threat[] = [];
   for (const t of list) {
-    if (typeof t.lat !== "number" || typeof t.lon !== "number") continue;
+    /*
+     * `Number.isFinite`, а не `typeof === "number"`.
+     *
+     * typeof NaN — це «number», а всі порівняння NaN із межами bbox нижче
+     * хибні, тож запис із NaN проходив би повз обидві перевірки й потрапляв у
+     * систему. На карті його намалювати неможливо, у лічильнику він є — і
+     * число над картою перестає збігатися з тим, що під нею.
+     *
+     * Чесно: з JSON це недосяжно (у JSON немає літерала NaN), і на живому фіді
+     * я такого не спостерігав. Але перевірка, яка не перевіряє того, що
+     * обіцяє, — це вада незалежно від того, чи вистрілила вона сьогодні.
+     */
+    if (typeof t.lat !== "number" || !Number.isFinite(t.lat)) continue;
+    if (typeof t.lon !== "number" || !Number.isFinite(t.lon)) continue;
     if (t.status && t.status !== "active") continue;
     if (
       t.lat < UA_BBOX.south ||
