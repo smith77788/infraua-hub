@@ -2,14 +2,7 @@ import { useMemo } from "react";
 import { Navigation } from "lucide-react";
 
 import type { Threat } from "@/lib/air";
-import {
-  estimateVelocity,
-  reachedPlaces,
-  swarmVector,
-  trailToFixes,
-  type Velocity,
-} from "@/lib/trajectory";
-import { ALL_PLACES } from "@/lib/ua-cities";
+import { swarmForecast } from "@/lib/swarm-forecast";
 
 const DIRS = [
   "північ",
@@ -25,33 +18,16 @@ function dirUk(bearing: number): string {
   return DIRS[Math.round(bearing / 45) % 8]!;
 }
 
-const MIN_CONFIDENCE = 0.4;
-
 /**
  * «Куди йде рій» — прогноз руху за СПОСТЕРЕЖЕНИМ треком, не за полем heading.
  *
  * Джерело — власний trail кожної цілі (реальні фікси з часом): доступний одразу,
- * без очікування, поки накопичиться клієнтський буфер. Немає впевненого руху —
- * панелі немає: порожній прогноз гірший за його відсутність.
+ * без очікування, поки накопичиться клієнтський буфер. Оцінку рахує
+ * swarm-forecast (з відсівом стрибків і гейтом «лише спостережений курс»).
+ * Немає впевненого руху — панелі немає: порожній прогноз гірший за відсутність.
  */
 export default function WaveForecast({ threats }: { threats: readonly Threat[] }) {
-  const model = useMemo(() => {
-    const confident: { lat: number; lon: number; v: Velocity }[] = [];
-    for (const t of threats) {
-      if (!t.trail || t.trail.length < 2) continue;
-      const v = estimateVelocity(trailToFixes(t.trail));
-      if (v && v.confidence >= MIN_CONFIDENCE) confident.push({ lat: t.lat, lon: t.lon, v });
-    }
-    if (confident.length === 0) return null;
-    const swarm = swarmVector(confident.map((c) => c.v));
-    if (!swarm) return null;
-    const centroid = {
-      lat: confident.reduce((s, c) => s + c.lat, 0) / confident.length,
-      lon: confident.reduce((s, c) => s + c.lon, 0) / confident.length,
-    };
-    const reach = reachedPlaces(centroid, swarm, ALL_PLACES, { horizonMin: 30 }).slice(0, 3);
-    return { swarm, reach, tracked: confident.length };
-  }, [threats]);
+  const model = useMemo(() => swarmForecast(threats, Date.now()), [threats]);
 
   if (!model) return null;
   const { swarm, reach, tracked } = model;
