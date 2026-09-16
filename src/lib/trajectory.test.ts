@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import {
   estimateVelocity,
+  forecastCone,
   projectForward,
   reachedPlaces,
   swarmVector,
@@ -144,6 +145,38 @@ describe("projectForward — конус невизначеності", () => {
     const sure = projectForward({ lat: 50, lon: 30 }, { ...v, confidence: 1 }, 15);
     const unsure = projectForward({ lat: 50, lon: 30 }, { ...v, confidence: 0.2 }, 15);
     expect(unsure.uncertaintyKm).toBeGreaterThan(sure.uncertaintyKm);
+  });
+});
+
+describe("forecastCone", () => {
+  const v = { bearingDeg: 90, speedKmh: 180, confidence: 0.8 };
+  it("центрлінія йде за курсом (на схід — довгота зростає), вістря попереду", () => {
+    const cone = forecastCone({ lat: 50, lon: 30 }, v, { horizonMin: 18, stepMin: 3 });
+    expect(cone.centerline.length).toBeGreaterThan(2);
+    expect(cone.tip.lon).toBeGreaterThan(30);
+    // остання точка центрлінії = вістря
+    const last = cone.centerline[cone.centerline.length - 1]!;
+    expect(Math.abs(last[1] - cone.tip.lon)).toBeLessThan(1e-6);
+  });
+  it("контур замкнений і ширший за центрлінію (конус, не лінія)", () => {
+    const cone = forecastCone({ lat: 50, lon: 30 }, v);
+    // ring містить носій + праву гілку + ліву — помітно більше за центрлінію
+    expect(cone.ring.length).toBeGreaterThan(cone.centerline.length);
+  });
+  it("менша впевненість — ширший конус біля вістря", () => {
+    const sure = forecastCone({ lat: 50, lon: 30 }, { ...v, confidence: 1 });
+    const unsure = forecastCone({ lat: 50, lon: 30 }, { ...v, confidence: 0.2 });
+    // Відстань між крайньою правою і лівою точкою (біля вістря) більша при невпевненості.
+    const widthAtTip = (c: ReturnType<typeof forecastCone>) => {
+      const mid = Math.floor((c.ring.length - 1) / 2);
+      const r = c.ring[1]!; // перша права
+      void r;
+      // Беремо праву й ліву на вістрі: остання права та перша ліва навколо середини.
+      const right = c.ring[mid]!;
+      const left = c.ring[mid + 1]!;
+      return Math.hypot(right[0] - left[0], right[1] - left[1]);
+    };
+    expect(widthAtTip(unsure)).toBeGreaterThan(widthAtTip(sure));
   });
 });
 

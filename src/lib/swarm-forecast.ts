@@ -57,6 +57,8 @@ export function observedVelocity(t: Threat, now: number): Velocity | null {
 export interface SwarmForecast {
   swarm: SwarmVector;
   reach: ReachedPlace[];
+  /** Центр мас цілей зі спостереженим рухом — носій прогнозу. */
+  centroid: { lat: number; lon: number };
   /** Скільки цілей із спостереженим рухом лягло в оцінку. */
   tracked: number;
 }
@@ -76,7 +78,7 @@ export function swarmForecast(threats: readonly Threat[], now: number): SwarmFor
     lon: confident.reduce((s, c) => s + c.lon, 0) / confident.length,
   };
   const reach = reachedPlaces(centroid, swarm, ALL_PLACES, { horizonMin: 30 }).slice(0, 3);
-  return { swarm, reach, tracked: confident.length };
+  return { swarm, reach, centroid, tracked: confident.length };
 }
 
 /** Спільний вектор підмножини цілей (членів однієї хвилі). */

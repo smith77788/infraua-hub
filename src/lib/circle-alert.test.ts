@@ -4,6 +4,7 @@ import {
   decideCircleAlert,
   distanceBand,
   pendingCheckins,
+  renderPendingCheckins,
   CIRCLE_ALERT_COOLDOWN_MS,
   type CircleMemberState,
 } from "./circle-alert";
@@ -110,5 +111,96 @@ describe("pendingCheckins", () => {
       now,
     );
     expect(list.map((x) => x.chatId)).toEqual([6, 5]);
+  });
+});
+
+describe("renderPendingCheckins", () => {
+  const at = 1_000_000;
+  const member = (name: string, dangerAgoMin: number, okAt: number | null) => ({
+    chatId: name.length,
+    name,
+    lastDangerAt: at - dangerAgoMin * 60_000,
+    okAt,
+  });
+
+  it("мовчить, коли мовчати нема про кого", () => {
+    // Порожній список, поданий як «усі в порядку», був би твердженням, якого
+    // ми не перевіряли: ми знаємо лише про відмітки, не про людей.
+    expect(renderPendingCheckins([])).toBe(null);
+    expect(renderPendingCheckins(pendingCheckins([], at))).toBe(null);
+  });
+
+  it("називає того, над ким була небезпека і хто не відмітився", () => {
+    const line = renderPendingCheckins(pendingCheckins([member("Олена", 20, null)], at));
+    expect(line).toContain("Олена");
+    expect(line).toContain("не відмітився");
+  });
+
+  it("не називає того, хто відмітився вже після своєї небезпеки", () => {
+    const ok = member("Олена", 20, at - 5 * 60_000);
+    expect(renderPendingCheckins(pendingCheckins([ok], at))).toBe(null);
+  });
+
+  it("відмітка ДО небезпеки не рахується за відповідь", () => {
+    // Тонка межа: «я в порядку» о 21:00 не говорить нічого про наліт о 23:00.
+    const stale = member("Олена", 20, at - 90 * 60_000);
+    expect(renderPendingCheckins(pendingCheckins([stale], at))).toContain("Олена");
+  });
+
+  it("не драматизує: каже, що знає лише про відсутність відмітки", () => {
+    const line = renderPendingCheckins(pendingCheckins([member("Олена", 20, null)], at));
+    expect(line).toContain("лише відсутність відмітки");
+  });
+
+  it("екранує імʼя — його пише сама людина", () => {
+    const line = renderPendingCheckins(
+      pendingCheckins([member("<script>x</script>", 20, null)], at),
+    );
+    expect(line).not.toContain("<script>");
+    expect(line).toContain("&lt;script&gt;");
+  });
+
+  it("кілька імен — в одному рядку й у множині", () => {
+    const line = renderPendingCheckins(
+      pendingCheckins([member("Олена", 20, null), member("Петро", 40, null)], at),
+    );
+    expect(line).toContain("Олена");
+    expect(line).toContain("Петро");
+    expect(line).toContain("були");
+  });
+});
+
+describe("межа з circle-alerts (множинним)", () => {
+  const base = {
+    name: "Олена",
+    circleName: "Родина",
+    level: "shelter" as const,
+    nearestKm: 8,
+    lastCircleAlertAt: null,
+    now: 1_000_000,
+  };
+
+  it("не повторює фразу, яку вже сказав модуль офіційних тривог", () => {
+    // «У зоні тривоги» — це те, що людина вже прочитала, коли в області рідного
+    // оголосили тривогу. Повторити її тут означало б видати нову інформацію за
+    // ту саму й навчити не читати друге повідомлення.
+    const { text } = decideCircleAlert(base);
+    expect(text).not.toContain("у зоні тривоги");
+  });
+
+  it("каже саме те, що нового: ціль над точкою, а не оголошення в області", () => {
+    const { text } = decideCircleAlert(base);
+    expect(text).toContain("на її точку");
+    expect(text).toContain("не оголошення тривоги в області");
+  });
+
+  it("називає джерело оцінки — це наше небо, а не офіційне повідомлення", () => {
+    expect(decideCircleAlert(base).text).toContain("за нашою оцінкою");
+  });
+
+  it("смуга відстані замість точного місця лишається", () => {
+    const { text } = decideCircleAlert(base);
+    expect(text).toContain("ближче 10 км");
+    expect(text).not.toContain("8");
   });
 });
