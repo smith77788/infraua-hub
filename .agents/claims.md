@@ -22,7 +22,7 @@
 | `carriers` | сесія `018PZeXt` | ✅ вплетено |
 | `route`, `group-duty`, `safety-advice` | сесія `018PZeXt` | ✅ вплетено |
 | `geo-index`, `delivery`, `capacity` | сесія `018PZeXt` | ✅ вплетено (розсилка) |
-| `personal-journal` | — | вільно |
+| `personal-journal` | сесія `018iCM9h` | 🔨 в роботі |
 | `threat-rhythm` | — | вільно |
 | `week-trend` | — | ⚠️ перетинається з `personal-stats.summarizeWeek` |
 
