@@ -377,6 +377,7 @@ export const PERSONAL_ACTIONS = {
   mute: "mu:1",
   unmute: "mu:0",
   shelter: "sh",
+  share: "shr",
 } as const;
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
@@ -423,6 +424,7 @@ export function parsePersonalAction(
   | { kind: "radius"; value: number }
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
+  | { kind: "share" }
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
@@ -430,6 +432,7 @@ export function parsePersonalAction(
   if (data === PERSONAL_ACTIONS.wantGeo) return { kind: "wantGeo" };
   if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
   if (data === PERSONAL_ACTIONS.shelter) return { kind: "shelter" };
+  if (data === PERSONAL_ACTIONS.share) return { kind: "share" };
   if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
     return v === "drone" || v === "explosion" || v === "air-defence"
@@ -487,6 +490,9 @@ export function personalKeyboard(opts: { withOk?: boolean } = {}): {
       { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
       { text: "⚙️", callback_data: PERSONAL_ACTIONS.settings },
     ],
+    // Окремим рядком: картку обстановки пересилають рідним, і разом із нею їде
+    // посилання на бота — головний канал росту, не реклама.
+    [{ text: "📤 Поділитися обстановкою", callback_data: PERSONAL_ACTIONS.share }],
   ];
   if (opts.withOk) {
     rows.unshift([{ text: "✅ Я в порядку", callback_data: PERSONAL_ACTIONS.imOk }]);

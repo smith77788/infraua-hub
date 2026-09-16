@@ -73,6 +73,7 @@ import {
   verifyThreat,
 } from "./lib/advisory";
 import { inlineResults, parseInlineQuery } from "./lib/bot-inline";
+import { renderShareCard } from "./lib/share-card";
 import { matchPlace } from "./lib/places";
 import {
   locationKeyboard,
@@ -2033,7 +2034,7 @@ async function handlePersonalPress(
   // Поза гейтом: пауза сповіщень (як `/stop`) і дорога до укриття. Ставити
   // умову між людиною під тривогою й укриттям не можна — див. команду
   // `/shelter` нижче в цьому файлі.
-  if (action.kind !== "mute" && action.kind !== "shelter") {
+  if (action.kind !== "mute" && action.kind !== "shelter" && action.kind !== "share") {
     const gate = await subscriptionGate(token, press.userId);
     if (gate) {
       await telegramAnswerCallback(token, press.callbackId, "Спершу підпишіться на канал");
@@ -2119,6 +2120,34 @@ async function handlePersonalPress(
     }
     await telegramAnswerCallback(token, press.callbackId, "Шукаю поруч…");
     await sendShelters(token, press.chatId, sub.point);
+    return true;
+  }
+
+  /*
+   * «Поділитися обстановкою» — знеособлена картка для пересилання рідним.
+   *
+   * Окремим повідомленням і БЕЗ клавіатури: карту пересилають далі, а inline-
+   * кнопки з чужим callback у чужому чаті працювати не будуть. Замість них у
+   * тексті — deep-link на бота: хто отримав картку, одним дотиком заведе свою
+   * точку. Показуємо назву точки (місто/область), а не координати.
+   */
+  if (action.kind === "share") {
+    if (!sub.point) {
+      await telegramAnswerCallback(token, press.callbackId, "Спершу вкажіть точку");
+      await telegramSend(token, press.chatId, renderAskPoint(), askPointKeyboard());
+      return true;
+    }
+    await telegramAnswerCallback(token, press.callbackId, "Готую картку…");
+    const threats = await fetchThreatsCached(60_000);
+    const assess = personalAssessment(threats, sub.point, { radiusKm: sub.radiusKm });
+    const danger = dangerIndex(assess);
+    const name = await botUsername(token);
+    const botLink = name ? `https://t.me/${name}?start=sh` : undefined;
+    await telegramSend(
+      token,
+      press.chatId,
+      renderShareCard({ placeLabel: sub.point.label, assessment: assess, danger, botLink }),
+    );
     return true;
   }
 
