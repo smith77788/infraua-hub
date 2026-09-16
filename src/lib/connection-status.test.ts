@@ -74,3 +74,85 @@ describe("airConnection", () => {
     expect(c.link).toBe("offline");
   });
 });
+
+describe("вік СПОСТЕРЕЖЕННЯ — другий годинник", () => {
+  const NOW = Date.UTC(2026, 8, 16, 19, 0, 0);
+  const min = (n: number) => NOW - n * 60_000;
+
+  it("свіжа відповідь із застиглими спостереженнями — це НЕ «наживо»", () => {
+    /*
+     * Головний випадок, заради якого другий годинник і потрібен. На збої
+     * джерела сервер свідомо віддає останню відому картину, тож відповідь
+     * приходить справна кожні 15 секунд. За старим суддею радар писав би
+     * «наживо» над позначками годинної давності.
+     */
+    const c = airConnection({
+      online: true,
+      hasData: true,
+      feedUpdatedAt: min(0.2),
+      observedAt: min(60),
+      now: NOW,
+    });
+    expect(c.link).toBe("frozen");
+    expect(c.banner).toBe(true);
+    expect(c.detail).toContain("не бачило жодної цілі");
+  });
+
+  it("порожнє небо не оголошується поломкою", () => {
+    /*
+     * Тиха ніч — спостережень немає взагалі. Якби «невідомо» рахувалось за
+     * «старо», банер висів би щоночі, і за тиждень йому перестали б вірити.
+     */
+    const c = airConnection({
+      online: true,
+      hasData: true,
+      feedUpdatedAt: min(0.2),
+      observedAt: null,
+      now: NOW,
+    });
+    expect(c.link).toBe("live");
+  });
+
+  it("звичайна дискретність джерела не тривожить", () => {
+    // Заміряно на живому джерелі: найстаріша ціль була 7,9 хв, медіана ~2 хв.
+    const c = airConnection({
+      online: true,
+      hasData: true,
+      feedUpdatedAt: min(0.2),
+      observedAt: min(8),
+      now: NOW,
+    });
+    expect(c.link).toBe("live");
+  });
+
+  it("спостереження між порогами дає «затримку», а не тишу", () => {
+    const c = airConnection({
+      online: true,
+      hasData: true,
+      feedUpdatedAt: min(0.2),
+      observedAt: min(15),
+      now: NOW,
+    });
+    expect(c.link).toBe("delayed");
+    expect(c.detail).toContain("нових спостережень");
+  });
+
+  it("береться ГІРШИЙ із двох годинників, а не останній названий", () => {
+    // Спостереження свіже, але відповіді немає давно — це теж поломка.
+    const c = airConnection({
+      online: true,
+      hasData: true,
+      feedUpdatedAt: min(40),
+      observedAt: min(1),
+      now: NOW,
+    });
+    expect(c.link).toBe("frozen");
+    expect(c.detail).toContain("Фід не оновлюється");
+  });
+
+  it("без другого годинника поведінка лишається як була", () => {
+    // Старі виклики не передають observedAt — вердикт не має від цього змінитись.
+    const c = airConnection({ online: true, hasData: true, feedUpdatedAt: min(0.2), now: NOW });
+    expect(c.link).toBe("live");
+  });
+});

@@ -14,7 +14,7 @@
  * Чиста функція: та сама на вході — та сама на виході, тож її видно в тестах.
  */
 
-import type { Threat, ThreatType } from "./air";
+import { observedAt, type Threat, type ThreatType } from "./air";
 
 export interface PublicThreat {
   lat: number;
@@ -27,6 +27,16 @@ export interface PublicThreat {
 export interface PublicAirSnapshot {
   /** Коли знімок сформовано (epoch ms). */
   at: number;
+  /**
+   * Коли джерело востаннє БАЧИЛО ціль (epoch ms), або `null` на порожньому небі.
+   *
+   * Окремо від `at`, і це головне поле для того, хто вбудовує наші дані. `at`
+   * каже лише, що наш сервер відповів: на збої джерела він свідомо віддає
+   * останню відому картину, тож `at` буде свіжим і тоді, коли позначки
+   * годинної давності. Без `observedAt` чужий віджет показував би застиглу
+   * картину як поточну — і ми були б причиною цієї помилки.
+   */
+  observedAt: number | null;
   /** Скільки цілей у небі. */
   count: number;
   threats: PublicThreat[];
@@ -58,6 +68,7 @@ export function publicAirSnapshot(
     });
   return {
     at: now,
+    observedAt: observedAt(threats),
     count: list.length,
     threats: list,
     source: "OSINT",

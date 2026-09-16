@@ -67,3 +67,35 @@ describe("publicAirSnapshot", () => {
     expect(snap.source).toBe("OSINT");
   });
 });
+
+describe("observedAt у публічному знімку", () => {
+  it("несе час спостереження окремо від часу формування", () => {
+    /*
+     * Той, хто вбудовує наші дані, за `at` бачить лише, що наш сервер
+     * відповів. На збої джерела сервер віддає останню відому картину — і без
+     * `observedAt` чужий віджет показував би застиглу картину як поточну.
+     */
+    const snap = publicAirSnapshot(
+      [
+        {
+          id: "1",
+          name: "x",
+          lat: 50,
+          lon: 30,
+          source: "s",
+          count: 1,
+          since: "",
+          expires: "",
+          lastSeen: "2026-09-16T18:56:00Z",
+        } as never,
+      ],
+      Date.UTC(2026, 8, 16, 19, 30, 0),
+    );
+    expect(snap.at).toBe(Date.UTC(2026, 8, 16, 19, 30, 0));
+    expect(snap.observedAt).toBe(Date.parse("2026-09-16T18:56:00Z"));
+  });
+
+  it("порожнє небо — час спостереження невідомий, а не «зараз»", () => {
+    expect(publicAirSnapshot([], 1).observedAt).toBeNull();
+  });
+});

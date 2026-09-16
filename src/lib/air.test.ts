@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { fuseThreats, normalizeThreatType, type Threat } from "./air";
+import {
+  fuseThreats,
+  normalizeThreatType,
+  observationsTooOldForAlerts,
+  observedAt,
+  type Threat,
+} from "./air";
 import { renderChannelPost } from "./channel-post";
 
 function t(id: string, lat: number, lon: number, extra: Partial<Threat> = {}): Threat {
@@ -103,5 +109,91 @@ describe("normalizeThreatType — тип із мережі зводиться д
     };
     expect(() => renderChannelPost([t])).not.toThrow();
     expect(renderChannelPost([t])).not.toBeNull();
+  });
+});
+
+describe("observedAt — коли ціль справді спостерегли", () => {
+  const t = (over: Partial<Threat>): Threat =>
+    ({
+      id: "1",
+      name: "x",
+      lat: 50,
+      lon: 30,
+      source: "s",
+      count: 1,
+      since: "",
+      expires: "",
+      ...over,
+    }) as Threat;
+
+  it("бере найсвіжішу мітку з усіх цілей", () => {
+    const at = observedAt([
+      t({ lastSeen: "2026-09-16T18:50:00Z" }),
+      t({ lastSeen: "2026-09-16T18:56:00Z" }),
+      t({ lastSeen: "2026-09-16T18:52:00Z" }),
+    ]);
+    expect(at).toBe(Date.parse("2026-09-16T18:56:00Z"));
+  });
+
+  it("без lastSeen бере since", () => {
+    expect(observedAt([t({ since: "2026-09-16T18:40:00Z" })])).toBe(
+      Date.parse("2026-09-16T18:40:00Z"),
+    );
+  });
+
+  it("порожнє небо не має віку спостереження", () => {
+    /*
+     * Не «дуже старо»: інакше кожна тиха ніч читалась би як поломка фіду — а
+     * це найшвидший спосіб навчити людей не вірити банеру.
+     */
+    expect(observedAt([])).toBeNull();
+  });
+
+  it("биті мітки не вважаються спостереженням", () => {
+    expect(observedAt([t({ lastSeen: "не дата" }), t({ since: "" })])).toBeNull();
+  });
+});
+
+describe("observationsTooOldForAlerts — кого можна будити", () => {
+  const NOW = Date.UTC(2026, 8, 16, 19, 0, 0);
+  const at = (minAgo: number) =>
+    ({
+      id: "1",
+      name: "x",
+      lat: 50,
+      lon: 30,
+      source: "s",
+      count: 1,
+      since: "",
+      expires: "",
+      lastSeen: new Date(NOW - minAgo * 60_000).toISOString(),
+    }) as Threat;
+
+  it("свіже спостереження — будимо", () => {
+    expect(observationsTooOldForAlerts([at(2)], NOW)).toBe(false);
+  });
+
+  it("годинна позиція — не будимо", () => {
+    /*
+     * Шахед за годину пролітає близько 180 км. «В укриття» за такою позицією —
+     * або зайва паніка, або обіцянка прикриття, якого немає.
+     */
+    expect(observationsTooOldForAlerts([at(60)], NOW)).toBe(true);
+  });
+
+  it("порожнє небо застарим не буває", () => {
+    // Інакше радар вимикався б щотихої ночі.
+    expect(observationsTooOldForAlerts([], NOW)).toBe(false);
+  });
+
+  it("цілі є, а часу спостереження немає — не заважаємо", () => {
+    // Судити нема на чому; мовчазно вимикати сповіщення гірше.
+    const noTime = { ...at(1), lastSeen: "", since: "" } as Threat;
+    expect(observationsTooOldForAlerts([noTime], NOW)).toBe(false);
+  });
+
+  it("межа рахується за НАЙСВІЖІШОЮ ціллю, а не за найстарішою", () => {
+    // Одна стара позначка поруч зі свіжими не має глушити весь радар.
+    expect(observationsTooOldForAlerts([at(90), at(1)], NOW)).toBe(false);
   });
 });

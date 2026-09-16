@@ -158,6 +158,7 @@ import {
   updateAlertStarts,
 } from "./lib/oblast-watch";
 import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
+import { observationsTooOldForAlerts } from "./lib/air";
 import {
   circleAlertTargets,
   renderRelativeAlarm,
@@ -3038,6 +3039,22 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   const threats = await fetchThreatsCached(60_000);
   const official = await fetchOfficialAlerts();
   const now = Date.now();
+
+  /*
+   * Не будимо людей позиціями, яким уже не можна вірити.
+   *
+   * На збої джерела `fetchThreatsCached` свідомо віддає останню відому картину
+   * — для КАРТИ це правильно: там є банер, і людина сама бачить вік. Сповіщення
+   * застережень не показує: воно будить о третій ночі. «В укриття» за годинною
+   * позицією — це або зайва паніка, або обіцянка прикриття, якого немає.
+   *
+   * Офіційні тривоги йдуть окремим обходом і цього не стосуються: то факт
+   * оголошення, а не наша оцінка неба.
+   */
+  if (observationsTooOldForAlerts(threats, now)) {
+    console.warn("персональні сповіщення пропущено: спостереження застарі");
+    return empty;
+  }
   const hour = kyivHour(new Date(now));
   // Зліт носія попереджає про те, що після пуску попередити вже не встигнемо.
   await carrierSweep(threats, now);

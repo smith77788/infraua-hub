@@ -57,6 +57,7 @@ import ActiveWaves from "@/components/ActiveWaves";
 import OfflineBanner from "@/components/OfflineBanner";
 import { useOnline } from "@/hooks/useConnection";
 import { airConnection } from "@/lib/connection-status";
+import { observedAt } from "@/lib/air";
 import { browserStore, readSnapshot, writeSnapshot } from "@/lib/snapshot-cache";
 import { registerServiceWorker } from "@/lib/register-sw";
 import { clusterThreats, updateWaves, type Wave } from "@/lib/waves";
@@ -451,12 +452,26 @@ function Console() {
       airConnection({
         online,
         feedUpdatedAt: threatsQuery.dataUpdatedAt || cachedAir?.at || null,
+        /*
+         * Другий годинник: коли джерело востаннє БАЧИЛО ціль. Без нього
+         * відповідь сервера (яка на збої джерела приходить із кешу й тому
+         * завжди «свіжа») видавала б застиглу карту за живу.
+         */
+        observedAt: observedAt(threats),
         // Перший запит іще в дорозі (online, без помилки) — це не «немає даних».
         hasData:
           airPayload !== undefined || cachedAir !== null || (threatsQuery.isLoading && online),
         now: nowTick,
       }),
-    [online, threatsQuery.dataUpdatedAt, threatsQuery.isLoading, cachedAir, airPayload, nowTick],
+    [
+      online,
+      threatsQuery.dataUpdatedAt,
+      threatsQuery.isLoading,
+      cachedAir,
+      airPayload,
+      threats,
+      nowTick,
+    ],
   );
 
   // Пишемо знімок повітряної картини в буфер реплею при кожному оновленні фіду
