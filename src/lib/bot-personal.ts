@@ -356,6 +356,7 @@ export function renderSettings(sub: Subscriber): string {
     "",
     `Точка: ${sub.point ? `<b>${escapeHtml(sub.point.label)}</b>` : "<b>не задана</b>"}`,
     `Радіус: <b>${sub.radiusKm} км</b>`,
+    `Поріг часу: <b>${sub.leadMin != null ? `будити за ≤${sub.leadMin} хв льоту` : "за радіусом"}</b>`,
     `Будити: <b>${TIER_LABEL[sub.tier]}</b>`,
     `Уночі (23:00–07:00): <b>${NIGHT_LABEL[sub.night]}</b>`,
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
@@ -377,7 +378,12 @@ export const PERSONAL_ACTIONS = {
   mute: "mu:1",
   unmute: "mu:0",
   shelter: "sh",
+  share: "shr",
+  leadPrefix: "ld:",
 } as const;
+
+/** Варіанти порогу «будити за N хв льоту». `off` — вимкнено (вирішує радіус). */
+const LEAD_OPTIONS: (number | "off")[] = ["off", 5, 10, 15];
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
 export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalButton[][] } {
@@ -398,6 +404,13 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
         text: `${sub.radiusKm === km ? "✅ " : ""}${km} км`,
         callback_data: `${PERSONAL_ACTIONS.radiusPrefix}${km}`,
       })),
+      LEAD_OPTIONS.map((opt) => {
+        const current = (sub.leadMin ?? null) === (opt === "off" ? null : opt);
+        return {
+          text: `${current ? "✅ " : ""}${opt === "off" ? "За радіусом" : `≤${opt} хв`}`,
+          callback_data: `${PERSONAL_ACTIONS.leadPrefix}${opt}`,
+        };
+      }),
       [
         sub.muted
           ? { text: "🔔 Увімкнути сповіщення", callback_data: PERSONAL_ACTIONS.unmute }
@@ -423,6 +436,8 @@ export function parsePersonalAction(
   | { kind: "radius"; value: number }
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
+  | { kind: "share" }
+  | { kind: "lead"; value: number | null }
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
@@ -430,6 +445,7 @@ export function parsePersonalAction(
   if (data === PERSONAL_ACTIONS.wantGeo) return { kind: "wantGeo" };
   if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
   if (data === PERSONAL_ACTIONS.shelter) return { kind: "shelter" };
+  if (data === PERSONAL_ACTIONS.share) return { kind: "share" };
   if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
     return v === "drone" || v === "explosion" || v === "air-defence"
@@ -449,6 +465,12 @@ export function parsePersonalAction(
   if (data.startsWith(PERSONAL_ACTIONS.radiusPrefix)) {
     const n = Number(data.slice(PERSONAL_ACTIONS.radiusPrefix.length));
     return Number.isFinite(n) ? { kind: "radius", value: n } : null;
+  }
+  if (data.startsWith(PERSONAL_ACTIONS.leadPrefix)) {
+    const v = data.slice(PERSONAL_ACTIONS.leadPrefix.length);
+    if (v === "off") return { kind: "lead", value: null };
+    const n = Number(v);
+    return Number.isFinite(n) ? { kind: "lead", value: n } : null;
   }
   return null;
 }
@@ -487,6 +509,9 @@ export function personalKeyboard(opts: { withOk?: boolean } = {}): {
       { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
       { text: "⚙️", callback_data: PERSONAL_ACTIONS.settings },
     ],
+    // Окремим рядком: картку обстановки пересилають рідним, і разом із нею їде
+    // посилання на бота — головний канал росту, не реклама.
+    [{ text: "📤 Поділитися обстановкою", callback_data: PERSONAL_ACTIONS.share }],
   ];
   if (opts.withOk) {
     rows.unshift([{ text: "✅ Я в порядку", callback_data: PERSONAL_ACTIONS.imOk }]);
@@ -522,6 +547,12 @@ export function renderShelters(
   list: readonly NearbyShelter[],
   caveat: string,
   degraded = false,
+  /**
+   * Примітки про безпечний бік, за id укриття. Показуємо як мʼяку підказку, не
+   * змінюючи порядок за відстанню: під тривогою найближче важить найбільше, а
+   * бік — лише нюанс поверх нього.
+   */
+  safeNotes?: Record<string, string>,
 ): string {
   if (!list.length) {
     return [
@@ -543,6 +574,8 @@ export function renderShelters(
       `${KIND_EMOJI[s.kind]} <b>${escapeHtml(s.name)}</b> — ${s.walkMin} хв пішки (${s.distanceKm} км) · ${where}`,
     );
     lines.push(`<i>${escapeHtml(KIND_NOTE[s.kind])}</i>`);
+    const note = safeNotes?.[s.id];
+    if (note) lines.push(`<i>↳ ${escapeHtml(note)}</i>`);
   }
   lines.push("");
   lines.push(`<i>${escapeHtml(caveat)}</i>`);

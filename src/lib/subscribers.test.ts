@@ -108,6 +108,39 @@ describe("decideAlert", () => {
     expect(decide(sub(), [inbound("b", "cruise", 40)], 1_000_000, 2).send).toBe(true);
   });
 
+  it("поріг часу: далеку ціль тримаємо мовчки, поки є запас часу", () => {
+    // Радіус великий, але поріг «≤5 хв льоту»: шахед за 90 км (низ вилки ~8 хв)
+    // ще не терміновий. lastLevel = shelter, щоб перше сповіщення не рахувалось
+    // ескалацією (вона поріг пробиває — і це правильно).
+    const d = decide(sub({ radiusKm: 120, leadMin: 5, lastLevel: "shelter" }), [
+      inbound("a", "shahed", 90),
+    ]);
+    expect(d.send).toBe(false);
+    expect(d.reason).toContain("ще є час");
+  });
+
+  it("поріг часу: близька ціль у вікні — будимо", () => {
+    const d = decide(sub({ radiusKm: 120, leadMin: 5, lastLevel: "shelter" }), [
+      inbound("a", "shahed", 20),
+    ]);
+    expect(d.send).toBe(true);
+  });
+
+  it("поріг часу пробиває ескалація — перше сповіщення йде попри запас часу", () => {
+    // Свіжий підписник (lastLevel null): поява цілі — це ескалація, і вона
+    // важливіша за поріг часу.
+    const d = decide(sub({ radiusKm: 120, leadMin: 5 }), [inbound("a", "shahed", 90)]);
+    expect(d.send).toBe(true);
+    expect(d.reason).toContain("загострилась");
+  });
+
+  it("поріг часу вимкнено — радіус вирішує, як раніше", () => {
+    const d = decide(sub({ radiusKm: 120, leadMin: null, lastLevel: "shelter" }), [
+      inbound("a", "shahed", 90),
+    ]);
+    expect(d.send).toBe(true);
+  });
+
   it("нічний режим не РОЗШИРЮЄ денний: «лише критичне» вдень лишається таким і вночі", () => {
     const s = sub({ tier: "critical", night: "all" });
     expect(decide(s, [inbound("a", "shahed", 40)], 1_000_000, 2).send).toBe(false);

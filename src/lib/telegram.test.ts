@@ -399,6 +399,18 @@ describe("перелік команд для меню Telegram", () => {
     expect(names).toContain("purge");
   });
 
+  it("довідка не може розійтися з меню", () => {
+    /*
+     * Два списки вже розходились: у меню зʼявились /place, /month, /calm і
+     * /weather, а в /help їх не було. Людина шукала команду там, де їй сказали
+     * шукати, і не знаходила половини бота.
+     */
+    const help = renderHelp(CONSOLE);
+    for (const c of ownerCommands()) {
+      expect(help).toContain(`/${c.command} — `);
+    }
+  });
+
   it("усі команди мають несуфіксовану назву й опис", () => {
     for (const c of ownerCommands()) {
       expect(c.command).toMatch(/^[a-z_]+$/); // Telegram вимагає a-z0-9_

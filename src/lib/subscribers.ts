@@ -18,6 +18,7 @@
 import type { DangerIndex, DangerLevel, PersonalAssessment } from "./advisory";
 import type { ThreatType } from "./air";
 import { kyivHour } from "./kyiv";
+import { withinLead } from "./lead-threshold";
 import type { MyPlace, PlaceAlertState } from "./places-mine";
 import type { PersonalStats } from "./personal-stats";
 
@@ -67,6 +68,14 @@ export interface Subscriber {
   radiusKm: number;
   tier: AlertTier;
   night: NightMode;
+  /**
+   * Поріг «будити за N хвилин льоту» — надбудова над радіусом.
+   *
+   * `null`/відсутнє — поріг вимкнено, вирішує лише радіус (як було). Заданий —
+   * усередині радіуса тривога чекає, поки НАЙБЕЗПЕЧНІШИЙ час підльоту не впаде
+   * до порогу; ескалація рівня його пробиває, як і паузу.
+   */
+  leadMin?: number | null;
   /** Пауза без втрати налаштувань: `/stop` вимикає, `/my` вмикає назад. */
   muted: boolean;
   /** Власний код запрошення. */
@@ -250,6 +259,19 @@ export function decideAlert(
   const cooling = now - sub.lastAlertAt < ALERT_COOLDOWN_MS;
 
   if (escalated) return { send: true, reason: "обстановка загострилась", ids, level };
+
+  // Поріг часу підльоту — ПІСЛЯ ескалації (вона його пробиває) і до дедупу за
+  // цілями: доки найближча ціль поза обраним вікном часу, тривога чекає. Час
+  // беремо найбезпечніший (найраніший край вилки) серед цілей у пулі; коли його
+  // не оцінити — не глушимо (див. withinLead).
+  const poolEtaLow = pool.reduce<number | null>((min, n) => {
+    const eta = n.etaRangeMin?.[0] ?? n.etaMin;
+    if (eta == null) return min;
+    return min == null ? eta : Math.min(min, eta);
+  }, null);
+  const lead = withinLead(poolEtaLow, sub.leadMin ?? null);
+  if (!lead.within) return { send: false, reason: lead.reason, ids, level };
+
   if (now - sub.lastAlertAt < ALERT_FLOOR_MS) {
     return { send: false, reason: "щойно надсилали сповіщення", ids, level };
   }

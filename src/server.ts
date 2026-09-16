@@ -40,6 +40,7 @@ import {
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
+import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import {
   recordAlarmMinutes,
   recordAlarmStart,
@@ -77,6 +78,11 @@ import {
   verifyThreat,
 } from "./lib/advisory";
 import { inlineResults, parseInlineQuery } from "./lib/bot-inline";
+import { renderShareCard } from "./lib/share-card";
+import { rankBySafeSide } from "./lib/shelter-safe-side";
+import { clampLead } from "./lib/lead-threshold";
+import { droneWeather, type DroneWeatherVerdict } from "./lib/drone-weather";
+import { renderFlightNight } from "./lib/flight-night";
 import { matchPlace } from "./lib/places";
 import {
   locationKeyboard,
@@ -571,6 +577,58 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
     // Збій джерела не має стирати останню відому картину: краще дані на
     // хвилину старші, ніж «небо чисте» там, де його ніхто не перевіряв.
     return threatCache?.threats ?? [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Погодне вікно для БпЛА над точкою — «льотна ніч».
+ *
+ * Окремий від консольного `getWeather` запит: той рахує погоду над Києвом і без
+ * хмарності, а тут потрібні саме точка людини й хмарність (вона ховає дрон від
+ * вогневих груп). Тримаємо власний короткий кеш за огрубленими координатами,
+ * щоб сусідні запити не били open-meteo щоразу. Збій джерела не мовчить —
+ * повертаємо оцінку з позначкою «дані неповні», яку робить сам `droneWeather`.
+ */
+const droneWeatherCache = new Map<string, { at: number; verdict: DroneWeatherVerdict }>();
+async function fetchDroneWeather(lat: number, lon: number): Promise<DroneWeatherVerdict> {
+  const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+  const now = Date.now();
+  const cached = droneWeatherCache.get(key);
+  if (cached && now - cached.at < 15 * 60 * 1000) return cached.verdict;
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}` +
+    `&current=temperature_2m,wind_speed_10m,precipitation,cloud_cover&timezone=UTC`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(`weather ${res.status}`);
+    const data = (await res.json()) as {
+      current?: {
+        temperature_2m?: number;
+        wind_speed_10m?: number;
+        precipitation?: number;
+        cloud_cover?: number;
+      };
+    };
+    const c = data.current;
+    if (!c || typeof c.wind_speed_10m !== "number") throw new Error("no current");
+    const verdict = droneWeather({
+      windKmh: Math.round(c.wind_speed_10m),
+      precipMm: c.precipitation ?? 0,
+      cloudPct: typeof c.cloud_cover === "number" ? c.cloud_cover : undefined,
+      tempC: typeof c.temperature_2m === "number" ? c.temperature_2m : undefined,
+    });
+    droneWeatherCache.set(key, { at: now, verdict });
+    return verdict;
+  } catch {
+    // Погода недоступна: рахуємо на нейтральних даних, вердикт буде стриманим.
+    return droneWeather({ windKmh: 15, precipMm: 0 });
   } finally {
     clearTimeout(timer);
   }
@@ -1663,6 +1721,9 @@ async function personalCommand(
     "month",
     "місяць",
     "статистика",
+    "calm",
+    "тихо",
+    "сон",
     "сховатись",
     "radar",
     "me",
@@ -1682,6 +1743,9 @@ async function personalCommand(
     "статистика",
     "route",
     "дорога",
+    "ніч",
+    "погода",
+    "weather",
   ]);
 
   // У групі chatId спільний: завести там «підписника» означало б слати
@@ -1771,6 +1835,22 @@ async function personalCommand(
   }
 
   /*
+   * «Льотна ніч» — погодне вікно для БпЛА над точкою людини.
+   *
+   * Відповідає на вечірнє питання «чи бути напоготові цієї ночі» тим, чого не
+   * дає монітор цілей: не «що зараз», а наскільки погода СПРИЯЄ заходу дронів.
+   * Точку можна назвати містом; без неї — просимо задати.
+   */
+  if (command === "ніч" || command === "погода" || command === "weather") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const named = args.trim() ? matchPlace(args.trim()) : null;
+    const point = named ? { lat: named.lat, lon: named.lon } : sub.point;
+    if (!point) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
+    const weather = await fetchDroneWeather(point.lat, point.lon);
+    return { text: renderFlightNight({ weather, rhythm: null }) };
+  }
+
+  /*
    * Мої місця — найбільша прогалина, яку закриває ця команда.
    *
    * Радар знав ОДНУ координату, а людина не живе в одній: дім, робота, батьки
@@ -1842,6 +1922,27 @@ async function personalCommand(
   if (command === "month" || command === "місяць" || command === "статистика") {
     const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
     return { text: renderStats(summarizeMonth(sub.stats, Date.now())) };
+  }
+
+  /*
+   * «Коли історично тихіше» — питання, яке людина ставить собі щовечора третій
+   * рік поспіль: лягати зараз чи все одно піднімуть.
+   *
+   * Дані беремо з платформи (там накопичення переживає перезапуски), а
+   * судження про те, що вважати спокоєм, лишається тут — поруч із текстом, який
+   * читає людина.
+   */
+  if (command === "calm" || command === "тихо" || command === "сон") {
+    const { platformFetch } = await import("./lib/platform-client");
+    const res = await platformFetch("/api/platform/air/buckets?days=30");
+    if (!res.ok) {
+      return {
+        text: "Історію активності зараз не дістати — спробуйте трохи пізніше.",
+      };
+    }
+    const body = res.body as { buckets?: { at: number; targets: number }[] } | null;
+    const profile = buildCalmProfile(body?.buckets ?? []);
+    return { text: renderCalmHours(profile) };
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -2071,7 +2172,30 @@ async function sendShelters(
     const { fetchShelters } = await import("./lib/infra.functions");
     const payload = await fetchShelters(point.lat, point.lon);
     const near = nearestShelters(point, payload.shelters, { limit: 4 });
-    await telegramSend(token, chatId, renderShelters(near, payload.caveat, payload.degraded));
+
+    // Безпечний бік: якщо на точку зараз ІДЕ ціль, мʼяко позначимо укриття, що
+    // НЕ в її бік. Порядок за відстанню лишається — це підказка, не наказ. Збій
+    // тут не має позбавити людину переліку укриттів, тому все у власному catch.
+    let safeNotes: Record<string, string> | undefined;
+    try {
+      const threats = await fetchThreatsCached(60_000);
+      const assess = personalAssessment(threats, point, { radiusKm: 150 });
+      const lead = assess.nearest.find((n) => n.inbound);
+      if (lead) {
+        safeNotes = {};
+        for (const m of rankBySafeSide(point, near, lead.bearingToThreat)) {
+          if (m.note && m.side !== "flank") safeNotes[m.item.id] = m.note;
+        }
+      }
+    } catch {
+      /* безпечний бік — необовʼязковий; перелік укриттів важливіший */
+    }
+
+    await telegramSend(
+      token,
+      chatId,
+      renderShelters(near, payload.caveat, payload.degraded, safeNotes),
+    );
   } catch {
     await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT, true));
   }
@@ -2087,7 +2211,7 @@ async function handlePersonalPress(
   // Поза гейтом: пауза сповіщень (як `/stop`) і дорога до укриття. Ставити
   // умову між людиною під тривогою й укриттям не можна — див. команду
   // `/shelter` нижче в цьому файлі.
-  if (action.kind !== "mute" && action.kind !== "shelter") {
+  if (action.kind !== "mute" && action.kind !== "shelter" && action.kind !== "share") {
     const gate = await subscriptionGate(token, press.userId);
     if (gate) {
       await telegramAnswerCallback(token, press.callbackId, "Спершу підпишіться на канал");
@@ -2176,6 +2300,34 @@ async function handlePersonalPress(
     return true;
   }
 
+  /*
+   * «Поділитися обстановкою» — знеособлена картка для пересилання рідним.
+   *
+   * Окремим повідомленням і БЕЗ клавіатури: карту пересилають далі, а inline-
+   * кнопки з чужим callback у чужому чаті працювати не будуть. Замість них у
+   * тексті — deep-link на бота: хто отримав картку, одним дотиком заведе свою
+   * точку. Показуємо назву точки (місто/область), а не координати.
+   */
+  if (action.kind === "share") {
+    if (!sub.point) {
+      await telegramAnswerCallback(token, press.callbackId, "Спершу вкажіть точку");
+      await telegramSend(token, press.chatId, renderAskPoint(), askPointKeyboard());
+      return true;
+    }
+    await telegramAnswerCallback(token, press.callbackId, "Готую картку…");
+    const threats = await fetchThreatsCached(60_000);
+    const assess = personalAssessment(threats, sub.point, { radiusKm: sub.radiusKm });
+    const danger = dangerIndex(assess);
+    const name = await botUsername(token);
+    const botLink = name ? `https://t.me/${name}?start=sh` : undefined;
+    await telegramSend(
+      token,
+      press.chatId,
+      renderShareCard({ placeLabel: sub.point.label, assessment: assess, danger, botLink }),
+    );
+    return true;
+  }
+
   if (action.kind === "imOk") {
     const now = Date.now();
     await putSubscriber({ ...sub, okAt: now });
@@ -2196,6 +2348,10 @@ async function handlePersonalPress(
   } else if (action.kind === "radius") {
     updated = { ...sub, radiusKm: clampRadius(action.value) };
     toast = `Радіус: ${updated.radiusKm} км`;
+  } else if (action.kind === "lead") {
+    updated = { ...sub, leadMin: action.value == null ? null : clampLead(action.value) };
+    toast =
+      updated.leadMin == null ? "Поріг часу: за радіусом" : `Будити за ≤${updated.leadMin} хв`;
   } else if (action.kind === "mute") {
     updated = { ...sub, muted: action.value };
     toast = action.value ? "Сповіщення на паузі" : "Сповіщення увімкнені";
