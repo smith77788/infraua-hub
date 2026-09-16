@@ -70,9 +70,20 @@ export default function SituationBar({
   eventKind = null,
   onEventKind,
   showInfra = true,
+  rewinding = false,
 }: {
   summary: SituationSummary;
   loading: boolean;
+  /**
+   * Карту перемотано в минуле.
+   *
+   * Лічильник цілей рахується з того самого кадру, що й крапки на карті, —
+   * інакше число в шапці й картина під ним розходяться мовчки, і саме це
+   * читалось як «кількість цілей на карті не збігається з реальною». Але
+   * збігу чисел мало: число з минулого, подане як поточне, лишається хибним.
+   * Тому під час перемотки воно так і підписане.
+   */
+  rewinding?: boolean;
   /** Лічильники, що рахують наші обʼєкти, зникають разом із ними. */
   showInfra?: boolean;
   threats?: number;
@@ -117,7 +128,9 @@ export default function SituationBar({
           title={
             airThreat.total > 0
               ? `Цілей у повітрі: ${threats}. Поруч із ними ${airThreat.total} наших обʼєкт(ів).`
-              : `Цілей у повітрі: ${threats}. Поруч із нашими обʼєктами наразі немає.`
+              : rewinding
+                ? `Кадр перемотки: ${threats} цілей у цей момент. Це не поточна картина.`
+                : `Цілей у повітрі: ${threats}. Поруч із нашими обʼєктами наразі немає.`
           }
           className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] ${
             airThreat.total > 0
@@ -125,8 +138,10 @@ export default function SituationBar({
               : "border-amber-500/40 bg-amber-500/10 text-amber-400"
           }`}
         >
-          <Crosshair className={`size-3.5 ${airThreat.total > 0 ? "animate-pulse" : ""}`} />
-          Повітряні цілі
+          <Crosshair
+            className={`size-3.5 ${airThreat.total > 0 && !rewinding ? "animate-pulse" : ""}`}
+          />
+          {rewinding ? "Було в небі" : "Повітряні цілі"}
           <span>{threats}</span>
           {airThreat.total > 0 ? (
             <span className="font-normal normal-case tracking-normal opacity-90">

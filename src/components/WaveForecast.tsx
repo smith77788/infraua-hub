@@ -1,9 +1,11 @@
 import { useMemo } from "react";
-import MapPanel from "./MapPanel";
 import { Navigation } from "lucide-react";
 
 import type { Threat } from "@/lib/air";
 import { swarmForecast } from "@/lib/swarm-forecast";
+import CollapsiblePanel from "./CollapsiblePanel";
+
+const DIRS_SHORT = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"];
 
 const DIRS = [
   "північ",
@@ -36,13 +38,18 @@ export default function WaveForecast({ threats }: { threats: readonly Threat[] }
   const scattered = swarm.coherence < 0.6;
 
   return (
-    <MapPanel
-      id="wave-forecast"
-      title="Прогноз руху рою"
-      short="Прогноз"
-      icon={Navigation}
-      tone="cyan"
-      className="max-w-[240px]"
+    <CollapsiblePanel
+      storageKey="forecast"
+      borderClass="border-cyan-500/40"
+      textClass="text-cyan-300"
+      title={
+        <>
+          <Navigation className="size-3 shrink-0" />
+          <span className="truncate">
+            Рій → {DIRS_SHORT[Math.round(swarm.bearingDeg / 45) % 8] ?? ""} ~{swarm.speedKmh}
+          </span>
+        </>
+      }
     >
       <div className="flex items-center gap-2">
         <span
@@ -84,6 +91,6 @@ export default function WaveForecast({ threats }: { threats: readonly Threat[] }
       <div className="mt-1.5 text-[8px] leading-snug text-muted-foreground/80">
         оцінка за реально баченим рухом, не за курсом із джерела; похибка росте з часом
       </div>
-    </MapPanel>
+    </CollapsiblePanel>
   );
 }

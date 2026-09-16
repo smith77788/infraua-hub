@@ -31,6 +31,7 @@ import { swarmForecast } from "@/lib/swarm-forecast";
 import { forecastCone } from "@/lib/trajectory";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
+import { fixedAtMs } from "@/lib/position-age";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -585,13 +586,25 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     moveend: () => setBounds(map.getBounds()),
   });
 
-  // Спостережений трек накопичуємо між опитуваннями: джерело віддає лише
-  // поточну позицію, а суцільна лінія має показувати, де ціль РЕАЛЬНО була.
+  /*
+   * Спостережений трек: власні фікси плюс трек самого джерела.
+   *
+   * Кожна точка несе час СПОСТЕРЕЖЕННЯ, а не час опитування. Інакше лінія
+   * малює рух за вигаданий інтервал: застій позиції у фіді заміряно від 38 до
+   * 674 секунд, і два опитування з різним застоєм дають хибну швидкість на тій
+   * самій відстані.
+   */
   const historyRef = useRef<Map<string, FixPoint[]>>(new Map());
   useEffect(() => {
     historyRef.current = updateHistory(
       historyRef.current,
-      threats.map((t) => ({ id: t.id, lat: t.lat, lon: t.lon })),
+      threats.map((t) => ({
+        id: t.id,
+        lat: t.lat,
+        lon: t.lon,
+        observedAt: fixedAtMs(t) ?? undefined,
+        ...(t.trail ? { trail: t.trail } : {}),
+      })),
       Date.now(),
     );
   }, [threats]);

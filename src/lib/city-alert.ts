@@ -16,7 +16,7 @@ import type { Threat, ThreatType } from "./air";
 import { OBLASTS } from "./alerts";
 import { UK } from "./channel-lexicon";
 import { citiesOnCourse } from "./threat-eta";
-import { courseIsObserved, EMPTY_QUALITY } from "./threat-quality";
+import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
 
 export interface CityRef {
   name: string;
@@ -35,7 +35,28 @@ export interface CityAlert {
   lon: number;
   /** Підліт найближчої цілі, хв. */
   etaMin: number;
+  /**
+   * Вилка підльоту: [найраніше, найпізніше], хв.
+   *
+   * `citiesOnCourse` рахувала її завжди, а цей сигнал її викидав і друкував
+   * одне число — і саме тут крилась хибна точність. На знімку з проду підпис
+   * казав «~3 хв · ~10 км», тимчасом як наша власна невизначеність позиції
+   * цілі була ±15 км, тобто БІЛЬША за відстань до міста: ціль могла бути вже
+   * над містом, а могла й за двадцять пʼять хвилин ходу.
+   */
+  etaRangeMin: [number, number];
   distanceKm: number;
+  /**
+   * Наскільки ціль промине місто, км (0 — рівно на нього).
+   *
+   * «Іде на вас» і «пройде за двадцять кілометрів» — різні повідомлення, а
+   * кутовий коридор їх не розрізняв: ті самі 30° на 60 км означають промах у
+   * тридцять кілометрів, а на 10 км — у пʼять.
+   */
+  missKm: number;
+  /** Розкид позиції найближчої цілі, км, і чи назвало його джерело. */
+  uncertaintyKm: number;
+  uncertaintyStated: boolean;
   /** Скільки цілей ідуть курсом на це місто. */
   count: number;
   /** Тип найближчої (найшвидшої за підльотом) цілі. */
@@ -98,21 +119,33 @@ export function cityAlerts(
       if (!ref) continue;
       const type: ThreatType = t.type ?? "unknown";
       const cur = byCity.get(h.name);
+      const q = t.quality ?? EMPTY_QUALITY;
       if (!cur) {
         byCity.set(h.name, {
           name: h.name,
           lat: ref.lat,
           lon: ref.lon,
           etaMin: h.etaMin,
+          etaRangeMin: h.etaRangeMin,
           distanceKm: h.distanceKm,
+          missKm: h.missKm,
+          uncertaintyKm: displayRadiusKm(q),
+          uncertaintyStated: radiusIsStated(q),
           count: 1,
           type,
         });
       } else {
         cur.count += 1;
-        if (h.etaMin < cur.etaMin) {
+        // Порівнюємо за НАЙРАНІШИМ краєм, як і сортування в citiesOnCourse:
+        // «найближча ціль» — та, що може дійти раніше за всіх, а не та, чия
+        // середня оцінка менша.
+        if (h.etaRangeMin[0] < cur.etaRangeMin[0]) {
           cur.etaMin = h.etaMin;
+          cur.etaRangeMin = h.etaRangeMin;
           cur.distanceKm = h.distanceKm;
+          cur.missKm = h.missKm;
+          cur.uncertaintyKm = displayRadiusKm(q);
+          cur.uncertaintyStated = radiusIsStated(q);
           cur.type = type;
         }
       }
@@ -147,11 +180,42 @@ export function selectFreshCityAlerts(
 /** Підпис адресного сигналу — коротко, українською, у голосі каналу. */
 export function cityAlertCaption(a: CityAlert): string {
   const what = `${a.count} ${UK.typeName(a.type, a.count)}`;
+  /*
+   * Час — вилкою й тим самим формулюванням, що в каналі: коли нижній край
+   * упирається в нуль, а верхній далеко, число «~3 хв» не просто неточне, воно
+   * порожнє. Тоді кажемо те, що з нього насправді випливає.
+   */
+  const when = UK.etaTime(a.etaMin, a.etaRangeMin);
+  /*
+   * Розкид позиції називаємо просто в підписі, і окремо — чи це число джерела,
+   * чи наше припущення за замовчуванням. Зумована карта показує цей розкид
+   * колом, і підпис не має права виглядати впевненіше за власну картинку.
+   */
+  const spread = a.uncertaintyStated
+    ? `позиція ±${a.uncertaintyKm} км за даними джерела`
+    : `позиція ±${a.uncertaintyKm} км — джерело розкиду не вказало, це наша стеля`;
+  /*
+   * Заголовок каже, ЩО саме відбувається, а не просто «увага».
+   *
+   * Ціль, яка мине місто за двадцять кілометрів, — це не «на підльоті», і
+   * назвати це однаково означало б витратити найгучніший сигнал продукту на
+   * проліт повз. Поріг у 8 км — приблизно радіус міста: у цих межах курс уже
+   * не відрізняє центр від околиці.
+   */
+  const head =
+    a.missKm <= 8
+      ? `❗️ <b>${a.name}</b> — ціль на підльоті`
+      : `❗️ <b>${a.name}</b> — ціль проходить поруч`;
+  const path =
+    a.missKm <= 8
+      ? `Підліт: <b>${when}</b> · відстань ~${a.distanceKm} км`
+      : `Траверз: <b>${when}</b> · мине приблизно за ${a.missKm} км`;
   return [
-    `❗️ <b>${a.name}</b> — ціль на підльоті`,
+    head,
     "",
-    `Орієнтовний підліт: <b>~${a.etaMin} хв</b> · ~${a.distanceKm} км`,
+    path,
     `Курсом сюди: <b>${what}</b>`,
+    `<i>${spread}</i>`,
     "",
     "<i>оцінка за курсом і типовою швидкістю — не радар; бережіть себе 🙏</i>",
   ].join("\n");

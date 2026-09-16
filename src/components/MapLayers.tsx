@@ -1,5 +1,5 @@
 import { useState } from "react";
-import MapPanel from "./MapPanel";
+import CollapsiblePanel from "./CollapsiblePanel";
 import { Layers, X } from "lucide-react";
 
 /*
@@ -24,7 +24,24 @@ export default function MapLayers({
   onToggle: (key: string) => void;
 }) {
   return (
-    <MapPanel id="layers" title="Шари карти" short="Шари" icon={Layers} className="w-52 max-w-full">
+    <CollapsiblePanel
+      storageKey="layers"
+      /*
+       * Довідкова панель — згорнута завжди, поки людина не вирішить інакше.
+       * Її відкривають, коли щось незрозуміло, а не тримають розгорнутою:
+       * на відміну від хвиль і прогнозу, вона нічого не повідомляє про
+       * ЗАРАЗ, тож місця на карті не варта навіть на широкому екрані.
+       */
+      defaultOpen={false}
+      borderClass="border-border"
+      textClass="text-muted-foreground"
+      title={
+        <>
+          <Layers className="size-3 shrink-0" />
+          Шари карти
+        </>
+      }
+    >
       <div className="space-y-1">
         {layers.map((l) => (
           <button
@@ -51,6 +68,6 @@ export default function MapLayers({
           </button>
         ))}
       </div>
-    </MapPanel>
+    </CollapsiblePanel>
   );
 }

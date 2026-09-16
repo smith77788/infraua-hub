@@ -26,7 +26,48 @@
 import type { Threat, ThreatType } from "./air";
 import { UA_OUTLINE } from "./ua-outline";
 import { UA_OBLASTS } from "./ua-oblasts";
+import { CITIES } from "./ua-cities";
 import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
+import { nowRadiusKm } from "./position-age";
+
+/**
+ * Міста-орієнтири на карті.
+ *
+ * Найбільша прогалина оглядової картинки була не в позначках, а в тому, що
+ * навколо них — порожній контур. Читач бачив цятку над обрисом країни й не міг
+ * сказати «це під Харковом» чи «під Полтавою»: пересланий скріншот втрачав
+ * підпис, а карта без міст не відповідає на найперше питання — ДЕ це. Тому
+ * кладемо стриманий шар обласних центрів; він тьмяний і завжди під позначками,
+ * щоб орієнтувати, але не сперечатися за увагу з ціллю.
+ *
+ * Перелік курований (не всі міста з `ua-cities`), щоб підписи не злипались:
+ * рівномірне покриття країни важливіше за повноту.
+ */
+const CITY_LABELS: ReadonlySet<string> = new Set([
+  "Київ",
+  "Харків",
+  "Одеса",
+  "Дніпро",
+  "Львів",
+  "Запоріжжя",
+  "Миколаїв",
+  "Херсон",
+  "Полтава",
+  "Суми",
+  "Чернігів",
+  "Житомир",
+  "Вінниця",
+  "Черкаси",
+  "Кривий Ріг",
+  "Маріуполь",
+  "Луцьк",
+  "Ужгород",
+  "Сімферополь",
+  "Кропивницький",
+  "Рівне",
+  "Тернопіль",
+]);
+const MAP_CITIES = CITIES.filter((c) => CITY_LABELS.has(c.name));
 
 const W = 1000;
 const PAD = 24;
@@ -69,11 +110,33 @@ const DRONE = "M0,-9 L8,7.5 L0,3.5 L-8,7.5 Z";
 
 type Proj = (lat: number, lon: number) => [number, number];
 
+/**
+ * Звідки взяти курс для стрілки.
+ *
+ * Доти малювався `t.heading` — тобто те, що сказало джерело. Заміряно на живому
+ * фіді за 40 хвилин спостережень: коли джерело позначає курс СПОСТЕРЕЖЕНИМ, він
+ * збігається з нашим власним треком у медіані на 0°; коли ПРИПУЩЕНИМ —
+ * розходиться в медіані на 72°, і більш ніж у половині випадків понад 60°.
+ * А припущених у видачі 89%.
+ *
+ * При цьому сервер поруч уже рахує рух із послідовних фіксів. Виходило, що
+ * рішення «будити» спиралось на вимір, а картинка тієї ж миті малювала
+ * здогадку — часом майже в протилежний бік. Резолвер закриває саме цю щілину.
+ */
+export interface CourseHint {
+  /** Курс у градусах (0 = Пн). */
+  deg: number;
+  /** Це вимір (наш трек або спостережений курс джерела), а не здогадка. */
+  observed: boolean;
+}
+
+export type CourseOf = (t: Threat) => CourseHint | null;
+
 /** Пікселів на кілометр для оглядової проєкції (SCALE — px на градус широти). */
 const PX_PER_KM = SCALE / 111.32;
 
-function marker(t: Threat): string {
-  return markerWith(t, project, PX_PER_KM);
+function marker(t: Threat, now: number, courseOf?: CourseOf | undefined): string {
+  return markerWith(t, project, PX_PER_KM, now, courseOf);
 }
 
 /**
@@ -95,13 +158,28 @@ function marker(t: Threat): string {
  * припущений курс дає порожній контур замість залитого силуету: напрямок
  * видно, але видно й те, що це здогадка.
  */
-function markerWith(t: Threat, proj: Proj, pxPerKm: number): string {
+function markerWith(
+  t: Threat,
+  proj: Proj,
+  pxPerKm: number,
+  now: number,
+  courseOf?: CourseOf | undefined,
+): string {
   const type: ThreatType = t.type ?? "unknown";
   const [x, y] = proj(t.lat, t.lon);
   const color = COLOR[type];
   const q = t.quality ?? EMPTY_QUALITY;
-  const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
-  const observed = courseIsObserved(q);
+  /*
+   * Порядок довіри: наш вимір → спостережений курс джерела → його здогадка.
+   * Резолвер дає перше; коли його немає, лишається те, що сказало джерело.
+   */
+  const hint =
+    courseOf?.(t) ??
+    (typeof t.heading === "number" && Number.isFinite(t.heading)
+      ? { deg: t.heading, observed: courseIsObserved(q) }
+      : null);
+  const hasCourse = hint !== null;
+  const observed = hint?.observed ?? false;
 
   /*
    * Радіус ореолу — заявлена невизначеність у пікселях, але не менший за саму
@@ -110,7 +188,28 @@ function markerWith(t: Threat, proj: Proj, pxPerKm: number): string {
    */
   const rKm = displayRadiusKm(q);
   const r = Math.max(11, Math.round(rKm * pxPerKm));
+  /*
+   * Друге коло: де ціль може бути ЗАРАЗ.
+   *
+   * Перше коло каже, наскільки джерело не впевнене в позиції. Але позначка ще
+   * й стара: застій фікса заміряно медіаною 205 с, а це 10 км польоту шахеда —
+   * у два з половиною рази більше за медіанний заявлений розкид у 4 км. Доти
+   * карта малювала перше коло й мовчала про друге, тобто показувала, де ціль
+   * БУЛА, під виглядом того, де вона є.
+   *
+   * Пунктир, а не заливка: суцільне коло на пів області читалось би як
+   * «небезпека всюди тут», а це не те твердження. Пунктир читається як межа
+   * незнання — чим він більший, тим менше ми знаємо.
+   */
+  const nowR = nowRadiusKm(t, now);
+  const driftPx = Math.round(nowR.likelyKm * pxPerKm);
+  const drift =
+    driftPx > r + 3
+      ? `<circle cx="${x}" cy="${y}" r="${driftPx}" fill="none" stroke="${color}" ` +
+        `stroke-width="1" stroke-dasharray="4 6" opacity="0.5"/>`
+      : "";
   const halo =
+    drift +
     `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.16"/>` +
     // Заявлений джерелом радіус — тонкий контур; наше припущення, коли
     // джерело промовчало, лишається без нього.
@@ -126,7 +225,7 @@ function markerWith(t: Threat, proj: Proj, pxPerKm: number): string {
     const stroke = observed ? "#0a0e14" : color;
     return (
       halo +
-      `<g transform="translate(${x} ${y}) rotate(${Math.round(t.heading as number)}) scale(0.95)">` +
+      `<g transform="translate(${x} ${y}) rotate(${Math.round(hint.deg)}) scale(0.95)">` +
       `<path d="${DRONE}" fill="${fill}" stroke="${stroke}" stroke-width="${width}" stroke-linejoin="round"/></g>`
     );
   }
@@ -195,29 +294,117 @@ function trackPath(track: TrackLine): string {
  */
 function legend(showPresumed: boolean): string {
   const x = PAD + 4;
-  const y = H - PAD - 34;
+  const y = H - PAD - 56;
   const rows = [
     `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="#ffd23f" opacity="0.16"/>` +
       `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="none" stroke="#ffd23f" stroke-width="0.8" opacity="0.4"/>` +
       `<circle cx="${x + 8}" cy="${y + 4}" r="3" fill="#ffd23f"/>` +
       `<text x="${x + 24}" y="${y + 8}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-      `коло — розкид позиції, як його називає джерело</text>`,
+      `суцільне коло — розкид позиції за джерелом</text>`,
+    `<circle cx="${x + 8}" cy="${y + 26}" r="9" fill="none" stroke="#ffd23f" stroke-width="1" ` +
+      `stroke-dasharray="4 6" opacity="0.5"/>` +
+      `<circle cx="${x + 8}" cy="${y + 26}" r="3" fill="#ffd23f"/>` +
+      `<text x="${x + 24}" y="${y + 30}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+      `пунктир — де ціль може бути вже зараз</text>`,
   ];
   if (showPresumed) {
     rows.push(
-      `<g transform="translate(${x + 8} ${y + 26}) scale(0.62)">` +
+      `<g transform="translate(${x + 8} ${y + 48}) scale(0.62)">` +
         `<path d="${DRONE}" fill="none" stroke="#ffd23f" stroke-width="1.6" stroke-linejoin="round"/></g>` +
-        `<text x="${x + 24}" y="${y + 30}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+        `<text x="${x + 24}" y="${y + 52}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
         `порожня стрілка — курс припущений, не спостережений</text>`,
     );
   }
   return rows.join("");
 }
 
+/**
+ * Шар міст-орієнтирів: тьмяна цятка + підпис.
+ *
+ * Цятка — квадратик, а НЕ коло: коло на цій картинці вже щось означає (розкид
+ * позиції цілі), і місто-орієнтир не має вдавати ціль. Малюється під позначками.
+ * `inView` дозволяє зумованій карті відсіяти міста поза кадром.
+ */
+function cityLayer(
+  proj: Proj,
+  inView: (lat: number, lon: number) => boolean = () => true,
+  cities: readonly { name: string; lat: number; lon: number }[] = MAP_CITIES,
+): string {
+  return cities
+    .filter((c) => inView(c.lat, c.lon))
+    .map((c) => {
+      const [x, y] = proj(c.lat, c.lon);
+      return (
+        `<rect x="${x - 1.4}" y="${y - 1.4}" width="2.8" height="2.8" fill="#8fa3b5" opacity="0.7"/>` +
+        `<text x="${x + 5}" y="${y + 4}" fill="#8fa3b5" opacity="0.85" font-family="sans-serif" ` +
+        `font-size="12">${c.name}</text>`
+      );
+    })
+    .join("");
+}
+
+/** Українське відмінювання лічильника: 1 ціль, 2 цілі, 5 цілей. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+/**
+ * Заголовок просто в оглядовій картинці.
+ *
+ * Пост каналу пересилають, і підпис лишається позаду — далі картинка живе сама.
+ * Тому те, без чого її прочитають неправильно, має бути на ній: що це за карта,
+ * скільки цілей і о котрій знято. Час — необовʼязковий (чиста функція його не
+ * вигадує; передає растеризатор), кількість — з самих позначок.
+ */
+function headerBanner(count: number, timeLabel?: string): string {
+  const title = "Повітряна обстановка";
+  const sub =
+    (count > 0 ? `${count} ${plural(count, "ціль", "цілі", "цілей")} у небі` : "цілей не видно") +
+    (timeLabel ? ` · ${timeLabel}` : "");
+  return (
+    `<text x="${PAD + 4}" y="${PAD + 12}" fill="#e6eef5" font-family="sans-serif" ` +
+    `font-size="18" font-weight="bold">${title}</text>` +
+    `<text x="${PAD + 4}" y="${PAD + 30}" fill="#8fa3b5" font-family="sans-serif" ` +
+    `font-size="13">${sub}</text>`
+  );
+}
+
+/**
+ * Шар областей під тривогою — та сама заливка, що на карті бота/консолі.
+ *
+ * Полігони приходять готовими з того самого джерела, що малює карту в застосунку
+ * (`getAlertZones`), тож канал показує РІВНО те, що бачить бот, а не свою окрему
+ * правду. Заливка приглушено-червона з тонким контуром: область видно як
+ * «під тривогою», але позначки цілей зверху лишаються головними.
+ */
+function alertLayer(polygons: readonly (readonly [number, number][])[]): string {
+  if (!polygons.length) return "";
+  const d = polygons.map((ring) => ringPath(ring)).join(" ");
+  return (
+    `<path d="${d}" fill="#ff3b3b" fill-opacity="0.12" stroke="#ff5a5a" stroke-width="1.1" ` +
+    `stroke-opacity="0.5" stroke-linejoin="round"/>`
+  );
+}
+
 export function situationSvg(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
+  opts: {
+    timeLabel?: string | undefined;
+    /** Полігони областей під офіційною тривогою (готові [lat,lon] кільця). */
+    alertPolygons?: readonly (readonly [number, number][])[] | undefined;
+    /** Момент малювання — потрібен для кола «де ціль може бути зараз». */
+    now?: number;
+    /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
+    courseOf?: CourseOf | undefined;
+  } = {},
 ): string {
+  const now = opts.now ?? Date.now();
   const outline = UA_OUTLINE.map(([lat, lon], i) => {
     const [x, y] = project(lat, lon);
     return `${i === 0 ? "M" : "L"}${x},${y}`;
@@ -226,7 +413,7 @@ export function situationSvg(
 
   // Треки — ПІД позначками: свіжа позиція має лишатись найпомітнішою.
   const lines = tracks.map(trackPath).join("");
-  const markers = threats.map(marker).join("");
+  const markers = threats.map((t) => marker(t, now, opts.courseOf)).join("");
   // Пояснення про припущений курс показуємо лише тоді, коли такі цілі справді
   // є: легенда про те, чого на картинці немає, — це шум.
   const anyPresumed = threats.some(
@@ -241,15 +428,45 @@ export function situationSvg(
     `<rect width="${W}" height="${H}" fill="#0b0f16"/>` +
     // Заливка країни, потім тонкі межі областей, потім чіткий контур зверху.
     `<path d="${outline} Z" fill="#0f1a24" stroke="none"/>` +
+    // Області під тривогою — над заливкою країни, під межами й контуром, щоб
+    // читались як зона, а не ховали кордони.
+    alertLayer(opts.alertPolygons ?? []) +
     `<path d="${oblastBorders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
     `<path d="${outline} Z" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
+    // Міста-орієнтири — під треками й позначками: ціль завжди зверху.
+    cityLayer(project) +
     lines +
     markers +
     // Легенда лише тоді, коли є що пояснювати: підпис до значків, яких на
     // картинці немає, — це шум, а порожнє небо має читатися як порожнє.
     (threats.length ? legend(anyPresumed) : "") +
+    // Масштаб і північ — щоб відстань «ціль ↔ місто» читалась у кілометрах, а
+    // напрямок не доводилось вгадувати. Масштаб праворуч унизу (ліворуч —
+    // легенда); той самий scaleBar, що й на зумі, псевдорадіус 300 км дає
+    // круглу сотню.
+    scaleBar(W - PAD - 110, H - PAD - 8, PX_PER_KM, 300) +
+    northMark(W - PAD - 16, PAD + 10) +
+    // Заголовок останнім — поверх усього, у власному кутку.
+    headerBanner(threats.length, opts.timeLabel) +
     `</svg>`
   );
+}
+
+/**
+ * Київський час «ГГ:ХХ» для штампа на картинці. Растеризатор нечистий, тож
+ * годиннику тут місце; чиста `situationSvg` час лише приймає, а не вигадує.
+ */
+function kyivClock(): string | undefined {
+  try {
+    return new Intl.DateTimeFormat("uk-UA", {
+      timeZone: "Europe/Kyiv",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date());
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -259,6 +476,9 @@ export function situationSvg(
 export async function renderSituationPng(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
+  alertPolygons: readonly (readonly [number, number][])[] = [],
+  /** Наш вимір курсу, коли він є, — бʼє здогадку джерела. Див. `CourseOf`. */
+  courseOf?: CourseOf | undefined,
 ): Promise<Buffer | null> {
   try {
     // Змінний специфікатор + @vite-ignore: бандлер (rolldown/nitro, ціль
@@ -267,10 +487,13 @@ export async function renderSituationPng(
     // де працює таймер каналу), тож require із node_modules резолвиться.
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
-    const png = new Resvg(situationSvg(threats, tracks), {
-      background: "#0b0f16",
-      fitTo: { mode: "width", value: W },
-    })
+    const png = new Resvg(
+      situationSvg(threats, tracks, { timeLabel: kyivClock(), alertPolygons, courseOf }),
+      {
+        background: "#0b0f16",
+        fitTo: { mode: "width", value: W },
+      },
+    )
       .render()
       .asPng();
     return png;
@@ -287,12 +510,77 @@ export async function renderSituationPng(
  * цілей (лише ті, що у в'юпорті), межі областей і приціл на самому місті. Чиста
  * функція, як і situationSvg.
  */
+/** Екранування тексту для SVG: назва в розмітці не має права її зламати. */
+function escapeXml(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 const ZW = 800;
+/**
+ * Кільця відстані від центра — щоб «~10 км» у підписі було ВИДНО, а не лише
+ * заявлено.
+ *
+ * Без них зумована карта не має метричного сенсу взагалі: людина бачить точку
+ * й пляму й не може сказати, це вісім кілометрів чи вісімдесят. Радіуси
+ * беремо з драбини круглих чисел, щоб підпис кільця читався з одного погляду.
+ */
+const RING_LADDER = [5, 10, 25, 50, 100, 200];
+
+function distanceRings(cx: number, cy: number, pxPerKm: number, radiusKm: number): string {
+  const rings = RING_LADDER.filter((km) => km < radiusKm * 0.95).slice(-3);
+  return rings
+    .map((km) => {
+      const r = km * pxPerKm;
+      return (
+        `<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="#3b5a6e" ` +
+        `stroke-width="0.8" stroke-dasharray="3 5" opacity="0.7"/>` +
+        `<text x="${cx + 3}" y="${(cy - r + 12).toFixed(1)}" fill="#6b8496" ` +
+        `font-family="sans-serif" font-size="11">${km} км</text>`
+      );
+    })
+    .join("");
+}
+
+/** Масштабна лінійка: без неї зображення не можна ні перевірити, ні переказати. */
+function scaleBar(x: number, y: number, pxPerKm: number, radiusKm: number): string {
+  const km = RING_LADDER.filter((k) => k <= radiusKm / 2).pop() ?? 10;
+  const len = km * pxPerKm;
+  return (
+    `<line x1="${x}" y1="${y}" x2="${(x + len).toFixed(1)}" y2="${y}" stroke="#8fa3b5" stroke-width="2"/>` +
+    `<line x1="${x}" y1="${y - 4}" x2="${x}" y2="${y + 4}" stroke="#8fa3b5" stroke-width="2"/>` +
+    `<line x1="${(x + len).toFixed(1)}" y1="${y - 4}" x2="${(x + len).toFixed(1)}" y2="${y + 4}" ` +
+    `stroke="#8fa3b5" stroke-width="2"/>` +
+    `<text x="${x}" y="${y - 9}" fill="#8fa3b5" font-family="sans-serif" font-size="12">${km} км</text>`
+  );
+}
+
+/** Північ. Дешева позначка, без якої напрямок на карті доводиться вгадувати. */
+function northMark(x: number, y: number): string {
+  return (
+    `<path d="M${x},${y - 12} L${x + 5},${y + 4} L${x},${y} L${x - 5},${y + 4} Z" ` +
+    `fill="#8fa3b5" opacity="0.85"/>` +
+    `<text x="${x - 4}" y="${y + 18}" fill="#8fa3b5" font-family="sans-serif" font-size="11">Пн</text>`
+  );
+}
+
 export function situationSvgZoom(
   threats: readonly Threat[],
   center: { lat: number; lon: number },
   radiusKm = 70,
+  opts: {
+    /** Підпис центра — назва міста. Без нього карта не каже, де це взагалі. */
+    label?: string | undefined;
+    /** Момент малювання — для кола «де ціль може бути зараз». */
+    now?: number;
+    /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
+    courseOf?: CourseOf | undefined;
+  } = {},
 ): string {
+  const now = opts.now ?? Date.now();
   const dLat = radiusKm / 111.32;
   const dLon = radiusKm / (111.32 * Math.cos((center.lat * Math.PI) / 180));
   const latMin = center.lat - dLat;
@@ -325,21 +613,56 @@ export function situationSvgZoom(
 
   const markers = threats
     .filter((t) => inView(t.lat, t.lon))
-    .map((t) => markerWith(t, pr, scale / 111.32))
+    .map((t) => markerWith(t, pr, scale / 111.32, now, opts.courseOf))
     .join("");
 
+  // Сусідні населені пункти — орієнтир, якого не дають ні кільця, ні межі
+  // області: людина впізнає «Бровари», «Ірпінь», а не абстрактний квадрат.
+  // Місто в центрі виключаємо — його вже підписано жирним біля прицілу.
+  const cities = cityLayer(
+    pr,
+    inView,
+    CITIES.filter((c) => c.name !== opts.label),
+  );
+
   const [cx, cy] = pr(center.lat, center.lon);
+  const pxPerKm = scale / 111.32;
   const crosshair =
     `<circle cx="${cx}" cy="${cy}" r="9" fill="none" stroke="#67e8f9" stroke-width="1.6"/>` +
     `<line x1="${cx - 13}" y1="${cy}" x2="${cx + 13}" y2="${cy}" stroke="#67e8f9" stroke-width="1.2"/>` +
     `<line x1="${cx}" y1="${cy - 13}" x2="${cx}" y2="${cy + 13}" stroke="#67e8f9" stroke-width="1.2"/>`;
 
+  /*
+   * Підпис міста. Без нього карта не каже головного — ДЕ це. Перехрестя посеред
+   * чорного поля з ледь помітною межею області не впізнає навіть той, хто в
+   * цьому місті живе.
+   */
+  const title = opts.label
+    ? `<text x="${cx + 16}" y="${cy + 5}" fill="#e6f2f8" font-family="sans-serif" ` +
+      `font-size="17" font-weight="bold">${escapeXml(opts.label)}</text>`
+    : "";
+
+  /*
+   * Пояснення ореолу. На знімку з проду коричнева пляма була найбільшим
+   * обʼєктом кадру й не значила для читача нічого — а вона означає рівно те,
+   * наскільки ми НЕ знаємо, де ціль.
+   */
+  const note =
+    `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+    `суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз</text>`;
+
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +
     `<rect width="${ZW}" height="${zh}" fill="#0b0f16"/>` +
     `<path d="${borders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
+    cities +
+    distanceRings(cx, cy, pxPerKm, radiusKm) +
     crosshair +
+    title +
     markers +
+    scaleBar(14, zh - 34, pxPerKm, radiusKm) +
+    northMark(ZW - 26, 24) +
+    note +
     `</svg>`
   );
 }
@@ -349,11 +672,12 @@ export async function renderZoomPng(
   threats: readonly Threat[],
   center: { lat: number; lon: number },
   radiusKm = 70,
+  opts: { label?: string | undefined; now?: number; courseOf?: CourseOf | undefined } = {},
 ): Promise<Buffer | null> {
   try {
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
-    return new Resvg(situationSvgZoom(threats, center, radiusKm), {
+    return new Resvg(situationSvgZoom(threats, center, radiusKm, opts), {
       background: "#0b0f16",
       fitTo: { mode: "width", value: ZW },
     })

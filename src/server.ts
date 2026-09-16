@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
+import { courseIsObserved, EMPTY_QUALITY } from "./lib/threat-quality";
 import {
   ADMIN_ACTIONS,
   type AdminAction,
@@ -53,6 +54,7 @@ import {
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
+import { fixedAtMs } from "./lib/position-age";
 import {
   CIRCLE_ALERT_COOLDOWN_MS,
   decideCircleAlert,
@@ -500,15 +502,6 @@ async function botUsername(token: string): Promise<string | null> {
 }
 
 /**
- * Спільний кеш повітряних цілей.
- *
- * Тепер дані потрібні двом споживачам із різним ритмом: канал прокидається раз
- * на пʼять хвилин, персональні сповіщення — щопівтори. Без спільного кешу це
- * означало б удвічі більше запитів до джерела, яке нам нічого не винне.
- */
-let threatCache: { at: number; threats: Threat[] } | null = null;
-
-/**
  * Памʼять треків — спільне джерело руху для бота й каналу.
  *
  * Джерело віддає лише поточну позицію: куди ціль летить, воно каже полем
@@ -532,7 +525,24 @@ const trackMemory = {
 const TRACK_KEEP_MS = 12 * 60 * 60 * 1000;
 
 function rememberTracks(threats: readonly Threat[], now: number): void {
-  trackMemory.fixes = updateHistory(trackMemory.fixes, threats, now, {
+  /*
+   * Кожен фікс іде з ЧАСОМ СПОСТЕРЕЖЕННЯ і разом із треком самого джерела.
+   *
+   * Доти позиція штампувалась часом опитування, хоч застій у фіді заміряно від
+   * 38 до 674 секунд: між двома тиками ціль проходила справжню відстань за
+   * вигаданий інтервал, і в треках зʼявлялись дрони на тисячу кілометрів за
+   * годину. А трек джерела — готові спостереження з мітками часу — не
+   * доходив до оцінки руху взагалі, хоч і малювався на карті: швидкість і курс
+   * ставали заміряними лише після двох власних опитувань.
+   */
+  const inputs = threats.map((t) => ({
+    id: t.id,
+    lat: t.lat,
+    lon: t.lon,
+    observedAt: fixedAtMs(t) ?? undefined,
+    ...(t.trail ? { trail: t.trail } : {}),
+  }));
+  trackMemory.fixes = updateHistory(trackMemory.fixes, inputs, now, {
     maxAgeMs: TRACK_KEEP_MS,
     maxPoints: 60,
     minMoveKm: 1,
@@ -552,6 +562,29 @@ function rememberTracks(threats: readonly Threat[], now: number): void {
     if (state) fresh.set(t.id, state);
   }
   trackMemory.motions = fresh;
+}
+
+/**
+ * Курс цілі для КАРТИНКИ: наш вимір, коли він є, інакше слово джерела.
+ *
+ * Заміряно за 40 хвилин спостережень живого фіду: коли джерело позначає курс
+ * спостереженим, він збігається з нашим треком у медіані на 0°; коли
+ * припущеним — розходиться в медіані на 72°, і більш ніж у половині випадків
+ * понад 60°. Припущених у видачі 89%.
+ *
+ * Тобто рішення «будити» вже спиралось на власний вимір руху, а картинка тієї
+ * ж миті малювала здогадку — часом майже в протилежний бік. Одна й та сама
+ * система показувала людині два різні напрямки.
+ */
+function courseForImage(t: Threat): { deg: number; observed: boolean } | null {
+  const motion = trackMemory.motions.get(t.id);
+  if (motion && motion.origin === "observed") {
+    return { deg: motion.headingDeg, observed: true };
+  }
+  if (typeof t.heading === "number" && Number.isFinite(t.heading)) {
+    return { deg: t.heading, observed: courseIsObserved(t.quality ?? EMPTY_QUALITY) };
+  }
+  return null;
 }
 
 /** Рух цілі для оцінок. `null` — рух ще не спостережено. */
@@ -587,26 +620,68 @@ async function fetchOfficialAlerts(maxAgeMs = 60_000): Promise<string[] | null> 
     clearTimeout(timer);
   }
 }
-async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
+/**
+ * Полігони областей під тривогою — те саме джерело, що малює карту в боті/консолі
+ * (detoyshahed), щоб картинка каналу була ТОЧНОЮ копією застосунку, а не мала
+ * власну правду про тривоги. Плоский кеш на хвилину; збій джерела — порожній
+ * список (карта просто без заливки, як і без картинки взагалі).
+ */
+let alertZonesCache: { at: number; polygons: [number, number][][] } | null = null;
+async function fetchAlertZones(maxAgeMs = 60_000): Promise<[number, number][][]> {
   const now = Date.now();
-  if (threatCache && now - threatCache.at < maxAgeMs) return threatCache.threats;
-  const { fetchNeptunThreats } = await import("./lib/infra.functions");
+  if (alertZonesCache && now - alertZonesCache.at < maxAgeMs) return alertZonesCache.polygons;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
+  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const threats = (await fetchNeptunThreats(controller.signal)) ?? [];
-    threatCache = { at: now, threats };
-    // Трек росте з кожного опитування — саме тому памʼять оновлюється тут, а
-    // не в котромусь зі споживачів: пропущене опитування це розрив у лінії.
-    rememberTracks(threats, now);
-    return threats;
+    const res = await fetch("https://detoyshahed.in.ua/api/alerts/active", {
+      signal: controller.signal,
+    });
+    if (!res.ok) return alertZonesCache?.polygons ?? [];
+    const data = (await res.json()) as {
+      alerts?: { geometry?: { type?: string; coordinates?: unknown } }[];
+    };
+    const toLatLon = (ring: number[][]): [number, number][] => {
+      const step = Math.max(1, Math.ceil(ring.length / 120));
+      const out: [number, number][] = [];
+      for (let i = 0; i < ring.length; i += step) {
+        const p = ring[i];
+        const lon = p?.[0];
+        const lat = p?.[1];
+        if (typeof lon === "number" && typeof lat === "number") out.push([lat, lon]);
+      }
+      return out;
+    };
+    const polygons: [number, number][][] = [];
+    for (const a of data.alerts ?? []) {
+      const g = a.geometry;
+      if (!g?.coordinates) continue;
+      if (g.type === "Polygon") {
+        const poly = g.coordinates as number[][][];
+        if (poly[0]) polygons.push(toLatLon(poly[0]));
+      } else if (g.type === "MultiPolygon") {
+        for (const poly of g.coordinates as number[][][][]) {
+          if (poly[0]) polygons.push(toLatLon(poly[0]));
+        }
+      }
+    }
+    alertZonesCache = { at: now, polygons };
+    return polygons;
   } catch {
-    // Збій джерела не має стирати останню відому картину: краще дані на
-    // хвилину старші, ніж «небо чисте» там, де його ніхто не перевіряв.
-    return threatCache?.threats ?? [];
+    return alertZonesCache?.polygons ?? [];
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
+  // ЄДИНЕ джерело з застосунком: той самий кеш, що читає карта (getThreats) і
+  // публічний віджет. Так канал і мапа бачать один знімок, а не кожен свій.
+  const { neptunThreatsCached } = await import("./lib/infra.functions");
+  const threats = await neptunThreatsCached(maxAgeMs);
+  // Трек росте з кожного опитування — оновлюємо історію тут, на кожному тику
+  // каналу; пропущене опитування це розрив у лінії.
+  rememberTracks(threats, Date.now());
+  return threats;
 }
 
 /**
@@ -703,34 +778,23 @@ let lastChannelPost: { signature: string; at: number; snapshot: AirSnapshot | un
 };
 
 /**
- * Згладжування картини каналу в часі.
+ * Набір цілей для каналу — РІВНО той самий, що на карті бота.
  *
- * `fetchNeptunThreats` віддає лише миттєвий «активний» набір, а OSINT-звіти
- * спорадичні: ціль зникає з набору на один-два опити й повертається. Без
- * згладжування сусідні пости за 4 хвилини виглядали «категорично різними» —
- * хоча шахед за 4 хв нікуди не подівся. Тримаємо кожну нещодавно бачену ціль
- * до HOLD_MS, зливаючи близькі за типом (той самий фізичний апарат, різні
- * звіти), тож картина ЕВОЛЮЦІОНУЄ, а не стрибає, і «відбій» по області
- * настає лише після справжньої відсутності, а не через один пропущений звіт.
+ * Тут колись жило власне «згладжування»: злиття однотипних цілей у радіусі
+ * 22 км і утримання зниклих до 8 хв. Ідея була добра — не смикати пост через
+ * блимання OSINT, — але наслідок виявився гіршим за хворобу: канал зажив
+ * ОКРЕМОЮ правдою. Там, де карта бота (сирий фід neptun) показувала 24 цілі,
+ * злиття збивало їх у «8 у небі», і читач бачив на карті одне число, а в
+ * тексті — інше. Саме це й була «третя картина».
+ *
+ * Джерело neptun уже віддає дедупльовані треки зі стабільними id, тож повторне
+ * злиття лише КРИВИЛО картину. Тепер канал бере фід як є — і пост, картинка
+ * каналу та карта бота показують ОДНІ Й ТІ САМІ обʼєкти. Стабільність поста
+ * тримають не підміна набору, а дедуп за підписом і редагування живого поста
+ * (нижче): блимання дає короткочасну правку, а не окрему хибну картину.
  */
-const CHANNEL_MEMORY_HOLD_MS = 8 * 60 * 1000;
-const CHANNEL_MERGE_KM = 22;
-let channelThreatMemory: { threat: Threat; seenAt: number }[] = [];
-function smoothChannelThreats(current: Threat[], now: number): Threat[] {
-  channelThreatMemory = channelThreatMemory.filter((m) => now - m.seenAt < CHANNEL_MEMORY_HOLD_MS);
-  for (const t of current) {
-    const type = t.type ?? "unknown";
-    const hit = channelThreatMemory.find(
-      (m) => (m.threat.type ?? "unknown") === type && distanceKm(m.threat, t) < CHANNEL_MERGE_KM,
-    );
-    if (hit) {
-      hit.threat = t;
-      hit.seenAt = now;
-    } else {
-      channelThreatMemory.push({ threat: t, seenAt: now });
-    }
-  }
-  return channelThreatMemory.map((m) => m.threat);
+function channelThreats(current: Threat[]): Threat[] {
+  return current;
 }
 
 interface ChannelTickResult {
@@ -1048,7 +1112,10 @@ async function maybeCityAlert(
     const { renderZoomPng } = await import("./lib/situation-image");
     const keyboard = await channelButtons(token);
     for (const a of fresh) {
-      const png = await renderZoomPng(threats, { lat: a.lat, lon: a.lon }, 70);
+      const png = await renderZoomPng(threats, { lat: a.lat, lon: a.lon }, 70, {
+        label: a.name,
+        courseOf: courseForImage,
+      });
       await sendChannelUpdate(token, channel, cityAlertCaption(a), a.count, png, keyboard, false);
     }
   } catch (error) {
@@ -1321,9 +1388,9 @@ async function runChannelTickCore(
   const now = Date.now();
   const threats = await fetchThreatsCached(60_000);
 
-  // Згладжуємо картину в часі, щоб сусідні пости не «стрибали» через блимання
-  // OSINT-набору. Пам'ять оновлюється щотику (навіть коли не постимо).
-  const smoothed = smoothChannelThreats(threats, now);
+  // Канал показує РІВНО той самий набір, що й карта бота (сирий neptun): без
+  // власного злиття/утримання, які й давали окрему «третю картину».
+  const smoothed = channelThreats(threats);
   // Трек складається з послідовних опитувань — тому історію оновлюємо щотику,
   // навіть коли не постимо: пропущений тик — це розрив у лінії.
   // Довший строк і більше точок, ніж на карті: тут трек має пережити цілу
@@ -1432,7 +1499,10 @@ async function runChannelTickCore(
   // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
   // текст: якщо не вийшла, шлемо текст без неї.
   const { renderSituationPng } = await import("./lib/situation-image");
-  const png = await renderSituationPng(smoothed, trackLines(smoothed));
+  // Області під тривогою — з того самого джерела, що й карта бота: канал показує
+  // ту саму обстановку. Best-effort: збій зон не має завалити пост.
+  const alertZones = await fetchAlertZones().catch(() => []);
+  const png = await renderSituationPng(smoothed, trackLines(smoothed), alertZones, courseForImage);
   const keyboard = await channelButtons(token);
   const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
   const silent = shouldPostSilently(types, now);

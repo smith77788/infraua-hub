@@ -66,7 +66,7 @@ export default function RaidReplay({ frames, onCursor }: Props) {
   const live = cursor === null;
   const value = cursor ?? span.to;
   const label = live
-    ? "Наживо"
+    ? "наживо"
     : new Date(cursor).toLocaleTimeString("uk-UA", {
         hour: "2-digit",
         minute: "2-digit",
@@ -75,8 +75,20 @@ export default function RaidReplay({ frames, onCursor }: Props) {
 
   return (
     <div className="pointer-events-auto flex items-center gap-2 border-t border-border/70 bg-background/88 px-3 py-1.5 backdrop-blur">
-      <span className="hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-primary/80 sm:inline">
-        Реплей нальоту
+      {/*
+        Підпис видно ЗАВЖДИ, і це не косметика.
+        
+        Було `hidden sm:inline` — на телефоні назва зникала, і два різні
+        програвачі часу, що стоять один під одним, ставали нерозрізненними:
+        обидва — кнопка, радіо й повзунок. Зі знімка користувача їх і не можна
+        було розрізнити. Вони керують РІЗНИМИ речами: цей перемотує повітряну
+        картину за хвилини, сусідній — історію ударів за тридцять днів.
+        
+        Тому коротке слово замість довгого: воно має вміститись на 320 px, а не
+        сховатись.
+      */}
+      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-primary/80">
+        Наліт
       </span>
       <button
         onClick={() => {

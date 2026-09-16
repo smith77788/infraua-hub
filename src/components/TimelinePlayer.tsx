@@ -55,7 +55,7 @@ export default function TimelinePlayer({ onCursor }: Props) {
   const live = cursor === null;
   const value = cursor ?? nowMs ?? 0;
   const label = live
-    ? "Живий режим"
+    ? "наживо"
     : new Date(cursor).toLocaleString("uk-UA", {
         day: "2-digit",
         month: "2-digit",
@@ -65,6 +65,18 @@ export default function TimelinePlayer({ onCursor }: Props) {
 
   return (
     <div className="pointer-events-auto flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
+      {/*
+        Назва того, що саме перемотує цей повзунок.
+        
+        Без неї на телефоні він нерозрізненний від реплею нальоту, який стоїть
+        просто над ним: обидва — кнопка, радіо й повзунок. А керують вони
+        різними шкалами: цей — історією ударів за тридцять днів, той —
+        повітряною картиною за хвилини. Зі знімка користувача сказати, що є що,
+        було неможливо.
+      */}
+      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+        Історія
+      </span>
       <button
         onClick={() => {
           if (live) setCursor(min + TRAIL_MS);
@@ -86,7 +98,7 @@ export default function TimelinePlayer({ onCursor }: Props) {
             ? "border-primary/60 text-primary"
             : "border-border text-muted-foreground hover:bg-card"
         }`}
-        title="Живий режим"
+        title="Повернутись до поточних даних"
       >
         {live ? <Radio className="size-3.5" /> : <RotateCcw className="size-3.5" />}
       </button>

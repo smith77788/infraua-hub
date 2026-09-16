@@ -304,3 +304,94 @@ describe("швидкість діапазоном — тип цілі теж н�
     }
   });
 });
+
+describe("геометрія підльоту: вздовж курсу, а не по похилій", () => {
+  const KYIV = { name: "Київ", lat: 50.45, lon: 30.52 };
+
+  /** Ціль на півдні від Києва, курсом рівно на північ, за `km` кілометрів. */
+  function southOf(km: number, heading: number): Threat {
+    return {
+      id: "t",
+      name: "Ціль",
+      lat: KYIV.lat - km / 111.32,
+      lon: KYIV.lon,
+      source: "neptun.in.ua",
+      count: 1,
+      since: "",
+      expires: "",
+      type: "shahed",
+      heading,
+      quality: {
+        uncertaintyKm: 0,
+        position: "confirmed",
+        lifecycle: "confirmed",
+        presumptiveCourse: false,
+        speedKmh: 200,
+      },
+    };
+  }
+
+  it("ціль точно по курсу — час як і був", () => {
+    const [hit] = citiesOnCourse(southOf(100, 0), [KYIV], { corridorDeg: 35, maxRangeKm: 200 });
+    // 100 км на 200 км/год — тридцять хвилин.
+    expect(hit!.etaMin).toBe(30);
+    expect(hit!.missKm).toBe(0);
+  });
+
+  it("ціль під кутом — час МЕНШИЙ, бо рахується до траверзу", () => {
+    /*
+     * Похила відстань 100 км під кутом 30° означає шлях до траверзу 86,6 км,
+     * тобто 26 хвилин, а не 30. Стара формула давала 30 — завищення на 15%, і
+     * завжди в бік «у вас більше часу, ніж насправді».
+     */
+    const [hit] = citiesOnCourse(southOf(100, 30), [KYIV], {
+      corridorDeg: 35,
+      maxRangeKm: 200,
+      // Стелю промаху тут піднімаємо навмисно: перевіряємо саме ЧАС, а
+      // усталені 25 км відсікли б цю ціль раніше (промах 50 км) — що вони й
+      // мають робити, і що перевірено окремим тестом нижче.
+      maxMissKm: 100,
+    });
+    expect(hit!.etaMin).toBeLessThan(30);
+    expect(hit!.etaMin).toBeGreaterThanOrEqual(25);
+  });
+
+  it("називає, наскільки ціль промине місто", () => {
+    // 100 км під 30° — промах пів сотні кілометрів.
+    const [hit] = citiesOnCourse(southOf(100, 30), [KYIV], {
+      corridorDeg: 35,
+      maxRangeKm: 200,
+      maxMissKm: 100,
+    });
+    expect(hit!.missKm).toBeGreaterThan(45);
+    expect(hit!.missKm).toBeLessThan(55);
+  });
+
+  it("стеля промаху відсікає те, чого кутовий коридор не відсікав", () => {
+    // Той самий кут 30°: на 100 км це промах 50 км, на 20 км — лише 10.
+    const far = citiesOnCourse(southOf(100, 30), [KYIV], {
+      corridorDeg: 35,
+      maxRangeKm: 200,
+      maxMissKm: 25,
+    });
+    const near = citiesOnCourse(southOf(20, 30), [KYIV], {
+      corridorDeg: 35,
+      maxRangeKm: 200,
+      maxMissKm: 25,
+    });
+    expect(far).toHaveLength(0);
+    expect(near).toHaveLength(1);
+  });
+
+  it("час ніколи не буває більший за розрахунок по похилій", () => {
+    // Властивість, а не окремий випадок: cos ≤ 1 на всьому коридорі.
+    for (const off of [0, 5, 10, 15, 20, 25, 30, 35]) {
+      const [hit] = citiesOnCourse(southOf(80, off), [KYIV], {
+        corridorDeg: 35,
+        maxRangeKm: 200,
+        maxMissKm: 100,
+      });
+      expect(hit!.etaMin).toBeLessThanOrEqual(Math.round((80 / 200) * 60));
+    }
+  });
+});

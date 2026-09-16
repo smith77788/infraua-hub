@@ -11,17 +11,55 @@
  * зовнішньому читачеві й лише плутали б. Координати огрублені до ~100 м: віджету
  * точніше не треба, а зайва точність — це зайва відповідальність.
  *
+ * Разом із позицією обовʼязково їде те, БЕЗ ЧОГО ВОНА БРЕШЕ: розкид у
+ * кілометрах і вік спостереження. Крапка без цих двох чисел — твердження
+ * «ціль тут і зараз», якого дані не підтверджують, а чуже вбудування не має
+ * як про це дізнатись.
+ *
  * Чиста функція: та сама на вході — та сама на виході, тож її видно в тестах.
  */
 
 import { observedAt, type Threat, type ThreatType } from "./air";
+import { fixAgeMs } from "./position-age";
+import { courseIsObserved, EMPTY_QUALITY } from "./threat-quality";
 
 export interface PublicThreat {
   lat: number;
   lon: number;
   type: ThreatType;
-  /** Курс у градусах (0=Пн), лише коли він СПОСТЕРЕЖЕНИЙ. Немає — не вигадуємо. */
+  /**
+   * Курс у градусах (0=Пн) — ЛИШЕ спостережений.
+   *
+   * Обіцянка була тут від початку, а перевірки не було: код публікував будь-яке
+   * `heading`, і джерело позначало більшість курсів як припущені. Заміряно на
+   * живій видачі: 17 із 19 опублікованих курсів (89%) були здогадками,
+   * виданими за спостереження. Чужий віджет малює те, що бачить у полі
+   * `heading`, тож наша похибка їхала в кожне вбудування.
+   */
   heading?: number;
+  /**
+   * Курс, який джерело саме називає ПРИПУЩЕНИМ.
+   *
+   * Окремим іменем навмисно: інформація корисна, але той, хто малює стрілку не
+   * думаючи, візьме `heading` — і не намалює здогадку як факт. Хто хоче
+   * показати припущення, зробить це свідомо.
+   */
+  presumedHeading?: number;
+  /**
+   * Розкид позиції, км: наскільки ціль може бути не там, де крапка.
+   *
+   * Без цього поля будь-яке вбудування показує крапку — тобто твердження про
+   * точність, якого немає. У живій видачі розкид від 2 до 25 км.
+   */
+  uncertaintyKm?: number;
+  /**
+   * Скільки секунд минуло, відколи позицію СПОСТЕРЕЖЕНО.
+   *
+   * Заміряно: медіана 205 с, максимум 674 с. На типовій швидкості шахеда це
+   * від 10 до 34 км польоту після фікса. Знімок без цього числа читається як
+   * «ось де воно зараз», а це неправда для кожної позначки.
+   */
+  ageSec?: number;
 }
 
 export interface PublicAirSnapshot {
@@ -61,10 +99,20 @@ export function publicAirSnapshot(
     .filter((t) => Number.isFinite(t.lat) && Number.isFinite(t.lon))
     .map((t) => {
       const type: ThreatType = t.type ?? "unknown";
+      const q = t.quality ?? EMPTY_QUALITY;
       const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
-      return hasCourse
-        ? { lat: round(t.lat), lon: round(t.lon), type, heading: Math.round(t.heading as number) }
-        : { lat: round(t.lat), lon: round(t.lon), type };
+      const course = hasCourse ? Math.round(t.heading as number) : null;
+      const observed = courseIsObserved(q);
+      const age = fixAgeMs(t, now);
+      return {
+        lat: round(t.lat),
+        lon: round(t.lon),
+        type,
+        ...(course !== null && observed ? { heading: course } : {}),
+        ...(course !== null && !observed ? { presumedHeading: course } : {}),
+        ...(q.uncertaintyKm !== null ? { uncertaintyKm: q.uncertaintyKm } : {}),
+        ...(age !== null ? { ageSec: Math.round(age / 1000) } : {}),
+      };
     });
   return {
     at: now,

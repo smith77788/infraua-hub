@@ -1,5 +1,5 @@
 import { useState } from "react";
-import MapPanel from "./MapPanel";
+import CollapsiblePanel from "./CollapsiblePanel";
 import { HelpCircle, X } from "lucide-react";
 
 /*
@@ -49,12 +49,23 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
    * панель кладуть, а не здогад про ширину телефона.
    */
   return (
-    <MapPanel
-      id="legend"
-      title="Легенда карти"
-      short="Легенда"
-      icon={HelpCircle}
-      className="w-60 max-w-full"
+    <CollapsiblePanel
+      storageKey="legend"
+      /*
+       * Довідкова панель — згорнута завжди, поки людина не вирішить інакше.
+       * Її відкривають, коли щось незрозуміло, а не тримають розгорнутою:
+       * на відміну від хвиль і прогнозу, вона нічого не повідомляє про
+       * ЗАРАЗ, тож місця на карті не варта навіть на широкому екрані.
+       */
+      defaultOpen={false}
+      borderClass="border-border"
+      textClass="text-muted-foreground"
+      title={
+        <>
+          <HelpCircle className="size-3 shrink-0" />
+          Легенда карти
+        </>
+      }
     >
       <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
         Повітряні цілі (за типом)
@@ -123,6 +134,6 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
           </>
         ) : null}
       </div>
-    </MapPanel>
+    </CollapsiblePanel>
   );
 }

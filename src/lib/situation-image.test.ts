@@ -145,8 +145,13 @@ describe("situationSvgZoom", () => {
       { lat: 50.9, lon: 34.8 },
       50,
     );
-    // лише приціл-лінії, без позначок-glow (немає дрон-крапки поза в'юпортом)
-    expect((svg.match(/<circle /g) ?? []).length).toBe(1);
+    /*
+     * Перевіряємо сам намір: жодної позначки цілі. Рахувати `<circle>` було
+     * крихко — кільця відстані й перехрестя теж кола, і тест ламався від
+     * появи розмітки, яка позначок не додає. Колір шахеда в кадрі є рівно
+     * тоді, коли намальовано ціль.
+     */
+    expect(svg).not.toContain("#ffd23f");
   });
 });
 
@@ -175,5 +180,219 @@ describe("треки на картинці", () => {
     const svg = situationSvg([], [{ type: "shahed", points }]);
     const d = /d="(M[^"]+)"/.exec(svg.slice(svg.indexOf("stroke-linecap") - 400))?.[1] ?? "";
     expect(d.split("L")).toHaveLength(points.length);
+  });
+});
+
+describe("зумована карта каже, ДЕ це і в якому масштабі", () => {
+  const ZP = { lat: 47.838, lon: 35.139 };
+  const target: Threat = {
+    id: "a",
+    name: "Шахед",
+    lat: ZP.lat + 0.064,
+    lon: ZP.lon + 0.095,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    type: "shahed",
+    heading: 225,
+  };
+
+  it("підписує місто — інакше перехрестя посеред чорного поля не впізнати", () => {
+    // Знімок із проду: карта показувала ледь помітну межу області, перехрестя
+    // й пляму. Де це — прочитати було ніяк.
+    const svg = situationSvgZoom([target], ZP, 70, { label: "Запоріжжя" });
+    expect(svg).toContain("Запоріжжя");
+  });
+
+  it("має кільця відстані — щоб «~10 км» було видно, а не лише заявлено", () => {
+    const svg = situationSvgZoom([target], ZP, 70, { label: "Запоріжжя" });
+    expect(svg).toContain("10 км");
+    expect(svg).toContain("25 км");
+  });
+
+  it("має масштаб і північ", () => {
+    const svg = situationSvgZoom([target], ZP, 70);
+    expect(svg).toContain("Пн");
+    // Лінійка малюється навіть без підпису міста.
+    expect(svg.match(/км</g)?.length ?? 0).toBeGreaterThan(1);
+  });
+
+  it("пояснює ореол — на знімку він був найбільшим обʼєктом і нічого не значив", () => {
+    const svg = situationSvgZoom([target], ZP, 70);
+    expect(svg).toContain("де ціль може бути вже зараз");
+  });
+
+  it("назва міста не може зламати розмітку", () => {
+    const svg = situationSvgZoom([target], ZP, 70, { label: "<script>x</script>" });
+    expect(svg).not.toContain("<script>");
+    expect(svg).toContain("&lt;script&gt;");
+  });
+
+  it("кільця не виходять за межі кадру", () => {
+    // Драбина кілець має відсікати ті, що більші за сам радіус огляду.
+    const svg = situationSvgZoom([target], ZP, 30);
+    expect(svg).not.toContain(">50 км<");
+    expect(svg).not.toContain(">100 км<");
+  });
+});
+
+describe("оглядова карта: орієнтація, заголовок, тривоги", () => {
+  const t = (p: Partial<Threat>): Threat => ({
+    id: "t",
+    name: "",
+    lat: 49,
+    lon: 32,
+    source: "n",
+    count: 1,
+    since: "",
+    expires: "",
+    ...p,
+  });
+
+  it("міста-орієнтири й масштаб є навіть у порожньому небі", () => {
+    const svg = situationSvg([]);
+    expect(svg).toContain("Київ");
+    expect(svg).toContain("Харків");
+    expect(svg).toContain("Одеса");
+    expect(svg).toContain("Повітряна обстановка");
+    // Місто-орієнтир — квадратик, а не коло: коло тут означає ціль.
+    expect(svg).not.toContain("<circle ");
+  });
+
+  it("заголовок несе кількість цілей із правильним відмінюванням", () => {
+    expect(situationSvg([t({ type: "shahed" })])).toContain("1 ціль у небі");
+    expect(situationSvg([t({}), t({})])).toContain("2 цілі у небі");
+    expect(situationSvg(Array.from({ length: 5 }, () => t({})))).toContain("5 цілей у небі");
+    expect(situationSvg([])).toContain("цілей не видно");
+  });
+
+  it("час штампується лише коли його передали (чиста функція його не вигадує)", () => {
+    expect(situationSvg([], [], { timeLabel: "23:15" })).toContain("· 23:15");
+    expect(situationSvg([])).not.toContain("·");
+  });
+
+  it("області під тривогою заливаються — те саме, що бачить бот", () => {
+    const poly: [number, number][] = [
+      [50, 30],
+      [50, 32],
+      [49, 32],
+      [49, 30],
+    ];
+    const withAlert = situationSvg([], [], { alertPolygons: [poly] });
+    expect(withAlert).toContain("#ff3b3b");
+    // Без тривог заливки немає — карта не вигадує зон.
+    expect(situationSvg([])).not.toContain("#ff3b3b");
+  });
+});
+
+describe("карта показує, що позначка застаріла", () => {
+  const ZP = { lat: 47.838, lon: 35.139 };
+  const NOW = Date.parse("2026-09-16T21:07:58Z");
+  const stale = (agoSec: number): Threat => ({
+    id: "a",
+    name: "Шахед",
+    lat: ZP.lat + 0.064,
+    lon: ZP.lon + 0.095,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    lastSeen: new Date(NOW - agoSec * 1000).toISOString(),
+    type: "shahed",
+    heading: 225,
+    quality: {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "confirmed",
+      presumptiveCourse: false,
+      speedKmh: null,
+    },
+  });
+
+  it("свіжа позначка — без другого кола", () => {
+    const svg = situationSvgZoom([stale(10)], ZP, 70, { now: NOW });
+    expect(svg).not.toContain('stroke-dasharray="4 6"');
+  });
+
+  it("застаріла позначка отримує пунктирне коло", () => {
+    // Медіанний заміряний застій — 205 с, це 10 км польоту шахеда проти
+    // медіанного заявленого розкиду 4 км. Доти карта показувала лише 4.
+    const svg = situationSvgZoom([stale(205)], ZP, 70, { now: NOW });
+    expect(svg).toContain('stroke-dasharray="4 6"');
+  });
+
+  it("крапка лишається там, де ціль бачили — її не зсувають", () => {
+    // Розширити коло — визнати незнання; зсунути крапку — стверджувати знання.
+    // Курс у 21 цілі з 24 припущений, тож зсув їхав би за здогадкою.
+    const fresh = situationSvgZoom([stale(10)], ZP, 70, { now: NOW });
+    const old = situationSvgZoom([stale(400)], ZP, 70, { now: NOW });
+    const at = (svg: string) =>
+      svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="\d+" fill="#/)?.slice(1, 3);
+    expect(at(fresh)).toEqual(at(old));
+  });
+});
+
+describe("оглядова карта теж знає про застій і про вимір курсу", () => {
+  const NOW = Date.parse("2026-09-16T21:07:58Z");
+  const t = (agoSec: number): Threat => ({
+    id: "a",
+    name: "Шахед",
+    lat: 50.45,
+    lon: 30.52,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    lastSeen: new Date(NOW - agoSec * 1000).toISOString(),
+    type: "shahed",
+    heading: 180,
+    quality: {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "confirmed",
+      presumptiveCourse: true,
+      speedKmh: null,
+    },
+  });
+
+  /** Скільки пунктирних кіл у кадрі. Одне завжди належить легенді. */
+  const dashed = (svg: string): number => (svg.match(/stroke-dasharray="4 6"/g) ?? []).length;
+
+  it("малює коло застою — доти воно мовчки не зʼявлялось", () => {
+    /*
+     * Жива вада, спіймана типами: `threats.map(marker)` передавало в параметр
+     * `now` ІНДЕКС елемента. Вік виходив нульовим, коло застою не малювалось
+     * ніколи, і жодного падіння при цьому не було — просто фічі не існувало.
+     */
+    expect(dashed(situationSvg([t(600)], [], { now: NOW }))).toBeGreaterThan(
+      dashed(situationSvg([t(5)], [], { now: NOW })),
+    );
+  });
+
+  it("свіжа позначка кола застою не отримує — пунктир лишається тільки в легенді", () => {
+    expect(dashed(situationSvg([t(5)], [], { now: NOW }))).toBe(1);
+  });
+
+  it("наш вимір курсу бʼє здогадку джерела", () => {
+    // Джерело каже 180° і саме позначає це припущенням; наш трек каже 0°.
+    // Заміряно: припущений курс розходиться з треком у медіані на 72°.
+    const withOurs = situationSvg([t(60)], [], {
+      now: NOW,
+      courseOf: () => ({ deg: 0, observed: true }),
+    });
+    const sourceOnly = situationSvg([t(60)], [], { now: NOW });
+    expect(withOurs).toContain("rotate(0)");
+    expect(sourceOnly).toContain("rotate(180)");
+  });
+
+  it("вимір малюється суцільною стрілкою, здогадка — порожньою", () => {
+    const measured = situationSvg([t(60)], [], {
+      now: NOW,
+      courseOf: () => ({ deg: 90, observed: true }),
+    });
+    const guessed = situationSvg([t(60)], [], { now: NOW });
+    expect(measured).toContain('fill="#ffd23f" stroke="#0a0e14"');
+    expect(guessed).toContain('fill="none"');
   });
 });

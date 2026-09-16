@@ -76,6 +76,27 @@ describe("renderChannelPost", () => {
     expect(post.text).toContain("курсом на північ");
   });
 
+  it("спільний курс групи — лише коли цілі справді йдуть разом", () => {
+    // Три шахеди в одній області, курси РОЗКИДАНІ: спільного напрямку немає,
+    // тож текст не має вигадувати одного (це й був конфлікт із картинкою).
+    // Усі три в одній області (Полтавщина), курси РОЗКИДАНІ.
+    const scattered = renderChannelPost([
+      threat({ lat: 49.9, lon: 34.9, type: "shahed", heading: 10 }),
+      threat({ lat: 50.0, lon: 35.0, type: "shahed", heading: 130 }),
+      threat({ lat: 49.8, lon: 34.8, type: "shahed", heading: 250 }),
+    ])!;
+    expect(scattered.text).toContain("3 шахеди");
+    expect(scattered.text).not.toContain("курсом");
+
+    // Ті самі три, але курси збіглися на захід — тоді напрямок доречний.
+    const together = renderChannelPost([
+      threat({ lat: 49.9, lon: 34.9, type: "shahed", heading: 265 }),
+      threat({ lat: 50.0, lon: 35.0, type: "shahed", heading: 275 }),
+      threat({ lat: 49.8, lon: 34.8, type: "shahed", heading: 270 }),
+    ])!;
+    expect(together.text).toContain("курсом на захід");
+  });
+
   it("«у бік міста», коли ціль іде на місто поруч", () => {
     // ціль трохи південніше Полтави (49.59,34.55), курс 0° = на неї
     const post = renderChannelPost([
@@ -550,5 +571,62 @@ describe("пост не бреше про пору доби", () => {
     // Усталене значення — поточний час, а не «невідомо»: пора доби нам відома
     // завжди, і вдавати незнання тут нема причин.
     expect(renderChannelPost(swarm(25))).not.toBeNull();
+  });
+});
+
+describe("текст не стверджує більше за картинку", () => {
+  const guessed = {
+    uncertaintyKm: 5,
+    position: "approx" as const,
+    lifecycle: "tracking" as const,
+    presumptiveCourse: true,
+    speedKmh: null,
+  };
+  const observed = { ...guessed, presumptiveCourse: false };
+
+  /** Три цілі в одній області, однаковим курсом. */
+  function group(quality: typeof guessed): Threat[] {
+    return [0, 1, 2].map((i) =>
+      threat({
+        id: `g${i}`,
+        type: "shahed",
+        lat: 49.99 + i * 0.05,
+        lon: 36.23,
+        heading: 180,
+        quality,
+      }),
+    );
+  }
+
+  it("припущений курс називається ймовірним, а не курсом", () => {
+    // На картинці припущений курс уже малюється порожньою стрілкою, а текст
+    // поряд казав «курсом на південь» так само, як для заміряного. У живій
+    // видачі джерела 89% курсів — припущені.
+    const post = renderChannelPost(group(guessed));
+    expect(post!.text).toContain("ймовірно на південь");
+    expect(post!.text).not.toContain("курсом на південь");
+  });
+
+  it("спостережений курс лишається курсом", () => {
+    const post = renderChannelPost(group(observed));
+    expect(post!.text).toContain("курсом на південь");
+    expect(post!.text).not.toContain("ймовірно на південь");
+  });
+
+  it("хоч одна заміряна ціль — позначки здогадки немає", () => {
+    /*
+     * Той самий поріг, що й для позначки непідтвердженості: позначаємо лише
+     * коли вимірів немає в ЖОДНОЇ цілі типу. Частковість читач однаково
+     * прочитає як повну, і позначка знецінилась би там, де вимір є.
+     */
+    const mixed = [...group(guessed).slice(0, 2), ...group(observed).slice(0, 1)];
+    const post = renderChannelPost(mixed);
+    expect(post!.text).toContain("курсом на південь");
+  });
+
+  it("без курсу напрямку не зʼявляється взагалі", () => {
+    const post = renderChannelPost([threat({ type: "shahed", lat: 49.99, lon: 36.23 })]);
+    expect(post!.text).not.toContain("курсом");
+    expect(post!.text).not.toContain("ймовірно");
   });
 });

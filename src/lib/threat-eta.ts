@@ -126,6 +126,8 @@ export interface ThreatProjection {
   etaRangeMin: [number, number];
   /** Відхилення обʼєкта від курсу цілі, градуси (0 = точно по курсу). */
   offAxisDeg: number;
+  /** Наскільки ціль промине обʼєкт, км (0 — точно на нього). */
+  missKm: number;
   /**
    * Швидкість заміряна джерелом, а не взята з таблиці типових.
    *
@@ -147,6 +149,8 @@ export interface ProjectOptions {
   criticalOnly?: boolean;
   /** Скільки проєкцій повернути (найтерміновіші за ETA). */
   limit?: number;
+  /** Стеля відстані промаху, км — кутовий коридор її не обмежує. */
+  maxMissKm?: number;
 }
 
 /** Початковий азимут з точки `a` на точку `b`, градуси (0 = Пн, за годинниковою). */
@@ -174,6 +178,22 @@ export function angularDiff(a: number, b: number): number {
  * ETA перший). Один обʼєкт лишається лише з найшвидшою вхідною ціллю — щоб не
  * дублювати той самий обʼєкт від кількох цілей.
  */
+/**
+ * Чи можна взагалі щось рахувати від цієї позначки.
+ *
+ * Не педантизм, а захист від мовчазного проходу. Порівняння з NaN ХИБНІ ВСІ:
+ * і `d < 3`, і `d > maxRangeKm`, і `off > corridorDeg`. Тому ціль із
+ * нескінченною координатою не відсіювалась жодним фільтром — вона проходила
+ * весь ланцюг і виходила в канал рядком «❗️ Вінниччина — ціль проходить
+ * поруч · Траверз: ~NaN хв». Знайдено фазингом.
+ *
+ * Фільтр «більше за межу» ніколи не ловить того, що поза числами взагалі, —
+ * це треба питати окремо й першим.
+ */
+function hasFinitePosition(p: { lat: number; lon: number }): boolean {
+  return Number.isFinite(p.lat) && Number.isFinite(p.lon);
+}
+
 export function projectThreats(
   threats: Threat[],
   facilities: Facility[],
@@ -183,6 +203,7 @@ export function projectThreats(
   const maxRangeKm = opts.maxRangeKm ?? 200;
   const criticalOnly = opts.criticalOnly ?? true;
   const limit = opts.limit ?? 8;
+  const maxMissKm = opts.maxMissKm ?? 25;
 
   const targets = criticalOnly
     ? facilities.filter((f) => CRITICAL_CATEGORIES.has(f.category))
@@ -190,6 +211,7 @@ export function projectThreats(
 
   const all: ThreatProjection[] = [];
   for (const t of threats) {
+    if (!hasFinitePosition(t)) continue;
     if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) continue;
     const q = t.quality ?? EMPTY_QUALITY;
     // Заміряна швидкість б'є типову: таблиця — це орієнтир для класу, а
@@ -201,19 +223,30 @@ export function projectThreats(
     const uncertainty = displayRadiusKm(q);
     const observed = courseIsObserved(q);
     for (const f of targets) {
+      if (!hasFinitePosition(f)) continue;
       const d = distanceKm(t, f);
-      if (d < 1 || d > maxRangeKm) continue;
+      if (!Number.isFinite(d) || d < 1 || d > maxRangeKm) continue;
       const off = angularDiff(t.heading, bearingDeg(t, f));
       if (off > corridorDeg) continue;
+      /*
+       * Відстань ВЗДОВЖ КУРСУ, а не похила: ціль під кутом летить повз обʼєкт
+       * і порівняється з ним на траверзі. Похила більша рівно в 1/cos(кут), і
+       * помилка завжди в один бік — «часу більше, ніж насправді».
+       */
+      const rad = (off * Math.PI) / 180;
+      const along = d * Math.cos(rad);
+      const missKm = d * Math.sin(rad);
+      if (missKm > maxMissKm) continue;
       // Вилка часу — з невизначеності самої позиції: ціль може бути вже на
       // `uncertainty` км ближче або настільки ж далі.
-      const near = Math.max(0, d - uncertainty);
-      const far = d + uncertainty;
+      const near = Math.max(0, along - uncertainty);
+      const far = along + uncertainty;
       all.push({
         threat: t,
         facility: f,
         distanceKm: Math.round(d * 10) / 10,
-        etaMin: Math.round((d / speed) * 60),
+        missKm: Math.round(missKm * 10) / 10,
+        etaMin: Math.round((along / speed) * 60),
         // Найраніше: ціль ближче, ніж показано, І швидша, ніж типова для класу.
         // Найпізніше: далі й повільніше. Обидва краї — не фантазія, а межі
         // того, чого джерело про цю ціль не сказало.
@@ -243,6 +276,14 @@ export interface CityETA {
   /** Найімовірніша оцінка часу підльоту до міста, хв. */
   etaMin: number;
   /**
+   * Наскільки ціль промине місто, км (0 — рівно на нього).
+   *
+   * Головне число для читача, якого в переліку не було: «ціль іде на вас» і
+   * «ціль пройде за двадцять кілометрів» — різні повідомлення, а кутовий
+   * коридор їх не розрізняв.
+   */
+  missKm: number;
+  /**
    * Вилка часу, хв — від найранішого до найпізнішого.
    *
    * Та сама причина, що й усюди: позиція відома з точністю, яку називає
@@ -263,8 +304,21 @@ export interface CityETA {
 export function citiesOnCourse(
   t: Threat,
   cities: readonly { name: string; lat: number; lon: number }[],
-  opts: { corridorDeg?: number; maxRangeKm?: number; limit?: number } = {},
+  opts: {
+    corridorDeg?: number;
+    maxRangeKm?: number;
+    limit?: number;
+    /**
+     * Стеля відстані промаху, км.
+     *
+     * Кутовий коридор однаковий у градусах, але не в кілометрах: 30° на 60 км
+     * пропускають ціль, що промине за тридцять кілометрів, а на 10 км — лише
+     * за пʼять. Стеля робить критерій однаковим на будь-якій дальності.
+     */
+    maxMissKm?: number;
+  } = {},
 ): CityETA[] {
+  if (!hasFinitePosition(t)) return [];
   if (typeof t.heading !== "number" || !Number.isFinite(t.heading)) return [];
   const corridorDeg = opts.corridorDeg ?? 35;
   const maxRangeKm = opts.maxRangeKm ?? 160;
@@ -272,18 +326,40 @@ export function citiesOnCourse(
   const speed = q.speedKmh ?? SPEED_KMH[t.type ?? "unknown"] ?? SPEED_KMH.unknown;
   const [slow, fast] = speedRangeFor(t.type, q.speedKmh);
   const u = displayRadiusKm(q);
+  const maxMissKm = opts.maxMissKm ?? 25;
   const out: CityETA[] = [];
   for (const c of cities) {
+    if (!hasFinitePosition(c)) continue;
     const d = distanceKm(t, c);
-    if (d < 3 || d > maxRangeKm) continue;
-    if (angularDiff(t.heading, bearingDeg(t, c)) > corridorDeg) continue;
+    if (!Number.isFinite(d) || d < 3 || d > maxRangeKm) continue;
+    const off = angularDiff(t.heading, bearingDeg(t, c));
+    if (off > corridorDeg) continue;
+    /*
+     * Час рахуємо по відстані ВЗДОВЖ КУРСУ, а не по похилій.
+     *
+     * Ціль, що йде під кутом, не летить у місто — вона летить ПОВЗ нього і
+     * порівняється з ним на траверзі. Похила відстань до міста більша за шлях
+     * до траверзу рівно в 1/cos(відхилення), тож час виходив завищений: при
+     * відхиленні 30° — на 15%. Помилка систематична й завжди в один бік — у бік
+     * «у вас більше часу, ніж насправді».
+     *
+     * `miss` — наскільки ціль промине місто. Кутовий коридор сам собою цього
+     * не обмежує: ті самі 30° на відстані 60 км означають промах у 30 км, а на
+     * 10 км — у 5. Стеля промаху робить критерій однаковим на будь-якій
+     * дальності.
+     */
+    const rad = (off * Math.PI) / 180;
+    const along = d * Math.cos(rad);
+    const missKm = d * Math.sin(rad);
+    if (missKm > maxMissKm) continue;
     out.push({
       name: c.name,
       distanceKm: Math.round(d),
-      etaMin: Math.max(1, Math.round((d / speed) * 60)),
+      missKm: Math.round(missKm),
+      etaMin: Math.max(1, Math.round((along / speed) * 60)),
       etaRangeMin: [
-        Math.max(1, Math.round((Math.max(0, d - u) / fast) * 60)),
-        Math.max(1, Math.round(((d + u) / slow) * 60)),
+        Math.max(1, Math.round((Math.max(0, along - u) / fast) * 60)),
+        Math.max(1, Math.round(((along + u) / slow) * 60)),
       ],
     });
   }
