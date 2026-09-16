@@ -1,4 +1,5 @@
 import { useState } from "react";
+import MapPanel from "./MapPanel";
 import { Layers, X } from "lucide-react";
 
 /*
@@ -22,34 +23,8 @@ export default function MapLayers({
   layers: LayerToggle[];
   onToggle: (key: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        title="Шари карти"
-        aria-label="Шари карти"
-        className="pointer-events-auto flex items-center gap-1.5 rounded border border-border bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
-      >
-        <Layers className="size-3.5" /> <span className="hidden sm:inline">Шари</span>
-      </button>
-    );
-  }
-
   return (
-    <div className="pointer-events-auto w-52 max-w-[80vw] rounded border border-border bg-background/95 p-2 backdrop-blur">
-      <div className="mb-1.5 flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          Шари карти
-        </span>
-        <button
-          onClick={() => setOpen(false)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      </div>
+    <MapPanel id="layers" title="Шари карти" short="Шари" icon={Layers} className="w-52 max-w-full">
       <div className="space-y-1">
         {layers.map((l) => (
           <button
@@ -76,6 +51,6 @@ export default function MapLayers({
           </button>
         ))}
       </div>
-    </div>
+    </MapPanel>
   );
 }

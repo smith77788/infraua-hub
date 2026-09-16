@@ -1,4 +1,5 @@
 import { useState } from "react";
+import MapPanel from "./MapPanel";
 import { HelpCircle, X } from "lucide-react";
 
 /*
@@ -41,39 +42,20 @@ function Swatch({ color, shape = "tri" }: { color: string; shape?: "tri" | "dot"
  * це опис іншої карти.
  */
 export default function MapLegend({ showInfra = true }: { showInfra?: boolean }) {
-  const [open, setOpen] = useState(false);
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
-      >
-        <HelpCircle className="size-3.5" /> Легенда
-      </button>
-    );
-  }
-
   /*
-   * `max-w-full`, а не частка від екрана: на 320 px під легенду лишалось
+   * `w-60 max-w-full`, а не частка від екрана: на 320 px під легенду лишалось
    * 202 px (решту зʼїдають кути з кнопками Leaflet), а «80vw» дозволяло 256 —
    * і панель заходила просто на перемикач підкладки. Межу задає те місце, куди
    * панель кладуть, а не здогад про ширину телефона.
    */
   return (
-    <div className="pointer-events-auto max-h-full w-60 max-w-full overflow-y-auto rounded border border-border bg-background/95 p-3 backdrop-blur">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-          Легенда карти
-        </span>
-        <button
-          onClick={() => setOpen(false)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      </div>
-
+    <MapPanel
+      id="legend"
+      title="Легенда карти"
+      short="Легенда"
+      icon={HelpCircle}
+      className="w-60 max-w-full"
+    >
       <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
         Повітряні цілі (за типом)
       </p>
@@ -141,6 +123,6 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
           </>
         ) : null}
       </div>
-    </div>
+    </MapPanel>
   );
 }

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import MapPanel from "./MapPanel";
 import { Navigation } from "lucide-react";
 
 import type { Threat } from "@/lib/air";
@@ -35,12 +36,15 @@ export default function WaveForecast({ threats }: { threats: readonly Threat[] }
   const scattered = swarm.coherence < 0.6;
 
   return (
-    <div className="pointer-events-auto max-h-full max-w-[240px] overflow-y-auto rounded border border-cyan-500/40 bg-background/92 px-2.5 py-2 backdrop-blur">
-      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300">
-        <Navigation className="size-3" />
-        Прогноз руху рою
-      </div>
-      <div className="mt-1.5 flex items-center gap-2">
+    <MapPanel
+      id="wave-forecast"
+      title="Прогноз руху рою"
+      short="Прогноз"
+      icon={Navigation}
+      tone="cyan"
+      className="max-w-[240px]"
+    >
+      <div className="flex items-center gap-2">
         <span
           className="flex size-8 shrink-0 items-center justify-center rounded-full border border-cyan-400/50 text-cyan-200"
           title={`курс ${swarm.bearingDeg}°`}
@@ -80,6 +84,6 @@ export default function WaveForecast({ threats }: { threats: readonly Threat[] }
       <div className="mt-1.5 text-[8px] leading-snug text-muted-foreground/80">
         оцінка за реально баченим рухом, не за курсом із джерела; похибка росте з часом
       </div>
-    </div>
+    </MapPanel>
   );
 }
