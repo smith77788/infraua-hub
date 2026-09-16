@@ -110,11 +110,33 @@ const DRONE = "M0,-9 L8,7.5 L0,3.5 L-8,7.5 Z";
 
 type Proj = (lat: number, lon: number) => [number, number];
 
+/**
+ * Звідки взяти курс для стрілки.
+ *
+ * Доти малювався `t.heading` — тобто те, що сказало джерело. Заміряно на живому
+ * фіді за 40 хвилин спостережень: коли джерело позначає курс СПОСТЕРЕЖЕНИМ, він
+ * збігається з нашим власним треком у медіані на 0°; коли ПРИПУЩЕНИМ —
+ * розходиться в медіані на 72°, і більш ніж у половині випадків понад 60°.
+ * А припущених у видачі 89%.
+ *
+ * При цьому сервер поруч уже рахує рух із послідовних фіксів. Виходило, що
+ * рішення «будити» спиралось на вимір, а картинка тієї ж миті малювала
+ * здогадку — часом майже в протилежний бік. Резолвер закриває саме цю щілину.
+ */
+export interface CourseHint {
+  /** Курс у градусах (0 = Пн). */
+  deg: number;
+  /** Це вимір (наш трек або спостережений курс джерела), а не здогадка. */
+  observed: boolean;
+}
+
+export type CourseOf = (t: Threat) => CourseHint | null;
+
 /** Пікселів на кілометр для оглядової проєкції (SCALE — px на градус широти). */
 const PX_PER_KM = SCALE / 111.32;
 
-function marker(t: Threat, now: number): string {
-  return markerWith(t, project, PX_PER_KM, now);
+function marker(t: Threat, now: number, courseOf?: CourseOf | undefined): string {
+  return markerWith(t, project, PX_PER_KM, now, courseOf);
 }
 
 /**
@@ -136,13 +158,28 @@ function marker(t: Threat, now: number): string {
  * припущений курс дає порожній контур замість залитого силуету: напрямок
  * видно, але видно й те, що це здогадка.
  */
-function markerWith(t: Threat, proj: Proj, pxPerKm: number, now: number): string {
+function markerWith(
+  t: Threat,
+  proj: Proj,
+  pxPerKm: number,
+  now: number,
+  courseOf?: CourseOf | undefined,
+): string {
   const type: ThreatType = t.type ?? "unknown";
   const [x, y] = proj(t.lat, t.lon);
   const color = COLOR[type];
   const q = t.quality ?? EMPTY_QUALITY;
-  const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
-  const observed = courseIsObserved(q);
+  /*
+   * Порядок довіри: наш вимір → спостережений курс джерела → його здогадка.
+   * Резолвер дає перше; коли його немає, лишається те, що сказало джерело.
+   */
+  const hint =
+    courseOf?.(t) ??
+    (typeof t.heading === "number" && Number.isFinite(t.heading)
+      ? { deg: t.heading, observed: courseIsObserved(q) }
+      : null);
+  const hasCourse = hint !== null;
+  const observed = hint?.observed ?? false;
 
   /*
    * Радіус ореолу — заявлена невизначеність у пікселях, але не менший за саму
@@ -188,7 +225,7 @@ function markerWith(t: Threat, proj: Proj, pxPerKm: number, now: number): string
     const stroke = observed ? "#0a0e14" : color;
     return (
       halo +
-      `<g transform="translate(${x} ${y}) rotate(${Math.round(t.heading as number)}) scale(0.95)">` +
+      `<g transform="translate(${x} ${y}) rotate(${Math.round(hint.deg)}) scale(0.95)">` +
       `<path d="${DRONE}" fill="${fill}" stroke="${stroke}" stroke-width="${width}" stroke-linejoin="round"/></g>`
     );
   }
@@ -363,6 +400,8 @@ export function situationSvg(
     alertPolygons?: readonly (readonly [number, number][])[] | undefined;
     /** Момент малювання — потрібен для кола «де ціль може бути зараз». */
     now?: number;
+    /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
+    courseOf?: CourseOf | undefined;
   } = {},
 ): string {
   const now = opts.now ?? Date.now();
@@ -374,7 +413,7 @@ export function situationSvg(
 
   // Треки — ПІД позначками: свіжа позиція має лишатись найпомітнішою.
   const lines = tracks.map(trackPath).join("");
-  const markers = threats.map(marker).join("");
+  const markers = threats.map((t) => marker(t, now, opts.courseOf)).join("");
   // Пояснення про припущений курс показуємо лише тоді, коли такі цілі справді
   // є: легенда про те, чого на картинці немає, — це шум.
   const anyPresumed = threats.some(
@@ -438,6 +477,8 @@ export async function renderSituationPng(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
   alertPolygons: readonly (readonly [number, number][])[] = [],
+  /** Наш вимір курсу, коли він є, — бʼє здогадку джерела. Див. `CourseOf`. */
+  courseOf?: CourseOf | undefined,
 ): Promise<Buffer | null> {
   try {
     // Змінний специфікатор + @vite-ignore: бандлер (rolldown/nitro, ціль
@@ -447,7 +488,7 @@ export async function renderSituationPng(
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
     const png = new Resvg(
-      situationSvg(threats, tracks, { timeLabel: kyivClock(), alertPolygons }),
+      situationSvg(threats, tracks, { timeLabel: kyivClock(), alertPolygons, courseOf }),
       {
         background: "#0b0f16",
         fitTo: { mode: "width", value: W },
@@ -535,6 +576,8 @@ export function situationSvgZoom(
     label?: string | undefined;
     /** Момент малювання — для кола «де ціль може бути зараз». */
     now?: number;
+    /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
+    courseOf?: CourseOf | undefined;
   } = {},
 ): string {
   const now = opts.now ?? Date.now();
@@ -570,7 +613,7 @@ export function situationSvgZoom(
 
   const markers = threats
     .filter((t) => inView(t.lat, t.lon))
-    .map((t) => markerWith(t, pr, scale / 111.32, now))
+    .map((t) => markerWith(t, pr, scale / 111.32, now, opts.courseOf))
     .join("");
 
   // Сусідні населені пункти — орієнтир, якого не дають ні кільця, ні межі
@@ -629,7 +672,7 @@ export async function renderZoomPng(
   threats: readonly Threat[],
   center: { lat: number; lon: number },
   radiusKm = 70,
-  opts: { label?: string | undefined; now?: number } = {},
+  opts: { label?: string | undefined; now?: number; courseOf?: CourseOf | undefined } = {},
 ): Promise<Buffer | null> {
   try {
     const mod = "@resvg/resvg-js";

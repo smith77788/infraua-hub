@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
+import { courseIsObserved, EMPTY_QUALITY } from "./lib/threat-quality";
 import {
   ADMIN_ACTIONS,
   type AdminAction,
@@ -563,6 +564,29 @@ function rememberTracks(threats: readonly Threat[], now: number): void {
   trackMemory.motions = fresh;
 }
 
+/**
+ * Курс цілі для КАРТИНКИ: наш вимір, коли він є, інакше слово джерела.
+ *
+ * Заміряно за 40 хвилин спостережень живого фіду: коли джерело позначає курс
+ * спостереженим, він збігається з нашим треком у медіані на 0°; коли
+ * припущеним — розходиться в медіані на 72°, і більш ніж у половині випадків
+ * понад 60°. Припущених у видачі 89%.
+ *
+ * Тобто рішення «будити» вже спиралось на власний вимір руху, а картинка тієї
+ * ж миті малювала здогадку — часом майже в протилежний бік. Одна й та сама
+ * система показувала людині два різні напрямки.
+ */
+function courseForImage(t: Threat): { deg: number; observed: boolean } | null {
+  const motion = trackMemory.motions.get(t.id);
+  if (motion && motion.origin === "observed") {
+    return { deg: motion.headingDeg, observed: true };
+  }
+  if (typeof t.heading === "number" && Number.isFinite(t.heading)) {
+    return { deg: t.heading, observed: courseIsObserved(t.quality ?? EMPTY_QUALITY) };
+  }
+  return null;
+}
+
 /** Рух цілі для оцінок. `null` — рух ще не спостережено. */
 function motionOf(threat: Threat): MotionState | null {
   return trackMemory.motions.get(threat.id) ?? null;
@@ -1090,6 +1114,7 @@ async function maybeCityAlert(
     for (const a of fresh) {
       const png = await renderZoomPng(threats, { lat: a.lat, lon: a.lon }, 70, {
         label: a.name,
+        courseOf: courseForImage,
       });
       await sendChannelUpdate(token, channel, cityAlertCaption(a), a.count, png, keyboard, false);
     }
@@ -1477,7 +1502,7 @@ async function runChannelTickCore(
   // Області під тривогою — з того самого джерела, що й карта бота: канал показує
   // ту саму обстановку. Best-effort: збій зон не має завалити пост.
   const alertZones = await fetchAlertZones().catch(() => []);
-  const png = await renderSituationPng(smoothed, trackLines(smoothed), alertZones);
+  const png = await renderSituationPng(smoothed, trackLines(smoothed), alertZones, courseForImage);
   const keyboard = await channelButtons(token);
   const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
   const silent = shouldPostSilently(types, now);

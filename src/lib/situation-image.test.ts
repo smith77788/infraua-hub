@@ -332,3 +332,67 @@ describe("карта показує, що позначка застаріла", 
     expect(at(fresh)).toEqual(at(old));
   });
 });
+
+describe("оглядова карта теж знає про застій і про вимір курсу", () => {
+  const NOW = Date.parse("2026-09-16T21:07:58Z");
+  const t = (agoSec: number): Threat => ({
+    id: "a",
+    name: "Шахед",
+    lat: 50.45,
+    lon: 30.52,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    lastSeen: new Date(NOW - agoSec * 1000).toISOString(),
+    type: "shahed",
+    heading: 180,
+    quality: {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "confirmed",
+      presumptiveCourse: true,
+      speedKmh: null,
+    },
+  });
+
+  /** Скільки пунктирних кіл у кадрі. Одне завжди належить легенді. */
+  const dashed = (svg: string): number => (svg.match(/stroke-dasharray="4 6"/g) ?? []).length;
+
+  it("малює коло застою — доти воно мовчки не зʼявлялось", () => {
+    /*
+     * Жива вада, спіймана типами: `threats.map(marker)` передавало в параметр
+     * `now` ІНДЕКС елемента. Вік виходив нульовим, коло застою не малювалось
+     * ніколи, і жодного падіння при цьому не було — просто фічі не існувало.
+     */
+    expect(dashed(situationSvg([t(600)], [], { now: NOW }))).toBeGreaterThan(
+      dashed(situationSvg([t(5)], [], { now: NOW })),
+    );
+  });
+
+  it("свіжа позначка кола застою не отримує — пунктир лишається тільки в легенді", () => {
+    expect(dashed(situationSvg([t(5)], [], { now: NOW }))).toBe(1);
+  });
+
+  it("наш вимір курсу бʼє здогадку джерела", () => {
+    // Джерело каже 180° і саме позначає це припущенням; наш трек каже 0°.
+    // Заміряно: припущений курс розходиться з треком у медіані на 72°.
+    const withOurs = situationSvg([t(60)], [], {
+      now: NOW,
+      courseOf: () => ({ deg: 0, observed: true }),
+    });
+    const sourceOnly = situationSvg([t(60)], [], { now: NOW });
+    expect(withOurs).toContain("rotate(0)");
+    expect(sourceOnly).toContain("rotate(180)");
+  });
+
+  it("вимір малюється суцільною стрілкою, здогадка — порожньою", () => {
+    const measured = situationSvg([t(60)], [], {
+      now: NOW,
+      courseOf: () => ({ deg: 90, observed: true }),
+    });
+    const guessed = situationSvg([t(60)], [], { now: NOW });
+    expect(measured).toContain('fill="#ffd23f" stroke="#0a0e14"');
+    expect(guessed).toContain('fill="none"');
+  });
+});
