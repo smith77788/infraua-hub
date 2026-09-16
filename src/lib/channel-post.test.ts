@@ -27,9 +27,38 @@ describe("oblastOf", () => {
   });
 });
 
+/** Ціль зі східним трейлом (реальний рух) — для прогнозу за спостереженим рухом. */
+function eastbound(lat: number, lon0: number, now: number, kmh = 150): Threat {
+  const pts = 5;
+  const trail = [];
+  for (let i = pts - 1; i >= 0; i--) {
+    const secAgo = i * 60;
+    const km = (kmh * ((pts - 1 - i) * 60)) / 3600;
+    const lon = lon0 + km / (111.32 * Math.cos((lat * Math.PI) / 180));
+    trail.push({ lat, lon, t: new Date(now - secAgo * 1000).toISOString() });
+  }
+  return threat({
+    lat,
+    lon: trail[trail.length - 1]!.lon,
+    type: "shahed",
+    trail,
+  });
+}
+
 describe("renderChannelPost", () => {
   it("порожньо в небі — постити нічого", () => {
     expect(renderChannelPost([])).toBeNull();
+  });
+
+  it("прогноз хвилі за СПОСТЕРЕЖЕНИМ рухом дає ETA у хвилинах", () => {
+    const now = Date.parse("2026-09-16T21:00:00Z");
+    // Рій іде на схід зі заходу Полтавщини — до обласних центрів попереду.
+    const post = renderChannelPost(
+      [eastbound(49.9, 33.0, now), eastbound(49.95, 33.1, now), eastbound(49.85, 33.05, now)],
+      { now },
+    )!;
+    expect(post.text).toContain("спостереженими треками");
+    expect(post.text).toMatch(/~\d+ хв/); // ETA у рядку хвилі
   });
 
   it("рахує однотипні цілі однією фразою «ванёк»-регістру", () => {
