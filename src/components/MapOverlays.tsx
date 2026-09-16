@@ -103,12 +103,22 @@ export default function MapOverlays({
         не в потоці, тож розвести їх можна лише відступом, а числа беремо з
         `--map-ctrl-*` — заміряні там, де ті елементи й стилізуються.
       */}
+      {/*
+        Смуга має ВИЗНАЧЕНУ висоту — від `top-2` до нижніх смуг, — щоб панелі
+        могли обмежитись нею (`max-h-full`) і прокручуватись усередині. Без
+        цього панель хвиль на великому нальоті (заміряно на 136 шахедах)
+        виростала нижче за карту й накривала плеєр часу. Межа береться з тієї ж
+        виміряної `--map-bottom-inset`, тож розійтися з реальністю не може.
+      */}
       <div
         className={`pointer-events-none absolute inset-x-0 top-2 z-[600] flex items-start gap-2 ${SIDE_PAD}`}
+        style={{ bottom: "calc(var(--map-bottom-inset, 3rem) + 0.5rem)" }}
       >
-        <div className="flex min-w-0 flex-col items-start gap-2">{topLeft}</div>
-        <div className="flex min-w-0 flex-1 flex-col items-center gap-1.5">{topCenter}</div>
-        <div className="flex min-w-0 flex-col items-end gap-2">{topRight}</div>
+        <div className="flex h-full min-h-0 min-w-0 flex-col items-start gap-2">{topLeft}</div>
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col items-center gap-1.5">
+          {topCenter}
+        </div>
+        <div className="flex h-full min-h-0 min-w-0 flex-col items-end gap-2">{topRight}</div>
       </div>
 
       {/*
@@ -123,35 +133,28 @@ export default function MapOverlays({
       */}
       <div className="pointer-events-none absolute inset-0 z-[600] flex flex-col justify-end gap-1.5">
         {/*
-          `items-end` — щоб розгорнута легенда росла ВГОРУ, а не відсувала чип
-          областей униз під смуги.
+          Легенда — окрема смуга, і вона НЕ ділить рядок із чипом.
+          
+          Спершу вони стояли поруч із `flex-wrap`. На вузькому екрані чип
+          переносився на другий рядок — і там `h-full` (потрібний, щоб легенда
+          могла обмежитись висотою карти) починав рахуватись від висоти всього
+          контейнера, а не свого рядка. Заміряно: колонка чипа звисала на 343 px
+          нижче за карту. Два прийоми, кожен правильний окремо, разом не
+          працюють — тож переносу тут немає взагалі.
 
-          `flex-wrap` із `basis-40` — щоб на вузькому екрані чип областей ішов
-          НА СВІЙ РЯДОК, а не стискався до нуля й не вилазив за край. Заміряно:
-          на 320 px із розгорнутою легендою чипу лишалось 56 px під напис
-          завширшки 102 px, і сторінка діставала горизонтальну прокрутку.
+          `flex-1 min-h-0` дає смузі ВИЗНАЧЕНУ висоту (карта мінус усе інше), і
+          саме від неї легенда рахує свій `max-h-full`. `justify-end` тримає
+          вміст унизу, тож закрита легенда лишається там, де й була.
         */}
-        {/*
-          Ті самі відступи й тут: розгорнута легенда росте вгору аж до кнопок
-          масштабу й перемикача підкладки. Зіткнення прибирається відступом, а
-          не ховається під z-index — сховати його неможливо, елементи керування
-          все одно мальовані поверх.
-        */}
-        <div
-          className={`flex min-h-0 flex-1 flex-wrap items-end justify-between gap-x-2 gap-y-1.5 ${SIDE_PAD}`}
-        >
-          {/*
-            `h-full` тут не декорація: без визначеної висоти в обгортки
-            `max-h-full` на легенді нема від чого рахуватись, і панель знову
-            росте вище за карту. Вміст лишається внизу через `justify-end`.
-          */}
-          <div className="flex h-full min-h-0 min-w-0 flex-col items-start justify-end gap-2">
-            {bottomLeft}
-          </div>
-          <div className="flex h-full min-w-0 flex-1 basis-40 flex-col items-center justify-end gap-1.5">
-            {bottomCenter}
-          </div>
+        <div className={`flex min-h-0 flex-1 flex-col items-start justify-end ${SIDE_PAD}`}>
+          {bottomLeft}
         </div>
+        {/*
+          Чипу віддано весь рядок: саме брак ширини й різав назви областей
+          («Херсонщина 2» → «Херсо…»), бо ділити рядок із легендою означало
+          лишити йому 202 px під напис завширшки 300.
+        */}
+        <div className={`flex flex-col items-center gap-1.5 ${SIDE_PAD}`}>{bottomCenter}</div>
         <div ref={barsRef}>{bars}</div>
       </div>
     </>

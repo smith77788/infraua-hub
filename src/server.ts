@@ -38,6 +38,7 @@ import {
   senderId,
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
+import { buildStamp, renderBuild } from "./lib/build-info";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
@@ -3790,6 +3791,13 @@ async function adminCommand(
         ...(hook["lastError"]
           ? [`Остання помилка доставки: ${escapeHtml(String(hook["lastError"]))}`]
           : []),
+        "",
+        /*
+         * Мітка збірки — тут, а не окремою командою: питання «а чи це вже
+         * нова версія?» виникає рівно тоді, коли дивишся на стан системи.
+         * Двічі поспіль на нього відповідали здогадом, і двічі помилково.
+         */
+        renderBuild(BUILD, PROCESS_STARTED_AT, Date.now()),
       ].join("\n"),
     };
   }
@@ -4433,6 +4441,28 @@ async function ensureWebhook(request: Request): Promise<void> {
  * потрібно для документа, який важить десятки кілобайт і змінюється з кожним
  * деплоєм.
  */
+/**
+ * Мітка збірки, з якою запустився цей процес.
+ *
+ * Рахується один раз: усередині життя процесу вона не змінюється, а читати
+ * оточення на кожен запит означало б удавати, що може.
+ */
+const BUILD = buildStamp(process.env as Record<string, string | undefined>);
+const PROCESS_STARTED_AT = Date.now();
+
+/**
+ * Вшиваємо мітку збірки в саму оболонку.
+ *
+ * Це та половина перевірки, яку не можна отримати запитом: оболонка може
+ * прийти зі сховища браузера, і тоді мітка в ній — стара. Запит же завжди йде
+ * на сервер і повертає поточну. Різниця між ними і є доказом застрягання.
+ */
+function withBuildStamp(html: string): string {
+  if (!BUILD.sha) return html;
+  const tag = `<meta name="x-build" content="${BUILD.sha}">`;
+  return html.includes("</head>") ? html.replace("</head>", `${tag}</head>`) : tag + html;
+}
+
 function withShellCacheHeaders(response: Response): Response {
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("text/html")) return response;
@@ -4507,6 +4537,23 @@ export default {
       }
     }
 
+    /*
+     * Жива мітка збірки. Найдешевший запит у системі й навмисно без кешу:
+     * відповідь, яку можна взяти зі сховища, не доводить нічого про сервер.
+     */
+    if (pathname === "/api/build") {
+      return new Response(
+        JSON.stringify({ sha: BUILD.sha, short: BUILD.short, source: BUILD.source }),
+        {
+          headers: {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+            "access-control-allow-origin": "*",
+          },
+        },
+      );
+    }
+
     if (pathname === "/api/health") {
       try {
         return await health(request);
@@ -4522,7 +4569,17 @@ export default {
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
-      return withShellCacheHeaders(await normalizeCatastrophicSsrResponse(response));
+      const shell = withShellCacheHeaders(await normalizeCatastrophicSsrResponse(response));
+      const type = shell.headers.get("content-type") ?? "";
+      if (!type.includes("text/html") || !BUILD.sha) return shell;
+      // Оболонку доводиться зібрати в памʼяті, щоб вшити мітку. Вона важить
+      // десятки кілобайт — ціна прийнятна за можливість довести, яку саме
+      // збірку бачить людина.
+      return new Response(withBuildStamp(await shell.text()), {
+        status: shell.status,
+        statusText: shell.statusText,
+        headers: shell.headers,
+      });
     } catch (error) {
       console.error(error);
       return new Response(renderErrorPage(), {

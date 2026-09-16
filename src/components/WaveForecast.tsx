@@ -35,7 +35,7 @@ export default function WaveForecast({ threats }: { threats: readonly Threat[] }
   const scattered = swarm.coherence < 0.6;
 
   return (
-    <div className="pointer-events-auto max-w-[240px] rounded border border-cyan-500/40 bg-background/92 px-2.5 py-2 backdrop-blur">
+    <div className="pointer-events-auto max-h-full max-w-[240px] overflow-y-auto rounded border border-cyan-500/40 bg-background/92 px-2.5 py-2 backdrop-blur">
       <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300">
         <Navigation className="size-3" />
         Прогноз руху рою

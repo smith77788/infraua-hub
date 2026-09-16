@@ -62,7 +62,7 @@ export default function ActiveWaves({
   if (active < 2) return null;
 
   return (
-    <div className="pointer-events-auto max-w-[230px] rounded border border-orange-500/40 bg-background/92 px-2.5 py-2 backdrop-blur">
+    <div className="pointer-events-auto max-h-full max-w-[230px] overflow-y-auto rounded border border-orange-500/40 bg-background/92 px-2.5 py-2 backdrop-blur">
       <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-orange-300">
         <Layers3 className="size-3" />
         Активних хвиль: {active}

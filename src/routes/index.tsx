@@ -46,6 +46,7 @@ import MapLegend from "@/components/MapLegend";
 import OrientationCard, { hasSeenOrientation } from "@/components/OrientationCard";
 import SituationBar from "@/components/SituationBar";
 import StatusStrip from "@/components/StatusStrip";
+import StaleShellNotice from "@/components/StaleShellNotice";
 import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import MapOverlays from "@/components/MapOverlays";
@@ -907,6 +908,12 @@ function Console() {
 
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
+      {/*
+        Найперший рядок і навмисно перед усім іншим: якщо оболонка стара, то
+        все, що нижче, — теж старе, і читати його як поточний стан системи не
+        можна. Мовчить, доки не доведено протилежне.
+      */}
+      <StaleShellNotice />
       {/*
         Смуга стану замість декоративного банера класифікації. У консолях
         такого класу зверху стоїть рядок, який каже, з чим саме ти працюєш; тут
