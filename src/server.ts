@@ -501,15 +501,6 @@ async function botUsername(token: string): Promise<string | null> {
 }
 
 /**
- * Спільний кеш повітряних цілей.
- *
- * Тепер дані потрібні двом споживачам із різним ритмом: канал прокидається раз
- * на пʼять хвилин, персональні сповіщення — щопівтори. Без спільного кешу це
- * означало б удвічі більше запитів до джерела, яке нам нічого не винне.
- */
-let threatCache: { at: number; threats: Threat[] } | null = null;
-
-/**
  * Памʼять треків — спільне джерело руху для бота й каналу.
  *
  * Джерело віддає лише поточну позицію: куди ціль летить, воно каже полем
@@ -659,25 +650,14 @@ async function fetchAlertZones(maxAgeMs = 60_000): Promise<[number, number][][]>
 }
 
 async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
-  const now = Date.now();
-  if (threatCache && now - threatCache.at < maxAgeMs) return threatCache.threats;
-  const { fetchNeptunThreats } = await import("./lib/infra.functions");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const threats = (await fetchNeptunThreats(controller.signal)) ?? [];
-    threatCache = { at: now, threats };
-    // Трек росте з кожного опитування — саме тому памʼять оновлюється тут, а
-    // не в котромусь зі споживачів: пропущене опитування це розрив у лінії.
-    rememberTracks(threats, now);
-    return threats;
-  } catch {
-    // Збій джерела не має стирати останню відому картину: краще дані на
-    // хвилину старші, ніж «небо чисте» там, де його ніхто не перевіряв.
-    return threatCache?.threats ?? [];
-  } finally {
-    clearTimeout(timer);
-  }
+  // ЄДИНЕ джерело з застосунком: той самий кеш, що читає карта (getThreats) і
+  // публічний віджет. Так канал і мапа бачать один знімок, а не кожен свій.
+  const { neptunThreatsCached } = await import("./lib/infra.functions");
+  const threats = await neptunThreatsCached(maxAgeMs);
+  // Трек росте з кожного опитування — оновлюємо історію тут, на кожному тику
+  // каналу; пропущене опитування це розрив у лінії.
+  rememberTracks(threats, Date.now());
+  return threats;
 }
 
 /**
