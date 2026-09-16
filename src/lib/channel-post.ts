@@ -29,6 +29,7 @@ import { swarmForecast } from "./swarm";
 import { swarmForecastFor } from "./swarm-forecast";
 import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
 import { verifyThreat } from "./advisory";
+import { courseIsObserved } from "./threat-quality";
 import { roleOfSource } from "./osint-sources";
 import { kyivHour } from "./kyiv";
 
@@ -332,6 +333,14 @@ interface Group {
   loud: Map<string, { etaMin: number; etaRangeMin: [number, number] }>;
   /** Тип → усі спостережені курси цілей цього типу (для спільного напрямку). */
   courses: Map<ThreatType, number[]>;
+  /**
+   * Курси, які джерело позначило припущеними, — окремо від решти.
+   *
+   * Потрібно, щоб текст не стверджував більше за картинку: на зображенні
+   * припущений курс уже малюється порожньою стрілкою, а рядок поряд казав
+   * «курсом на південь» так само, як для заміряного.
+   */
+  guessed: Map<ThreatType, number[]>;
   /** Скільки цілей області спираються лише на одне непідтверджене джерело. */
   weak: number;
   total: number;
@@ -375,7 +384,15 @@ export function renderChannelPost(
     const oblast = oblastOf(t.lat, t.lon);
     let g = groups.get(oblast);
     if (!g) {
-      g = { oblast, byType: new Map(), loud: new Map(), courses: new Map(), weak: 0, total: 0 };
+      g = {
+        oblast,
+        byType: new Map(),
+        loud: new Map(),
+        courses: new Map(),
+        guessed: new Map(),
+        weak: 0,
+        total: 0,
+      };
       groups.set(oblast, g);
     }
     // Рахуємо ОБ'ЄКТИ (1 ціль = 1), а не поле count. count — це кількість
@@ -396,6 +413,11 @@ export function renderChannelPost(
       const list = g.courses.get(type);
       if (list) list.push(t.heading);
       else g.courses.set(type, [t.heading]);
+      if (!courseIsObserved(t.quality ?? EMPTY_QUALITY)) {
+        const guesses = g.guessed.get(type);
+        if (guesses) guesses.push(t.heading);
+        else g.guessed.set(type, [t.heading]);
+      }
     }
     const loud = loudCity(t);
     if (loud) {
@@ -434,8 +456,17 @@ export function renderChannelPost(
     const parts = entries.map(([type, n]) => {
       // Спільний курс — лише коли цілі справді йдуть разом; інакше без напрямку,
       // щоб текст не суперечив стрілкам на картинці.
-      const course = coherentCourse(g.courses.get(type) ?? []);
-      const dir = course === null ? "" : ` ${lex.course(course)}`;
+      const all = g.courses.get(type) ?? [];
+      const course = coherentCourse(all);
+      /*
+       * Позначаємо здогадку лише коли спостереженого курсу немає в ЖОДНОЇ цілі
+       * типу — той самий поріг, що й для позначки непідтвердженості нижче.
+       * Часткову слабкість читач однаково прочитає як повну, тож позначати
+       * змішаний випадок означало б знецінити позначку там, де вимір є.
+       */
+      const allGuessed = all.length > 0 && (g.guessed.get(type)?.length ?? 0) === all.length;
+      const dir =
+        course === null ? "" : ` ${allGuessed ? lex.courseGuess(course) : lex.course(course)}`;
       return `${TYPE_EMOJI[type]} ${n} ${lex.typeName(type, n)}${dir}`;
     });
     let line = `📍 <b>${g.oblast}</b>: ${parts.join(", ")}`;

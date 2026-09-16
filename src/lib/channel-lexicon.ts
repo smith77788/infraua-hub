@@ -28,6 +28,19 @@ export interface Lexicon {
   /** Румб курсу за індексом 0..7 (0 = Пн, далі за годинниковою). */
   course(index: number): string;
   /**
+   * Курс, який джерело саме називає ПРИПУЩЕНИМ.
+   *
+   * Окремим формулюванням, а не позначкою в кінці: пост читають із телефона
+   * одним поглядом, і зірочка з легендою внизу не спрацює. «Ймовірно на
+   * південь» пояснює себе саме там, де стоїть, і коштує стільки ж символів —
+   * а підпис до фото обмежений 1024, тож легенда була б платною.
+   *
+   * Чому це взагалі потрібно: картинка вже розрізняє спостережений курс від
+   * припущеного (порожня стрілка), а текст поряд казав «курсом на південь»
+   * однаково для обох. У живій видачі джерела 89% курсів — припущені.
+   */
+  courseGuess(index: number): string;
+  /**
    * Заголовок поста. `hourKyiv` — не косметика: частина варіантів прив'язана
    * до пори доби, і без години вони брехали б у кожному третьому пості.
    */
@@ -228,6 +241,7 @@ export const UK: Lexicon = {
     return pluralUk(n, one, few, many);
   },
   course: (i) => `курсом ${UK_COURSE[i % 8]}`,
+  courseGuess: (i) => `ймовірно ${UK_COURSE[i % 8]}`,
   headline: (kind, seed, hourKyiv) => pickHead(UK_HEAD[kind], seed, hourKyiv),
   tail: (serious, seed) => pick(serious ? UK_TAIL_SERIOUS : UK_TAIL_LIGHT, seed),
   towards: (parts) => ` — у бік: ${parts.join(", ")}, уважно!`,
@@ -310,6 +324,7 @@ export const EN: Lexicon = {
     return n === 1 ? one : many;
   },
   course: (i) => `heading ${EN_COURSE[i % 8]}`,
+  courseGuess: (i) => `likely ${EN_COURSE[i % 8]}`,
   headline: (kind, seed, hourKyiv) => pickHead(EN_HEAD[kind], seed, hourKyiv),
   tail: (serious, seed) => pick(serious ? EN_TAIL_SERIOUS : EN_TAIL_LIGHT, seed),
   towards: (parts) => ` — heading for ${parts.join(", ")}`,

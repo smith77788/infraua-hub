@@ -573,3 +573,60 @@ describe("пост не бреше про пору доби", () => {
     expect(renderChannelPost(swarm(25))).not.toBeNull();
   });
 });
+
+describe("текст не стверджує більше за картинку", () => {
+  const guessed = {
+    uncertaintyKm: 5,
+    position: "approx" as const,
+    lifecycle: "tracking" as const,
+    presumptiveCourse: true,
+    speedKmh: null,
+  };
+  const observed = { ...guessed, presumptiveCourse: false };
+
+  /** Три цілі в одній області, однаковим курсом. */
+  function group(quality: typeof guessed): Threat[] {
+    return [0, 1, 2].map((i) =>
+      threat({
+        id: `g${i}`,
+        type: "shahed",
+        lat: 49.99 + i * 0.05,
+        lon: 36.23,
+        heading: 180,
+        quality,
+      }),
+    );
+  }
+
+  it("припущений курс називається ймовірним, а не курсом", () => {
+    // На картинці припущений курс уже малюється порожньою стрілкою, а текст
+    // поряд казав «курсом на південь» так само, як для заміряного. У живій
+    // видачі джерела 89% курсів — припущені.
+    const post = renderChannelPost(group(guessed));
+    expect(post!.text).toContain("ймовірно на південь");
+    expect(post!.text).not.toContain("курсом на південь");
+  });
+
+  it("спостережений курс лишається курсом", () => {
+    const post = renderChannelPost(group(observed));
+    expect(post!.text).toContain("курсом на південь");
+    expect(post!.text).not.toContain("ймовірно на південь");
+  });
+
+  it("хоч одна заміряна ціль — позначки здогадки немає", () => {
+    /*
+     * Той самий поріг, що й для позначки непідтвердженості: позначаємо лише
+     * коли вимірів немає в ЖОДНОЇ цілі типу. Частковість читач однаково
+     * прочитає як повну, і позначка знецінилась би там, де вимір є.
+     */
+    const mixed = [...group(guessed).slice(0, 2), ...group(observed).slice(0, 1)];
+    const post = renderChannelPost(mixed);
+    expect(post!.text).toContain("курсом на південь");
+  });
+
+  it("без курсу напрямку не зʼявляється взагалі", () => {
+    const post = renderChannelPost([threat({ type: "shahed", lat: 49.99, lon: 36.23 })]);
+    expect(post!.text).not.toContain("курсом");
+    expect(post!.text).not.toContain("ймовірно");
+  });
+});
