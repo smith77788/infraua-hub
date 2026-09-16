@@ -17,6 +17,8 @@
 
 import type { DangerIndex, DangerLevel, PersonalAssessment } from "./advisory";
 import type { ThreatType } from "./air";
+import type { SavedPlace } from "./saved-places";
+import type { Diary } from "./diary";
 import { kyivHour } from "./kyiv";
 
 /** На що будити. Порядок — від найвужчого до найширшого. */
@@ -75,6 +77,25 @@ export interface Subscriber {
    * людину востаннє бачили, і про це ніхто не дізнається.
    */
   liveUntil?: number | null;
+  /**
+   * Місця людини: дім, робота, батьки.
+   *
+   * `point` лишається головним місцем — весь код, що вміє «точку людини»,
+   * продовжує працювати без змін. Тут — решта, заради яких радар перестає
+   * мовчати про все, що поза однією точкою.
+   */
+  places?: SavedPlace[];
+  /**
+   * Офіційні тривоги в областях моїх місць.
+   *
+   * Окремий вимикач від наших оцінок навмисно: це різні класи повідомлення.
+   * Людина може не хотіти наших попереджень і хотіти офіційних тривог.
+   */
+  officialAlerts?: boolean;
+  /** Щоденник тривог — те, чим діляться. */
+  diary?: Diary;
+  /** Коли востаннє надсилали тижневий підсумок (київська доба). */
+  weeklySentAt?: string | null;
 }
 
 /** Типи, заради яких будять навіть того, хто просив тиші. */
@@ -133,7 +154,34 @@ export function newSubscriber(chatId: number, at: string, ref: string | null = n
     lastAlertAt: 0,
     lastAlertIds: [],
     lastLevel: null,
+    places: [],
+    officialAlerts: true,
+    weeklySentAt: null,
   };
+}
+
+/**
+ * Усі місця людини як єдиний перелік.
+ *
+ * Стара точка (`point`) і нові місця (`places`) — та сама сутність, записана в
+ * різні часи. Тут вони зводяться в одне, щоб решта коду не думала про
+ * переходовий період: людина, яка задала точку рік тому, має бути прикрита так
+ * само, як та, що вчора додала «дім» і «роботу».
+ */
+export function allPlaces(sub: Subscriber): SavedPlace[] {
+  const saved = sub.places ?? [];
+  if (saved.length > 0) return saved;
+  if (!sub.point) return [];
+  return [
+    {
+      id: "main",
+      label: sub.point.label,
+      lat: sub.point.lat,
+      lon: sub.point.lon,
+      radiusKm: sub.radiusKm,
+      primary: true,
+    },
+  ];
 }
 
 /** Година за Києвом живе в `kyiv.ts` — її ділять і бот, і канал. */

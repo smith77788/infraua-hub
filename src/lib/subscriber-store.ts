@@ -17,16 +17,19 @@
  */
 
 import type { Circle } from "./circle";
+import type { GroupDuty } from "./group-duty";
 import { newSubscriber, refCode, type Subscriber } from "./subscribers";
 
 interface StoreFile {
   version: 1;
   subscribers: Subscriber[];
   circles?: Circle[];
+  duties?: GroupDuty[];
 }
 
 const MEMORY = new Map<number, Subscriber>();
 const CIRCLES = new Map<string, Circle>();
+const DUTIES = new Map<number, GroupDuty>();
 let loaded = false;
 let dirty = false;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -146,6 +149,9 @@ async function load(): Promise<void> {
     for (const circle of parsed.circles ?? []) {
       if (typeof circle?.code === "string") CIRCLES.set(circle.code, circle);
     }
+    for (const duty of parsed.duties ?? []) {
+      if (typeof duty?.chatId === "number") DUTIES.set(duty.chatId, duty);
+    }
   } catch (error) {
     // Файла ще немає — штатний перший запуск. Інша помилка варта логу, але не
     // падіння: бот без історії підписок працює, бот, що не стартує, — ні.
@@ -175,6 +181,7 @@ async function writeSnapshot(): Promise<void> {
     version: 1,
     subscribers: [...MEMORY.values()],
     circles: [...CIRCLES.values()],
+    duties: [...DUTIES.values()],
   };
   // Шлях беремо ОДИН раз на запис: інакше запис, початий до зміни оточення,
   // перейменовував би файл уже в іншу теку.
@@ -332,6 +339,29 @@ export async function creditInvite(code: string, invitee: number): Promise<boole
   return false;
 }
 
+/* ─── Черговий по чату ──────────────────────────────────────────────────── */
+
+export async function getDuty(chatId: number): Promise<GroupDuty | undefined> {
+  await load();
+  return DUTIES.get(chatId);
+}
+
+export async function putDuty(duty: GroupDuty, urgent = false): Promise<void> {
+  await load();
+  DUTIES.set(duty.chatId, duty);
+  await scheduleFlush(urgent);
+}
+
+export async function dropDuty(chatId: number): Promise<void> {
+  await load();
+  if (DUTIES.delete(chatId)) await scheduleFlush(true);
+}
+
+export async function allDuties(): Promise<GroupDuty[]> {
+  await load();
+  return [...DUTIES.values()];
+}
+
 /* ─── Кола ──────────────────────────────────────────────────────────────── */
 
 export async function getCircle(code: string): Promise<Circle | undefined> {
@@ -466,6 +496,7 @@ export async function drainFlushes(): Promise<void> {
 export function resetStoreForTests(): void {
   MEMORY.clear();
   CIRCLES.clear();
+  DUTIES.clear();
   loaded = false;
   dirty = false;
   if (flushTimer) clearTimeout(flushTimer);

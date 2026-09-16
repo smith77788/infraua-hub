@@ -84,13 +84,52 @@ import {
   waveEnded,
   type WaveState,
 } from "./lib/channel-wave";
-import { kyivDate, kyivHour } from "./lib/kyiv";
+import { formatDuration, kyivDate, kyivHour } from "./lib/kyiv";
 import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
+import {
+  addPlace,
+  MAX_PLACES,
+  parsePlaceArgs,
+  placeId,
+  removePlace,
+  renderPlaces,
+  type SavedPlace,
+} from "./lib/saved-places";
+import { buildRoute, renderRoute, type RoutePoint } from "./lib/route";
+import {
+  newGroupDuty,
+  parseDutyArgs,
+  renderDuty,
+  renderDutyHelp,
+  shouldNotifyGroup,
+} from "./lib/group-duty";
 import { buildGeoIndex, candidatesFor } from "./lib/geo-index";
 import { estimateMotion, type MotionState } from "./lib/track-filter";
 import { deliver, type Envelope, Priority } from "./lib/delivery";
 import { capacityFor, renderCapacity, USEFUL_WINDOW_MS } from "./lib/capacity";
+import {
+  oblastTransitions,
+  renderAlertCleared,
+  renderAlertStarted,
+  updateAlertStarts,
+} from "./lib/oblast-watch";
+import { allPlaces, CRITICAL_TYPES, isNight } from "./lib/subscribers";
+import { circleAlertTargets, renderRelativeAlarm, renderRelativeClear } from "./lib/circle-alerts";
+import {
+  detectCarrier,
+  renderCarrierWarning,
+  warningIsFresh,
+  type CarrierWarning,
+} from "./lib/carriers";
+import { renderAdvice, worstAdvice } from "./lib/safety-advice";
+import {
+  recordEvent,
+  emptyDiary,
+  totals as diaryTotals,
+  renderSummary,
+  weeklyDue,
+} from "./lib/diary";
 import {
   buildBackup,
   mergeCircles,
@@ -142,12 +181,16 @@ import {
 } from "./lib/subscribers";
 import {
   allCircles,
+  allDuties,
   allSubscribers,
   createCircle,
   creditInvite,
   ensureSubscriber,
   getCircle,
+  dropDuty,
+  getDuty,
   getSubscriber,
+  putDuty,
   insertMissing,
   joinCircle,
   leaveCircle,
@@ -1215,6 +1258,7 @@ async function runChannelTickCore(
     lastAccrualAt = now;
     await maybeDigest(token, channel, now);
     await maybeBackup(token, now);
+    await maybeWeeklySummary(token, now);
     if (!wave) return { posted: false, reason: "небо чисте" };
 
     const active = await fetchOfficialAlerts();
@@ -1613,12 +1657,20 @@ async function personalCommand(
     "invite",
     "circle",
     "коло",
+    "place",
+    "місце",
+    "places",
+    "diary",
+    "щоденник",
+    "route",
+    "дорога",
   ]);
 
   // У групі chatId спільний: завести там «підписника» означало б слати
   // персональні сповіщення в загальний чат і рахувати групу як людину.
   // Персональне живе в особистому чаті — так само, як і точка людини.
   if (chatType !== "private") {
+    if (command === "duty" || command === "черговий") return dutyCommand(parsed, userId);
     if (command === "start") return null;
     if (!personalCommands.has(command)) return null;
     const name = (await botUsername(token)) ?? undefined;
@@ -1627,6 +1679,12 @@ async function personalCommand(
         ? `Персональний радар працює в особистому чаті: <a href="https://t.me/${name}?start=ch">відкрити бота</a>.`
         : "Персональний радар працює в особистому чаті з ботом.",
     };
+  }
+
+  // Черговий по чату — єдина команда, яка живе САМЕ в групі. Решта
+  // персонального там не має сенсу: точка й налаштування в людини свої.
+  if (command === "duty" || command === "черговий") {
+    return dutyCommand(parsed, userId);
   }
 
   // Гейт підписки. `/stop` навмисно поза ним: можливість вимкнути сповіщення
@@ -1709,6 +1767,80 @@ async function personalCommand(
         "Налаштування й точка збережені — /my вмикає назад одним дотиком.",
       ].join("\n"),
     };
+  }
+
+  // Кілька місць: дім, робота, батьки. Радар з однією точкою мовчить про все,
+  // що поза нею, — і мовчить непомітно.
+  if (command === "place" || command === "місце" || command === "places") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const places = sub.places ?? [];
+    const raw = args.trim();
+
+    if (raw.startsWith("-")) {
+      const id = placeId(raw.slice(1));
+      const next = removePlace(places, id);
+      await putSubscriber(syncPrimary({ ...sub, places: next }), true);
+      return { text: renderPlaces(next) };
+    }
+
+    const parsed = parsePlaceArgs(raw);
+    if (!parsed) return { text: renderPlaces(places) };
+
+    const found = await findPlacePoint(parsed.query);
+    if (!found) {
+      return {
+        text: `Не знайшов «${escapeHtml(parsed.query)}». Спробуйте назву міста або області.`,
+      };
+    }
+    const place: SavedPlace = {
+      id: placeId(parsed.label),
+      label: parsed.label,
+      lat: found.lat,
+      lon: found.lon,
+      radiusKm: sub.radiusKm,
+      primary: false,
+    };
+    const result = addPlace(places, place);
+    if (result.outcome === "full") {
+      return {
+        text: `Більше за ${MAX_PLACES} місць — це вже не турбота, а шум. Приберіть зайве: <code>/place -назва</code>`,
+      };
+    }
+    await putSubscriber(syncPrimary({ ...sub, places: result.places }), true);
+    return {
+      text:
+        `✅ ${result.outcome === "replaced" ? "Оновлено" : "Додано"}: <b>${escapeHtml(parsed.label)}</b> — ${escapeHtml(found.label)}\n\n` +
+        renderPlaces(result.places),
+    };
+  }
+
+  // Щоденник: скільки це вже триває особисто для вас.
+  if (command === "diary" || command === "щоденник") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const diary = sub.diary;
+    if (!diary) return { text: "Щоденник ще порожній — рахувати нема чого." };
+    const text = renderSummary(diaryTotals(diary), "Ваш місяць");
+    return { text: text ?? "За останній місяць ані тривог, ані попереджень. Хай так і буде." };
+  }
+
+  // Дорога: що чекає між пунктом А і Б. Питання, якого не ставив ніхто.
+  if (command === "route" || command === "дорога") {
+    const parts = args.split(/\s*(?:—|->|→|-)\s*/).filter(Boolean);
+    if (parts.length < 2) {
+      return {
+        text: [
+          "🛣 <b>Дорога</b>",
+          "",
+          "Що чекає між двома містами — по областях, із часом, коли ви там будете.",
+          "",
+          "<code>/route Київ - Харків</code>",
+        ].join("\n"),
+      };
+    }
+    const from = await findPlacePoint(parts[0]!.trim());
+    const to = await findPlacePoint(parts[1]!.trim());
+    if (!from || !to) return { text: "Не впізнав одне з міст. Спробуйте обласні центри." };
+    return { text: await routeReport(from, to) };
   }
 
   if (command === "circle" || command === "коло") {
@@ -2062,6 +2194,367 @@ async function handlePersonalPress(
   return true;
 }
 
+/**
+ * Точка за назвою: місто, якщо знаємо, інакше центр області.
+ *
+ * Порядок саме такий: мешканцю Кременчука центр Полтавщини дає радіус від
+ * чужого міста, і це рівно та неточність, яку люди помічають першою.
+ */
+async function findPlacePoint(query: string): Promise<RoutePoint | null> {
+  // `matchPlace` уже вміє обидва рівні: спершу місто, далі центр області.
+  // Власне падіння на область тут було б другим способом робити те саме.
+  const { matchPlace } = await import("./lib/places");
+  const found = matchPlace(query);
+  if (!found) return null;
+  return {
+    lat: found.lat,
+    lon: found.lon,
+    label: found.kind === "oblast" ? `${found.name} (центр області)` : found.name,
+  };
+}
+
+/**
+ * Головне місце дублюється в `point`.
+ *
+ * Не заради сумісності заради сумісності: увесь код, що вміє «точку людини»,
+ * працює без змін, і його не треба переписувати заради нової можливості.
+ */
+function syncPrimary(sub: Subscriber): Subscriber {
+  const places = sub.places ?? [];
+  const main = places.find((p) => p.primary) ?? places[0];
+  if (!main) return sub;
+  return {
+    ...sub,
+    point: { lat: main.lat, lon: main.lon, label: main.label },
+    radiusKm: main.radiusKm,
+  };
+}
+
+/** Звіт по дорозі: обстановка в кожній області маршруту. */
+async function routeReport(from: RoutePoint, to: RoutePoint): Promise<string> {
+  const threats = await fetchThreatsCached(60_000);
+  const active = (await fetchOfficialAlerts()) ?? [];
+  const report = buildRoute(from, to, (p) => {
+    const oblast = oblastOf(p.lat, p.lon);
+    return {
+      oblast,
+      threats: threats.filter((t) => distanceKm(t, p) <= 50).length,
+      alarm: active.includes(oblast),
+    };
+  });
+  return renderRoute(report);
+}
+
+/**
+ * Черговий по чату.
+ *
+ * Умикати може лише адміністратор групи: це спільне сповіщення на двадцять
+ * людей, а не особисте налаштування. Той, хто може додати бота в чат, може й
+ * вирішувати, чи чат буде будити.
+ */
+async function dutyCommand(
+  parsed: BotCommand,
+  userId: number | undefined,
+): Promise<{ text: string; keyboard?: unknown }> {
+  const { chatId, chatType, args } = parsed;
+  if (chatType === "private") {
+    return {
+      text: [
+        "🛡 <b>Черговий по чату</b> — це для груп.",
+        "",
+        "Додайте бота у свій чат (родина, під'їзд, зміна) і напишіть там <code>/duty Харків</code>.",
+        "",
+        "<i>Для себе особисто — /my.</i>",
+      ].join("\n"),
+    };
+  }
+
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  if (token && typeof userId === "number" && !(await isChatAdmin(token, chatId, userId))) {
+    return { text: "Умикати чергового може лише адміністратор чату." };
+  }
+
+  const action = parseDutyArgs(args);
+  const existing = await getDuty(chatId);
+  if (!action) return { text: existing ? renderDuty(existing) : renderDutyHelp() };
+
+  if (action.kind === "off") {
+    await dropDuty(chatId);
+    return { text: "🛡 Чергового вимкнено. Цей чат більше не отримує попереджень." };
+  }
+  if (!existing && action.kind !== "place") {
+    return { text: renderDutyHelp() };
+  }
+  if (action.kind === "radius" && existing) {
+    const next = { ...existing, radiusKm: action.km };
+    await putDuty(next, true);
+    return { text: renderDuty(next) };
+  }
+  if (action.kind === "level" && existing) {
+    const next = { ...existing, level: action.level };
+    await putDuty(next, true);
+    return { text: renderDuty(next) };
+  }
+  if (action.kind !== "place") return { text: renderDutyHelp() };
+
+  const found = await findPlacePoint(action.query);
+  if (!found) return { text: `Не знайшов «${escapeHtml(action.query)}». Спробуйте назву міста.` };
+  const duty = newGroupDuty(
+    chatId,
+    parsed.chatType,
+    { lat: found.lat, lon: found.lon, label: found.label },
+    userId ?? 0,
+    new Date().toISOString(),
+  );
+  const next = existing
+    ? { ...existing, ...duty, level: existing.level, radiusKm: existing.radiusKm }
+    : duty;
+  await putDuty(next, true);
+  return { text: renderDuty(next) };
+}
+
+/** Чи людина адміністратор цього чату. Помилка читається як «ні». */
+async function isChatAdmin(token: string, chatId: number, userId: number): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${TELEGRAM_API}/bot${token}/getChatMember?chat_id=${chatId}&user_id=${userId}`,
+    );
+    const body = (await res.json()) as { result?: { status?: string } };
+    const status = body.result?.status;
+    return status === "creator" || status === "administrator";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Обхід чергових по чатах.
+ *
+ * Окремо від персонального навмисно: у групи інша модель — одна спільна точка,
+ * вищий поріг, довша пауза. Злити їх означало б будити двадцять людей за
+ * правилами, писаними для одного.
+ */
+async function groupDutySweep(threats: readonly Threat[], now: number): Promise<void> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  if (!token) return;
+  const duties = await allDuties();
+  if (duties.length === 0) return;
+
+  const active = (await fetchOfficialAlerts()) ?? [];
+  for (const duty of duties) {
+    const point = { lat: duty.lat, lon: duty.lon };
+    const assess = personalAssessment(threats, point, { radiusKm: duty.radiusKm, motionOf });
+    const incoming = assess.nearest
+      .filter((n) => n.inbound)
+      .map((n) => ({
+        id: n.threat.id,
+        critical: CRITICAL_TYPES.has(n.threat.type ?? "unknown"),
+      }));
+    const verdict = shouldNotifyGroup(duty, incoming, now);
+    if (!verdict.send) continue;
+
+    const danger = dangerIndex(assess);
+    const oblast = oblastOf(duty.lat, duty.lon);
+    const text =
+      renderAlert(assess, danger, duty.label, { trust: trustLine(assess) }) +
+      (active.includes(oblast) ? `\n\n🔴 У ${oblast} триває офіційна тривога.` : "") +
+      `\n\n${renderAdvice(worstAdvice(assess.nearest.filter((n) => n.inbound).map((n) => n.threat.type)))}`;
+    const res = await telegramSend(token, duty.chatId, text, undefined, true);
+    if (res.ok) {
+      await putDuty({ ...duty, lastAlertAt: now, lastAlertIds: verdict.ids });
+    } else if (res.status === 403) {
+      // Бота видалили з чату — чергового більше нема кому нести.
+      await dropDuty(duty.chatId);
+    }
+    await new Promise((r) => setTimeout(r, ALERT_SEND_GAP_MS));
+  }
+}
+
+/* ─── Офіційна тривога для моєї області ─────────────────────────────────── */
+
+/**
+ * Найпростіше, чого бот не вмів найдовше.
+ *
+ * Радар рахував траєкторії, промахи й шанси — і жодного разу не казав людині
+ * того, заради чого вмикають будь-який інший бот: «у вашій області оголошено
+ * тривогу». Подію ми бачили щохвилини й використовували для відбою в каналі, а
+ * до того, кого вона стосується, не доносили.
+ *
+ * `null` на старті — не «тривог немає», а «ми ще не знаємо». Без цієї різниці
+ * кожен редеплой розсилав би «оголошено тривогу» всім, у кого вона вже тривала
+ * годину, тобто перетворювався б на хибну сирену.
+ */
+let knownAlerts: string[] | null = null;
+let alertStarts = new Map<string, number>();
+
+async function officialAlertSweep(): Promise<void> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  if (!token) return;
+  const active = await fetchOfficialAlerts();
+  if (active === null) return; // джерело мовчить — станів не вигадуємо
+
+  const now = Date.now();
+  const transitions = oblastTransitions(knownAlerts, active);
+  const startsBefore = alertStarts;
+  knownAlerts = [...active];
+  alertStarts = updateAlertStarts(alertStarts, active, now);
+  if (transitions.length === 0) return;
+
+  const subs = await allSubscribers();
+  const queue: Envelope<{ chatId: number; text: string; diary: DiaryHook | null }>[] = [];
+
+  // Коло рідних: хто за ким стежить і в яких вони областях.
+  const circleMembers = new Map<string, { chatId: number; name: string; oblasts: string[] }[]>();
+  for (const sub of subs) {
+    const oblasts = [...new Set(allPlaces(sub).map((p) => oblastOf(p.lat, p.lon)))];
+    if (sub.circle) {
+      const list = circleMembers.get(sub.circle) ?? [];
+      list.push({ chatId: sub.chatId, name: sub.displayName ?? "Хтось", oblasts });
+      circleMembers.set(sub.circle, list);
+    }
+  }
+
+  for (const t of transitions) {
+    for (const sub of subs) {
+      if (sub.muted || sub.officialAlerts === false) continue;
+      const mine = allPlaces(sub).filter((p) => oblastOf(p.lat, p.lon) === t.oblast);
+      if (mine.length === 0) continue;
+      const text =
+        t.kind === "started"
+          ? renderAlertStarted(
+              t.oblast,
+              mine.map((p) => p.label),
+            )
+          : renderAlertCleared(
+              t.oblast,
+              startsBefore.has(t.oblast) ? formatDuration(now - startsBefore.get(t.oblast)!) : null,
+            );
+      queue.push({
+        chatId: sub.chatId,
+        // Офіційна тривога — факт, а не оцінка: вона йде поперед наших
+        // попереджень. Відбій терпить: помилитись у бік спокою не можна,
+        // але й поспішати з ним нікуди.
+        priority: t.kind === "started" ? Priority.Shelter : Priority.Routine,
+        expiresAt: now + USEFUL_WINDOW_MS,
+        payload: {
+          chatId: sub.chatId,
+          text,
+          diary:
+            t.kind === "cleared" && startsBefore.has(t.oblast)
+              ? { sub, minutes: (now - startsBefore.get(t.oblast)!) / 60_000 }
+              : null,
+        },
+      });
+    }
+
+    // «У мами тривога» — те, через що люди насправді не сплять.
+    for (const [, members] of circleMembers) {
+      for (const target of circleAlertTargets(members, t.oblast)) {
+        queue.push({
+          chatId: target.chatId,
+          priority: Priority.Watch,
+          expiresAt: now + USEFUL_WINDOW_MS,
+          payload: {
+            chatId: target.chatId,
+            text:
+              t.kind === "started"
+                ? renderRelativeAlarm([target.aboutName], t.oblast)
+                : renderRelativeClear([target.aboutName], t.oblast),
+            diary: null,
+          },
+        });
+      }
+    }
+  }
+
+  await deliver(
+    queue,
+    async (envelope) => {
+      const res = await telegramSend(
+        token,
+        envelope.chatId,
+        envelope.payload.text,
+        undefined,
+        true,
+      );
+      const hook = envelope.payload.diary;
+      if (res.ok && hook) {
+        await putSubscriber(noteDiary(hook.sub, { kind: "alarm", minutes: hook.minutes }, now));
+      }
+      return {
+        ok: res.ok,
+        status: res.status,
+        ...(res.retryAfterSec !== undefined ? { retryAfterSec: res.retryAfterSec } : {}),
+      };
+    },
+    { windowMs: ALERT_TICK_EVERY_MS },
+  );
+}
+
+interface DiaryHook {
+  sub: Subscriber;
+  minutes: number;
+}
+
+/** Записує подію у щоденник людини — те, з чого потім складається підсумок. */
+function noteDiary(
+  sub: Subscriber,
+  event: Parameters<typeof recordEvent>[1],
+  now: number,
+): Subscriber {
+  const at = new Date(now);
+  const diary = sub.diary ?? emptyDiary(at);
+  return { ...sub, diary: recordEvent(diary, { ...event, night: isNight(kyivHour(at)) }, at) };
+}
+
+/* ─── Зліт носіїв: попередження за десять хвилин до пізно ───────────────── */
+
+/**
+ * Найцінніші хвилини в усій системі.
+ *
+ * Балістику неможливо попередити після пуску — вона долає країну швидше, ніж
+ * ми встигаємо когось повідомити. Але в пуску є попередник: зліт носія. Ці
+ * повідомлення ми вже отримували й розчиняли в переліку цілей як «✈️ 1 борт» —
+ * тобто найважливіше виглядало як найменш важливе.
+ */
+let lastCarrier: CarrierWarning | null = null;
+
+async function carrierSweep(threats: readonly Threat[], now: number): Promise<void> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  if (!token) return;
+  const found = detectCarrier(threats, now);
+  if (!found) return;
+  // Одне попередження на зліт, а не на кожен тик: повторюване «готовність»
+  // перестає бути попередженням швидше за все інше.
+  if (warningIsFresh(lastCarrier, now)) return;
+  lastCarrier = found;
+
+  const text = renderCarrierWarning(found);
+  const subs = (await allSubscribers()).filter((s) => !s.muted && allPlaces(s).length > 0);
+  const queue: Envelope<{ chatId: number }>[] = subs.map((sub) => ({
+    chatId: sub.chatId,
+    priority: Priority.Attention,
+    expiresAt: now + USEFUL_WINDOW_MS,
+    payload: { chatId: sub.chatId },
+  }));
+
+  await deliver(
+    queue,
+    async (envelope) => {
+      const res = await telegramSend(token, envelope.chatId, text, undefined, true);
+      return {
+        ok: res.ok,
+        status: res.status,
+        ...(res.retryAfterSec !== undefined ? { retryAfterSec: res.retryAfterSec } : {}),
+      };
+    },
+    { windowMs: ALERT_TICK_EVERY_MS },
+  );
+
+  const channel = process.env["TELEGRAM_CHANNEL_ID"];
+  if (channel) await sendChannelUpdate(token, channel, text, 0, null, await channelButtons(token));
+}
+
 /* ─── Сповіщення: бот пише сам, коли на точку йде ціль ──────────────────── */
 
 /**
@@ -2184,6 +2677,9 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   const official = await fetchOfficialAlerts();
   const now = Date.now();
   const hour = kyivHour(new Date(now));
+  // Зліт носія попереджає про те, що після пуску попередити вже не встигнемо.
+  await carrierSweep(threats, now);
+  await groupDutySweep(threats, now);
 
   // Кандидати за близькістю — плюс ті, у кого лишився стан із минулого разу
   // (надіслана передтривога, перелік уже оголошених цілей). Їх мало, і без них
@@ -2253,7 +2749,14 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       expiresAt: now + USEFUL_WINDOW_MS,
       payload: {
         sub,
-        text: renderAlert(assess, danger, point.label, { pre, trust: trustLine(assess) }),
+        // «Що робити» — лише в найгострішому сповіщенні. Інструкція під кожним
+        // «пильнуйте» перетворилась би на підпис, який перестають читати саме
+        // тоді, коли вона єдина має значення.
+        text:
+          renderAlert(assess, danger, point.label, { pre, trust: trustLine(assess) }) +
+          (danger.level === "shelter"
+            ? `\n\n${renderAdvice(worstAdvice(assess.nearest.filter((n) => n.inbound).map((n) => n.threat.type)))}`
+            : ""),
         keyboard: personalKeyboard(
           danger.level === "shelter" && sub.circle ? { withOk: true } : {},
         ),
@@ -2270,8 +2773,13 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       const { sub, text, keyboard, decision, pre, oblast } = envelope.payload;
       const res = await telegramSend(token, sub.chatId, text, keyboard, true);
       if (res.ok) {
-        const marked = markAlerted(sub, decision, Date.now());
-        await putSubscriber(pre ? { ...marked, preAlert: { at: Date.now(), oblast } } : marked);
+        const at = Date.now();
+        const marked = noteDiary(
+          markAlerted(sub, decision, at),
+          { kind: "alert", shelter: decision.level === "shelter" },
+          at,
+        );
+        await putSubscriber(pre ? { ...marked, preAlert: { at, oblast } } : marked);
       } else if (res.status === 403) {
         // Бота заблокували або видалили чат. Далі слати — марно витрачати
         // бюджет, потрібний тим, хто чекає.
@@ -2310,7 +2818,7 @@ function startAlertScheduler(): void {
     // не має запускати наступний поверх себе.
     if (alertSweepRunning) return;
     alertSweepRunning = true;
-    personalAlertSweep()
+    Promise.all([personalAlertSweep(), officialAlertSweep()])
       .catch((e) => console.error("alert sweep failed", e))
       .finally(() => {
         alertSweepRunning = false;
@@ -2551,6 +3059,59 @@ async function restoreBackup(token: string, doc: ReturnType<typeof parseDocument
  * помилитись.
  */
 let backupSentFor: string | null = null;
+/**
+ * Тижневий підсумок — єдине, що люди пересилають самі.
+ *
+ * Канал і сповіщення пересилають рідко: вони про зараз. Підсумок — про неї, і
+ * саме тому він працює як запрошення краще за будь-яке запрошення.
+ *
+ * Понеділок після десятої: у неділю ввечері його не читають, а в середу він
+ * уже ні про що.
+ */
+async function maybeWeeklySummary(token: string, now: number): Promise<void> {
+  const at = new Date(now);
+  const hour = kyivHour(at);
+  const subs = await allSubscribers();
+  const queue: Envelope<{ chatId: number; text: string; sub: Subscriber }>[] = [];
+  for (const sub of subs) {
+    if (sub.muted || !sub.diary) continue;
+    if (!weeklyDue(at, sub.weeklySentAt ?? null, hour)) continue;
+    const text = renderSummary(diaryTotals(sub.diary, 7), "Ваш тиждень");
+    if (!text) continue;
+    queue.push({
+      chatId: sub.chatId,
+      // Найнижчий пріоритет із можливих: підсумок ніколи не має займати
+      // бюджет, потрібний попередженню.
+      priority: Priority.Routine,
+      expiresAt: now + 6 * 60 * 60 * 1000,
+      payload: { chatId: sub.chatId, text, sub },
+    });
+  }
+  if (queue.length === 0) return;
+
+  await deliver(
+    queue,
+    async (envelope) => {
+      const res = await telegramSend(
+        token,
+        envelope.chatId,
+        envelope.payload.text,
+        undefined,
+        true,
+      );
+      if (res.ok) {
+        await putSubscriber({ ...envelope.payload.sub, weeklySentAt: kyivDate(at) });
+      }
+      return {
+        ok: res.ok,
+        status: res.status,
+        ...(res.retryAfterSec !== undefined ? { retryAfterSec: res.retryAfterSec } : {}),
+      };
+    },
+    { windowMs: ALERT_TICK_EVERY_MS },
+  );
+}
+
 async function maybeBackup(token: string, now: number): Promise<void> {
   const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
   if (!owner) return;
