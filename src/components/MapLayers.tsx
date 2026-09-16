@@ -38,19 +38,27 @@ export default function MapLayers({
   }
 
   return (
-    <div className="pointer-events-auto w-52 max-w-[80vw] rounded border border-border bg-background/95 p-2 backdrop-blur">
-      <div className="mb-1.5 flex items-center justify-between">
+    // max-h-full + власна прокрутка: на невисокій карті мініапу відкритий список
+    // шарів інакше вивалювався вниз і накривав легенду та смугу гарячих
+    // областей. Тепер він обмежений своєю смугою і гортається всередині.
+    <div className="pointer-events-auto flex max-h-full w-52 max-w-[80vw] flex-col overflow-hidden rounded border border-border bg-background/95 backdrop-blur">
+      {/*
+        Шапка липка: коли список довший за смугу й гортається, хрестик «закрити»
+        має лишатися на видноті, а не їхати вгору під кнопки зуму.
+      */}
+      <div className="sticky top-0 flex items-center justify-between border-b border-border/60 bg-background/95 px-2 py-1.5">
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
           Шари карти
         </span>
         <button
           onClick={() => setOpen(false)}
+          aria-label="Закрити"
           className="text-muted-foreground hover:text-foreground"
         >
           <X className="size-3.5" />
         </button>
       </div>
-      <div className="space-y-1">
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
         {layers.map((l) => (
           <button
             key={l.key}
