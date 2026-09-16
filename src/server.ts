@@ -41,6 +41,7 @@ import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
+import { clampLead, renderLeadHelp, renderLeadSaved } from "./lib/lead-threshold";
 import {
   recordAlarmMinutes,
   recordAlert,
@@ -1639,6 +1640,9 @@ async function personalCommand(
     "me",
     "settings",
     "налаштування",
+    "lead",
+    "час",
+    "запас",
     "stop",
     "pause",
     "invite",
@@ -1808,6 +1812,27 @@ async function personalCommand(
     const body = res.body as { buckets?: { at: number; targets: number }[] } | null;
     const profile = buildCalmProfile(body?.buckets ?? []);
     return { text: renderCalmHours(profile) };
+  }
+
+  if (command === "lead" || command === "час" || command === "запас") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const raw = args.trim().toLowerCase();
+    if (!raw) {
+      return {
+        text: renderLeadHelp(sub.leadMin ?? null),
+        keyboard: settingsKeyboard(sub),
+      };
+    }
+    // «вимк», «0», «off» — однаково вимикають: людина пише те, що думає, а не
+    // те, що ми задокументували.
+    const off = raw === "0" || raw.startsWith("вимк") || raw === "off" || raw === "ні";
+    const n = Number(raw.replace(/[^0-9]/g, ""));
+    if (!off && !Number.isFinite(n)) {
+      return { text: renderLeadHelp(sub.leadMin ?? null) };
+    }
+    const value = off ? null : clampLead(n);
+    await putSubscriber({ ...sub, leadMin: value });
+    return { text: renderLeadSaved(value) };
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -2142,6 +2167,10 @@ async function handlePersonalPress(
   } else if (action.kind === "radius") {
     updated = { ...sub, radiusKm: clampRadius(action.value) };
     toast = `Радіус: ${updated.radiusKm} км`;
+  } else if (action.kind === "lead") {
+    updated = { ...sub, leadMin: action.value };
+    toast =
+      action.value === null ? "Будимо за будь-якої вхідної" : `Будимо за ${action.value} хв льоту`;
   } else if (action.kind === "mute") {
     updated = { ...sub, muted: action.value };
     toast = action.value ? "Сповіщення на паузі" : "Сповіщення увімкнені";

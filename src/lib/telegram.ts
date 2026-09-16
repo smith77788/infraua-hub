@@ -319,6 +319,7 @@ export function publicCommands(): TgBotCommand[] {
     { command: "place", description: "Мої місця: дім, робота, батьки, школа" },
     { command: "month", description: "Ваш місяць: тривоги, години, випередження сирени" },
     { command: "calm", description: "Коли історично тихіше — щоб спланувати сон" },
+    { command: "lead", description: "Будити за запасом часу, а не за кілометрами" },
     { command: "settings", description: "Налаштування сповіщень: тип, радіус, ніч" },
     { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
     { command: "circle", description: "Коло: «я в порядку» одним дотиком замість дзвінків" },

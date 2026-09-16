@@ -23,6 +23,7 @@ import type { SoundKind } from "./acoustic";
 import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
 import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
 import { KIND_EMOJI, KIND_NOTE, type NearbyShelter } from "./shelters";
+import { clampLead } from "./lead-threshold";
 
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
@@ -356,11 +357,13 @@ export function renderSettings(sub: Subscriber): string {
     "",
     `Точка: ${sub.point ? `<b>${escapeHtml(sub.point.label)}</b>` : "<b>не задана</b>"}`,
     `Радіус: <b>${sub.radiusKm} км</b>`,
+    `Будити за: <b>${sub.leadMin == null ? "будь-якої вхідної" : `${sub.leadMin} хв льоту`}</b>`,
     `Будити: <b>${TIER_LABEL[sub.tier]}</b>`,
     `Уночі (23:00–07:00): <b>${NIGHT_LABEL[sub.night]}</b>`,
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
     "",
     "<i>Нічний режим лише звужує денний — він ніколи не розбудить вас тим, чого ви не просили вдень.</i>",
+    "<i>Поріг часу міряє не кілометри, а запас часу дійти до укриття: шахед за 50 км — це пів години, балістика за ті самі 50 км — менше хвилини. Коли час підльоту оцінити не вдалося, поріг мовчки вас не пропустить.</i>",
   ].join("\n");
 }
 
@@ -374,6 +377,7 @@ export const PERSONAL_ACTIONS = {
   tierPrefix: "t:",
   nightPrefix: "n:",
   radiusPrefix: "km:",
+  leadPrefix: "ld:",
   mute: "mu:1",
   unmute: "mu:0",
   shelter: "sh",
@@ -384,6 +388,8 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
   const tiers: AlertTier[] = ["critical", "inbound", "all"];
   const nights: NightMode[] = ["silent", "critical", "all"];
   const radii = [25, 50, 100];
+  // 0 — поріг вимкнено: людина знову хоче знати про будь-яку вхідну.
+  const leads = [0, 5, 10, 15];
   return {
     inline_keyboard: [
       tiers.map((t) => ({
@@ -397,6 +403,10 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
       radii.map((km) => ({
         text: `${sub.radiusKm === km ? "✅ " : ""}${km} км`,
         callback_data: `${PERSONAL_ACTIONS.radiusPrefix}${km}`,
+      })),
+      leads.map((min) => ({
+        text: `${(sub.leadMin ?? 0) === min ? "✅ " : ""}${min === 0 ? "Час: будь-коли" : `${min} хв`}`,
+        callback_data: `${PERSONAL_ACTIONS.leadPrefix}${min}`,
       })),
       [
         sub.muted
@@ -421,6 +431,7 @@ export function parsePersonalAction(
   | { kind: "tier"; value: AlertTier }
   | { kind: "night"; value: NightMode }
   | { kind: "radius"; value: number }
+  | { kind: "lead"; value: number | null }
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
   | null {
@@ -449,6 +460,13 @@ export function parsePersonalAction(
   if (data.startsWith(PERSONAL_ACTIONS.radiusPrefix)) {
     const n = Number(data.slice(PERSONAL_ACTIONS.radiusPrefix.length));
     return Number.isFinite(n) ? { kind: "radius", value: n } : null;
+  }
+  if (data.startsWith(PERSONAL_ACTIONS.leadPrefix)) {
+    const n = Number(data.slice(PERSONAL_ACTIONS.leadPrefix.length));
+    if (!Number.isFinite(n)) return null;
+    // Нуль — це «вимкнути», а не «нуль хвилин»: вимкнений поріг і поріг у нуль
+    // хвилин означали б протилежне, і сплутати їх коштувало б сповіщення.
+    return { kind: "lead", value: n === 0 ? null : clampLead(n) };
   }
   return null;
 }
