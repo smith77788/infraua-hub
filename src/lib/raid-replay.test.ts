@@ -53,6 +53,12 @@ describe("recordFrame", () => {
     expect(buf2).toHaveLength(2);
   });
 
+  it("зростання групи на місці — це теж кадр (реплей показує розвиток)", () => {
+    const buf1 = recordFrame([], [threat({ id: "a", lat: 50, count: 3 })], 1000);
+    const buf2 = recordFrame(buf1, [threat({ id: "a", lat: 50, count: 10 })], 2000);
+    expect(buf2).toHaveLength(2);
+  });
+
   it("небо стихло — це теж кадр (реплей показує завершення)", () => {
     const buf1 = recordFrame([], [threat({ id: "a" })], 1000);
     const buf2 = recordFrame(buf1, [], 2000);

@@ -76,10 +76,14 @@ describe("staleness", () => {
   it("кілька хвилин — recent", () => {
     expect(staleness(BASE, BASE + 5 * 60_000).level).toBe("recent");
   });
-  it("понад десять хвилин — stale", () => {
+  it("12 хв — ще recent, не stale (той самий поріг, що й живий фід повітря)", () => {
+    // Живий фід у цьому віці каже «підстаріло», тож кеш не сміє казати «застаріло».
     const s = staleness(BASE, BASE + 12 * 60_000);
-    expect(s.level).toBe("stale");
+    expect(s.level).toBe("recent");
     expect(s.label).toContain("хв тому");
+  });
+  it("понад 15 хвилин — stale", () => {
+    expect(staleness(BASE, BASE + 16 * 60_000).level).toBe("stale");
   });
   it("вік не буває відʼємним", () => {
     expect(staleness(BASE + 500, BASE).ageMs).toBe(0);

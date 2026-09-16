@@ -195,4 +195,19 @@ describe("reachedPlaces", () => {
       expect(reached[i]!.etaMin).toBeGreaterThanOrEqual(reached[i - 1]!.etaMin);
     }
   });
+
+  it("ETA — час найближчого проходження, а не ранній дотик зростаючого конуса", () => {
+    // Ціль стартує далеко на заході й летить на схід уздовж 49.99 просто до
+    // Харкова (36.23). Найближче проходження — коли вона поряд із Харковом, а не
+    // на першому кроці, коли конус лише почав рости.
+    const v = { bearingDeg: 90, speedKmh: 180, confidence: 0.95 };
+    const kharkiv = [{ name: "Харків", lat: 49.99, lon: 36.23 }];
+    const from = { lat: 49.99, lon: 34.0 }; // ~160 км західніше Харкова
+    const reached = reachedPlaces(from, v, kharkiv, { horizonMin: 90 });
+    expect(reached).toHaveLength(1);
+    // 160 км / 180 км/год ≈ 53 хв — ETA має бути в районі десятків хвилин,
+    // а не 2 хв (перший крок). Дозволяємо широкий діапазон навколо істини.
+    expect(reached[0]!.etaMin).toBeGreaterThan(30);
+    expect(reached[0]!.missKm).toBeLessThan(25);
+  });
 });
