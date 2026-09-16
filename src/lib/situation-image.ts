@@ -26,7 +26,47 @@
 import type { Threat, ThreatType } from "./air";
 import { UA_OUTLINE } from "./ua-outline";
 import { UA_OBLASTS } from "./ua-oblasts";
+import { CITIES } from "./ua-cities";
 import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
+
+/**
+ * Міста-орієнтири на карті.
+ *
+ * Найбільша прогалина оглядової картинки була не в позначках, а в тому, що
+ * навколо них — порожній контур. Читач бачив цятку над обрисом країни й не міг
+ * сказати «це під Харковом» чи «під Полтавою»: пересланий скріншот втрачав
+ * підпис, а карта без міст не відповідає на найперше питання — ДЕ це. Тому
+ * кладемо стриманий шар обласних центрів; він тьмяний і завжди під позначками,
+ * щоб орієнтувати, але не сперечатися за увагу з ціллю.
+ *
+ * Перелік курований (не всі міста з `ua-cities`), щоб підписи не злипались:
+ * рівномірне покриття країни важливіше за повноту.
+ */
+const CITY_LABELS: ReadonlySet<string> = new Set([
+  "Київ",
+  "Харків",
+  "Одеса",
+  "Дніпро",
+  "Львів",
+  "Запоріжжя",
+  "Миколаїв",
+  "Херсон",
+  "Полтава",
+  "Суми",
+  "Чернігів",
+  "Житомир",
+  "Вінниця",
+  "Черкаси",
+  "Кривий Ріг",
+  "Маріуполь",
+  "Луцьк",
+  "Ужгород",
+  "Сімферополь",
+  "Кропивницький",
+  "Рівне",
+  "Тернопіль",
+]);
+const MAP_CITIES = CITIES.filter((c) => CITY_LABELS.has(c.name));
 
 const W = 1000;
 const PAD = 24;
@@ -214,9 +254,87 @@ function legend(showPresumed: boolean): string {
   return rows.join("");
 }
 
+/**
+ * Шар міст-орієнтирів: тьмяна цятка + підпис.
+ *
+ * Цятка — квадратик, а НЕ коло: коло на цій картинці вже щось означає (розкид
+ * позиції цілі), і місто-орієнтир не має вдавати ціль. Малюється під позначками.
+ * `inView` дозволяє зумованій карті відсіяти міста поза кадром.
+ */
+function cityLayer(
+  proj: Proj,
+  inView: (lat: number, lon: number) => boolean = () => true,
+  cities: readonly { name: string; lat: number; lon: number }[] = MAP_CITIES,
+): string {
+  return cities
+    .filter((c) => inView(c.lat, c.lon))
+    .map((c) => {
+      const [x, y] = proj(c.lat, c.lon);
+      return (
+        `<rect x="${x - 1.4}" y="${y - 1.4}" width="2.8" height="2.8" fill="#8fa3b5" opacity="0.7"/>` +
+        `<text x="${x + 5}" y="${y + 4}" fill="#8fa3b5" opacity="0.85" font-family="sans-serif" ` +
+        `font-size="12">${c.name}</text>`
+      );
+    })
+    .join("");
+}
+
+/** Українське відмінювання лічильника: 1 ціль, 2 цілі, 5 цілей. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+/**
+ * Заголовок просто в оглядовій картинці.
+ *
+ * Пост каналу пересилають, і підпис лишається позаду — далі картинка живе сама.
+ * Тому те, без чого її прочитають неправильно, має бути на ній: що це за карта,
+ * скільки цілей і о котрій знято. Час — необовʼязковий (чиста функція його не
+ * вигадує; передає растеризатор), кількість — з самих позначок.
+ */
+function headerBanner(count: number, timeLabel?: string): string {
+  const title = "Повітряна обстановка";
+  const sub =
+    (count > 0 ? `${count} ${plural(count, "ціль", "цілі", "цілей")} у небі` : "цілей не видно") +
+    (timeLabel ? ` · ${timeLabel}` : "");
+  return (
+    `<text x="${PAD + 4}" y="${PAD + 12}" fill="#e6eef5" font-family="sans-serif" ` +
+    `font-size="18" font-weight="bold">${title}</text>` +
+    `<text x="${PAD + 4}" y="${PAD + 30}" fill="#8fa3b5" font-family="sans-serif" ` +
+    `font-size="13">${sub}</text>`
+  );
+}
+
+/**
+ * Шар областей під тривогою — та сама заливка, що на карті бота/консолі.
+ *
+ * Полігони приходять готовими з того самого джерела, що малює карту в застосунку
+ * (`getAlertZones`), тож канал показує РІВНО те, що бачить бот, а не свою окрему
+ * правду. Заливка приглушено-червона з тонким контуром: область видно як
+ * «під тривогою», але позначки цілей зверху лишаються головними.
+ */
+function alertLayer(polygons: readonly (readonly [number, number][])[]): string {
+  if (!polygons.length) return "";
+  const d = polygons.map((ring) => ringPath(ring)).join(" ");
+  return (
+    `<path d="${d}" fill="#ff3b3b" fill-opacity="0.12" stroke="#ff5a5a" stroke-width="1.1" ` +
+    `stroke-opacity="0.5" stroke-linejoin="round"/>`
+  );
+}
+
 export function situationSvg(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
+  opts: {
+    timeLabel?: string | undefined;
+    /** Полігони областей під офіційною тривогою (готові [lat,lon] кільця). */
+    alertPolygons?: readonly (readonly [number, number][])[] | undefined;
+  } = {},
 ): string {
   const outline = UA_OUTLINE.map(([lat, lon], i) => {
     const [x, y] = project(lat, lon);
@@ -241,15 +359,45 @@ export function situationSvg(
     `<rect width="${W}" height="${H}" fill="#0b0f16"/>` +
     // Заливка країни, потім тонкі межі областей, потім чіткий контур зверху.
     `<path d="${outline} Z" fill="#0f1a24" stroke="none"/>` +
+    // Області під тривогою — над заливкою країни, під межами й контуром, щоб
+    // читались як зона, а не ховали кордони.
+    alertLayer(opts.alertPolygons ?? []) +
     `<path d="${oblastBorders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
     `<path d="${outline} Z" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
+    // Міста-орієнтири — під треками й позначками: ціль завжди зверху.
+    cityLayer(project) +
     lines +
     markers +
     // Легенда лише тоді, коли є що пояснювати: підпис до значків, яких на
     // картинці немає, — це шум, а порожнє небо має читатися як порожнє.
     (threats.length ? legend(anyPresumed) : "") +
+    // Масштаб і північ — щоб відстань «ціль ↔ місто» читалась у кілометрах, а
+    // напрямок не доводилось вгадувати. Масштаб праворуч унизу (ліворуч —
+    // легенда); той самий scaleBar, що й на зумі, псевдорадіус 300 км дає
+    // круглу сотню.
+    scaleBar(W - PAD - 110, H - PAD - 8, PX_PER_KM, 300) +
+    northMark(W - PAD - 16, PAD + 10) +
+    // Заголовок останнім — поверх усього, у власному кутку.
+    headerBanner(threats.length, opts.timeLabel) +
     `</svg>`
   );
+}
+
+/**
+ * Київський час «ГГ:ХХ» для штампа на картинці. Растеризатор нечистий, тож
+ * годиннику тут місце; чиста `situationSvg` час лише приймає, а не вигадує.
+ */
+function kyivClock(): string | undefined {
+  try {
+    return new Intl.DateTimeFormat("uk-UA", {
+      timeZone: "Europe/Kyiv",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date());
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -259,6 +407,7 @@ export function situationSvg(
 export async function renderSituationPng(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
+  alertPolygons: readonly (readonly [number, number][])[] = [],
 ): Promise<Buffer | null> {
   try {
     // Змінний специфікатор + @vite-ignore: бандлер (rolldown/nitro, ціль
@@ -267,10 +416,13 @@ export async function renderSituationPng(
     // де працює таймер каналу), тож require із node_modules резолвиться.
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
-    const png = new Resvg(situationSvg(threats, tracks), {
-      background: "#0b0f16",
-      fitTo: { mode: "width", value: W },
-    })
+    const png = new Resvg(
+      situationSvg(threats, tracks, { timeLabel: kyivClock(), alertPolygons }),
+      {
+        background: "#0b0f16",
+        fitTo: { mode: "width", value: W },
+      },
+    )
       .render()
       .asPng();
     return png;
@@ -388,6 +540,15 @@ export function situationSvgZoom(
     .map((t) => markerWith(t, pr, scale / 111.32))
     .join("");
 
+  // Сусідні населені пункти — орієнтир, якого не дають ні кільця, ні межі
+  // області: людина впізнає «Бровари», «Ірпінь», а не абстрактний квадрат.
+  // Місто в центрі виключаємо — його вже підписано жирним біля прицілу.
+  const cities = cityLayer(
+    pr,
+    inView,
+    CITIES.filter((c) => c.name !== opts.label),
+  );
+
   const [cx, cy] = pr(center.lat, center.lon);
   const pxPerKm = scale / 111.32;
   const crosshair =
@@ -418,6 +579,7 @@ export function situationSvgZoom(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +
     `<rect width="${ZW}" height="${zh}" fill="#0b0f16"/>` +
     `<path d="${borders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
+    cities +
     distanceRings(cx, cy, pxPerKm, radiusKm) +
     crosshair +
     title +

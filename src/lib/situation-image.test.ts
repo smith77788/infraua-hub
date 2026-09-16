@@ -236,3 +236,52 @@ describe("зумована карта каже, ДЕ це і в якому ма�
     expect(svg).not.toContain(">100 км<");
   });
 });
+
+describe("оглядова карта: орієнтація, заголовок, тривоги", () => {
+  const t = (p: Partial<Threat>): Threat => ({
+    id: "t",
+    name: "",
+    lat: 49,
+    lon: 32,
+    source: "n",
+    count: 1,
+    since: "",
+    expires: "",
+    ...p,
+  });
+
+  it("міста-орієнтири й масштаб є навіть у порожньому небі", () => {
+    const svg = situationSvg([]);
+    expect(svg).toContain("Київ");
+    expect(svg).toContain("Харків");
+    expect(svg).toContain("Одеса");
+    expect(svg).toContain("Повітряна обстановка");
+    // Місто-орієнтир — квадратик, а не коло: коло тут означає ціль.
+    expect(svg).not.toContain("<circle ");
+  });
+
+  it("заголовок несе кількість цілей із правильним відмінюванням", () => {
+    expect(situationSvg([t({ type: "shahed" })])).toContain("1 ціль у небі");
+    expect(situationSvg([t({}), t({})])).toContain("2 цілі у небі");
+    expect(situationSvg(Array.from({ length: 5 }, () => t({})))).toContain("5 цілей у небі");
+    expect(situationSvg([])).toContain("цілей не видно");
+  });
+
+  it("час штампується лише коли його передали (чиста функція його не вигадує)", () => {
+    expect(situationSvg([], [], { timeLabel: "23:15" })).toContain("· 23:15");
+    expect(situationSvg([])).not.toContain("·");
+  });
+
+  it("області під тривогою заливаються — те саме, що бачить бот", () => {
+    const poly: [number, number][] = [
+      [50, 30],
+      [50, 32],
+      [49, 32],
+      [49, 30],
+    ];
+    const withAlert = situationSvg([], [], { alertPolygons: [poly] });
+    expect(withAlert).toContain("#ff3b3b");
+    // Без тривог заливки немає — карта не вигадує зон.
+    expect(situationSvg([])).not.toContain("#ff3b3b");
+  });
+});

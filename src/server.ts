@@ -587,6 +587,59 @@ async function fetchOfficialAlerts(maxAgeMs = 60_000): Promise<string[] | null> 
     clearTimeout(timer);
   }
 }
+/**
+ * Полігони областей під тривогою — те саме джерело, що малює карту в боті/консолі
+ * (detoyshahed), щоб картинка каналу була ТОЧНОЮ копією застосунку, а не мала
+ * власну правду про тривоги. Плоский кеш на хвилину; збій джерела — порожній
+ * список (карта просто без заливки, як і без картинки взагалі).
+ */
+let alertZonesCache: { at: number; polygons: [number, number][][] } | null = null;
+async function fetchAlertZones(maxAgeMs = 60_000): Promise<[number, number][][]> {
+  const now = Date.now();
+  if (alertZonesCache && now - alertZonesCache.at < maxAgeMs) return alertZonesCache.polygons;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch("https://detoyshahed.in.ua/api/alerts/active", {
+      signal: controller.signal,
+    });
+    if (!res.ok) return alertZonesCache?.polygons ?? [];
+    const data = (await res.json()) as {
+      alerts?: { geometry?: { type?: string; coordinates?: unknown } }[];
+    };
+    const toLatLon = (ring: number[][]): [number, number][] => {
+      const step = Math.max(1, Math.ceil(ring.length / 120));
+      const out: [number, number][] = [];
+      for (let i = 0; i < ring.length; i += step) {
+        const p = ring[i];
+        const lon = p?.[0];
+        const lat = p?.[1];
+        if (typeof lon === "number" && typeof lat === "number") out.push([lat, lon]);
+      }
+      return out;
+    };
+    const polygons: [number, number][][] = [];
+    for (const a of data.alerts ?? []) {
+      const g = a.geometry;
+      if (!g?.coordinates) continue;
+      if (g.type === "Polygon") {
+        const poly = g.coordinates as number[][][];
+        if (poly[0]) polygons.push(toLatLon(poly[0]));
+      } else if (g.type === "MultiPolygon") {
+        for (const poly of g.coordinates as number[][][][]) {
+          if (poly[0]) polygons.push(toLatLon(poly[0]));
+        }
+      }
+    }
+    alertZonesCache = { at: now, polygons };
+    return polygons;
+  } catch {
+    return alertZonesCache?.polygons ?? [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   const now = Date.now();
   if (threatCache && now - threatCache.at < maxAgeMs) return threatCache.threats;
@@ -1434,7 +1487,10 @@ async function runChannelTickCore(
   // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
   // текст: якщо не вийшла, шлемо текст без неї.
   const { renderSituationPng } = await import("./lib/situation-image");
-  const png = await renderSituationPng(smoothed, trackLines(smoothed));
+  // Області під тривогою — з того самого джерела, що й карта бота: канал показує
+  // ту саму обстановку. Best-effort: збій зон не має завалити пост.
+  const alertZones = await fetchAlertZones().catch(() => []);
+  const png = await renderSituationPng(smoothed, trackLines(smoothed), alertZones);
   const keyboard = await channelButtons(token);
   const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
   const silent = shouldPostSilently(types, now);
