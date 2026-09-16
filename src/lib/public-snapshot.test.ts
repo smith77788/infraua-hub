@@ -99,3 +99,77 @@ describe("observedAt у публічному знімку", () => {
     expect(publicAirSnapshot([], 1).observedAt).toBeNull();
   });
 });
+
+describe("публічний знімок не видає здогадку за спостереження", () => {
+  const base = {
+    id: "t",
+    name: "Ціль",
+    lat: 50.45,
+    lon: 30.52,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    type: "shahed" as const,
+    heading: 180,
+  };
+  const q = (patch: Partial<NonNullable<Threat["quality"]>>) => ({
+    uncertaintyKm: null,
+    position: null,
+    lifecycle: null,
+    presumptiveCourse: false,
+    speedKmh: null,
+    ...patch,
+  });
+
+  it("спостережений курс публікується як heading", () => {
+    const s = publicAirSnapshot([{ ...base, quality: q({ presumptiveCourse: false }) }]);
+    expect(s.threats[0]!.heading).toBe(180);
+    expect(s.threats[0]!.presumedHeading).toBeUndefined();
+  });
+
+  it("припущений курс НЕ публікується як heading", () => {
+    /*
+     * Обіцянка стояла в коментарі від початку, а перевірки не було, і код її не
+     * виконував. Заміряно на живій видачі: 17 із 19 опублікованих курсів (89%)
+     * були здогадками джерела. Чужий віджет малює те, що бачить у `heading`.
+     */
+    const s = publicAirSnapshot([{ ...base, quality: q({ presumptiveCourse: true }) }]);
+    expect(s.threats[0]!.heading).toBeUndefined();
+    expect(s.threats[0]!.presumedHeading).toBe(180);
+  });
+
+  it("без даних про якість курс вважається спостереженим, як і раніше", () => {
+    // Межа сумісності: коли джерело мовчить про припущеність, ми не вигадуємо
+    // її самі — мовчання не означає «здогадка».
+    const s = publicAirSnapshot([{ ...base }]);
+    expect(s.threats[0]!.heading).toBe(180);
+  });
+
+  it("розкид позиції їде разом із позицією", () => {
+    const s = publicAirSnapshot([{ ...base, quality: q({ uncertaintyKm: 10 }) }]);
+    expect(s.threats[0]!.uncertaintyKm).toBe(10);
+  });
+
+  it("розкид не вигадуємо, коли джерело його не назвало", () => {
+    // Внутрішня стеля — наше припущення для власної карти, і видавати її за
+    // число джерела в публічному API не можна.
+    const s = publicAirSnapshot([{ ...base, quality: q({ uncertaintyKm: null }) }]);
+    expect(s.threats[0]!.uncertaintyKm).toBeUndefined();
+  });
+
+  it("вік спостереження їде разом із позицією", () => {
+    const now = Date.parse("2026-09-16T21:07:58Z");
+    const s = publicAirSnapshot(
+      [{ ...base, lastSeen: new Date(now - 205_000).toISOString() }],
+      now,
+    );
+    expect(s.threats[0]!.ageSec).toBe(205);
+  });
+
+  it("без часу вік не вигадується нулем", () => {
+    // Нуль читався б як «щойно» — твердження про свіжість, якого немає.
+    const s = publicAirSnapshot([{ ...base, since: "", lastSeen: "" }]);
+    expect(s.threats[0]!.ageSec).toBeUndefined();
+  });
+});
