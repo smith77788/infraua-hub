@@ -53,6 +53,7 @@ import {
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
+import { fixedAtMs } from "./lib/position-age";
 import {
   CIRCLE_ALERT_COOLDOWN_MS,
   decideCircleAlert,
@@ -532,7 +533,24 @@ const trackMemory = {
 const TRACK_KEEP_MS = 12 * 60 * 60 * 1000;
 
 function rememberTracks(threats: readonly Threat[], now: number): void {
-  trackMemory.fixes = updateHistory(trackMemory.fixes, threats, now, {
+  /*
+   * Кожен фікс іде з ЧАСОМ СПОСТЕРЕЖЕННЯ і разом із треком самого джерела.
+   *
+   * Доти позиція штампувалась часом опитування, хоч застій у фіді заміряно від
+   * 38 до 674 секунд: між двома тиками ціль проходила справжню відстань за
+   * вигаданий інтервал, і в треках зʼявлялись дрони на тисячу кілометрів за
+   * годину. А трек джерела — готові спостереження з мітками часу — не
+   * доходив до оцінки руху взагалі, хоч і малювався на карті: швидкість і курс
+   * ставали заміряними лише після двох власних опитувань.
+   */
+  const inputs = threats.map((t) => ({
+    id: t.id,
+    lat: t.lat,
+    lon: t.lon,
+    observedAt: fixedAtMs(t) ?? undefined,
+    ...(t.trail ? { trail: t.trail } : {}),
+  }));
+  trackMemory.fixes = updateHistory(trackMemory.fixes, inputs, now, {
     maxAgeMs: TRACK_KEEP_MS,
     maxPoints: 60,
     minMoveKm: 1,

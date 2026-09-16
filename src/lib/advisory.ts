@@ -23,6 +23,7 @@ import {
 } from "./source-credibility";
 import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta";
 import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
+import { nowRadiusKm } from "./position-age";
 
 // ── Румби (для напрямку й сторони вікон) ─────────────────────────────────
 export const COMPASS_8 = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"] as const;
@@ -340,9 +341,20 @@ export function personalAssessment(
      * сто кілометрів», який справджується майже завжди й тому нічого не каже.
      */
     concernKm?: number;
+    /**
+     * Момент оцінки, мс.
+     *
+     * Потрібен не для показу, а для розрахунку: позначка джерела — це не «де
+     * ціль», а «де її бачили N хвилин тому», і ці хвилини заміряні (медіана
+     * 205 с у живому зрізі). Без них найраніший край часу підльоту рахується
+     * від застарілої відстані — тобто обіцяє запас часу, якого вже немає.
+     * Див. `position-age.ts`.
+     */
+    now?: number;
   } = {},
 ): PersonalAssessment {
   const radiusKm = opts.radiusKm ?? 150;
+  const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 6;
   const sector = opts.inboundSectorDeg ?? 60;
   const concernKm = opts.concernKm ?? Math.min(radiusKm, 15);
@@ -370,7 +382,11 @@ export function personalAssessment(
         // Вилка ширшає з ТРЬОХ боків: похибка заміряної швидкості (звідси
         // a.etaLow/High), невпевненість у позиції (u) і те, що ціль могла
         // прискоритись. Найраніший приліт — ближче й швидше.
-        const u = displayRadiusKm(q);
+        // Не заявлений розкид, а коло «де ціль може бути ЗАРАЗ»: заявлений
+        // плюс політ за час, поки дані йшли до нас. Швидкість беремо ЗАМІРЯНУ
+        // — вона тут уже є, і брати замість неї класовий верх означало б
+        // викинути власний вимір.
+        const u = nowRadiusKm(threat, now, motion).maxKm;
         const lowSpeed = Math.max(1, motion.speedKmh - motion.speedSigma);
         const highSpeed = motion.speedKmh + motion.speedSigma;
         etaRangeMin = [
@@ -386,7 +402,7 @@ export function personalAssessment(
         // Заміряна швидкість цієї цілі б'є таблицю типових для класу.
         const speed = q.speedKmh ?? SPEED_KMH[threat.type ?? "unknown"] ?? 250;
         etaMin = Math.round((d / speed) * 60);
-        const u = displayRadiusKm(q);
+        const u = nowRadiusKm(threat, now).maxKm;
         /*
          * Вилка ширшає з двох боків одночасно: ми не знаємо точно, ДЕ ціль, і
          * не знаємо точно, ЩО це. Позначка «шахед» покриває і поршневу
