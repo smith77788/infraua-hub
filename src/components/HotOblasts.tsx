@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import type { Threat } from "@/lib/air";
-import { oblastOf } from "@/lib/channel-post";
+import { hotOblasts } from "@/lib/hot-oblasts";
 
 /**
  * «Найгарячіше зараз» — топ областей за кількістю повітряних цілей.
@@ -9,18 +9,14 @@ import { oblastOf } from "@/lib/channel-post";
  * Окремий компонент навмисно: обчислення чисте (групування за найближчим
  * обласним центром, як у каналі), а накладка на карту не чіпає решту розмітки —
  * менше шансів на конфлікт і на збій верстки. Порожнє небо → нічого не малюємо.
+ *
+ * Показуємо три області, але НІКОЛИ не мовчимо про решту: поруч стоїть
+ * лічильник усіх цілей, і смуга, що показує частину без слова про це, змушує
+ * читача думати, ніби числа на екрані не сходяться між собою.
  */
 export default function HotOblasts({ threats }: { threats: Threat[] }): React.ReactElement | null {
-  const top = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const t of threats) {
-      const o = oblastOf(t.lat, t.lon);
-      counts.set(o, (counts.get(o) ?? 0) + 1);
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .slice(0, 3);
-  }, [threats]);
+  // Лічба — у `hot-oblasts.ts` і під тестами: саме в ній була вада, а не в стилях.
+  const { top, restOblasts, restTargets } = useMemo(() => hotOblasts(threats), [threats]);
 
   if (top.length === 0) return null;
 
@@ -39,6 +35,23 @@ export default function HotOblasts({ threats }: { threats: Threat[] }): React.Re
             {name} <span className="text-foreground">{n}</span>
           </span>
         ))}
+        {/*
+          Скільки лишилось за кадром — вголос.
+          
+          Смуга показує топ-3 області й доти мовчала про решту. Поряд із
+          лічильником «повітряні цілі 17» сума 4+4+3 читається як «це все», і
+          саме так це й прочитали: числа на екрані не сходяться. Обрізка сама
+          собою чесна — три області вміщаються, десять ні, — нечесним було
+          мовчання про неї.
+        */}
+        {restOblasts > 0 ? (
+          <span className="whitespace-nowrap opacity-70">
+            <span className="mx-1 opacity-40">·</span>
+            <span className="normal-case tracking-normal">
+              ще {restOblasts} обл.{restTargets > 0 ? `, ${restTargets} ціл.` : ""}
+            </span>
+          </span>
+        ) : null}
       </div>
     </div>
   );

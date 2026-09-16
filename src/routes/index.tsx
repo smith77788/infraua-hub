@@ -1052,7 +1052,14 @@ function Console() {
       <SituationBar
         summary={summary}
         loading={loading}
-        threats={threats.length}
+        /*
+         * Число з ТОГО САМОГО джерела, що й крапки на карті. Доти шапка читала
+         * живий фід, а карта під час перемотки малювала кадр із минулого — і
+         * число з картиною розходились мовчки. Саме це й виглядало як «цілей на
+         * карті не стільки, скільки в лічильнику».
+         */
+        threats={mapThreats.length}
+        rewinding={raidCursor !== null}
         airThreat={airThreatSummary}
         focus={focus}
         onFocus={setFocus}
@@ -1515,7 +1522,8 @@ function Console() {
                       проєктувати траєкторію зі старих трейлів і подавати як
                       поточну — оманливо. Банер зверху вже каже про застій.
                     */}
-                    {airConn.link === "live" || airConn.link === "delayed" ? (
+                    {(airConn.link === "live" || airConn.link === "delayed") &&
+                    raidCursor === null ? (
                       <WaveForecast threats={threats} />
                     ) : null}
                   </>
@@ -1559,12 +1567,18 @@ function Console() {
                   </>
                 }
                 topRight={
-                  airConn.link === "live" || airConn.link === "delayed" ? (
+                  /*
+                   * Під час перемотки ховаємо з тієї самої причини, що й на
+                   * застиглих даних: хвилі й прогноз рахуються з ЖИВОГО фіду, а
+                   * карта показує минуле. Подати живий прогноз поверх
+                   * історичного кадру — це не незручність, це хибне твердження.
+                   */
+                  (airConn.link === "live" || airConn.link === "delayed") && raidCursor === null ? (
                     <ActiveWaves waves={waves} threats={threats} />
                   ) : null
                 }
                 bottomLeft={<MapLegend showInfra={!infraDisabled} />}
-                bottomCenter={<HotOblasts threats={threats} />}
+                bottomCenter={raidCursor === null ? <HotOblasts threats={threats} /> : null}
                 bars={
                   <>
                     <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
