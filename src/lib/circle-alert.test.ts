@@ -4,6 +4,7 @@ import {
   decideCircleAlert,
   distanceBand,
   pendingCheckins,
+  renderPendingCheckins,
   CIRCLE_ALERT_COOLDOWN_MS,
   type CircleMemberState,
 } from "./circle-alert";
@@ -110,5 +111,61 @@ describe("pendingCheckins", () => {
       now,
     );
     expect(list.map((x) => x.chatId)).toEqual([6, 5]);
+  });
+});
+
+describe("renderPendingCheckins", () => {
+  const at = 1_000_000;
+  const member = (name: string, dangerAgoMin: number, okAt: number | null) => ({
+    chatId: name.length,
+    name,
+    lastDangerAt: at - dangerAgoMin * 60_000,
+    okAt,
+  });
+
+  it("мовчить, коли мовчати нема про кого", () => {
+    // Порожній список, поданий як «усі в порядку», був би твердженням, якого
+    // ми не перевіряли: ми знаємо лише про відмітки, не про людей.
+    expect(renderPendingCheckins([])).toBe(null);
+    expect(renderPendingCheckins(pendingCheckins([], at))).toBe(null);
+  });
+
+  it("називає того, над ким була небезпека і хто не відмітився", () => {
+    const line = renderPendingCheckins(pendingCheckins([member("Олена", 20, null)], at));
+    expect(line).toContain("Олена");
+    expect(line).toContain("не відмітився");
+  });
+
+  it("не називає того, хто відмітився вже після своєї небезпеки", () => {
+    const ok = member("Олена", 20, at - 5 * 60_000);
+    expect(renderPendingCheckins(pendingCheckins([ok], at))).toBe(null);
+  });
+
+  it("відмітка ДО небезпеки не рахується за відповідь", () => {
+    // Тонка межа: «я в порядку» о 21:00 не говорить нічого про наліт о 23:00.
+    const stale = member("Олена", 20, at - 90 * 60_000);
+    expect(renderPendingCheckins(pendingCheckins([stale], at))).toContain("Олена");
+  });
+
+  it("не драматизує: каже, що знає лише про відсутність відмітки", () => {
+    const line = renderPendingCheckins(pendingCheckins([member("Олена", 20, null)], at));
+    expect(line).toContain("лише відсутність відмітки");
+  });
+
+  it("екранує імʼя — його пише сама людина", () => {
+    const line = renderPendingCheckins(
+      pendingCheckins([member("<script>x</script>", 20, null)], at),
+    );
+    expect(line).not.toContain("<script>");
+    expect(line).toContain("&lt;script&gt;");
+  });
+
+  it("кілька імен — в одному рядку й у множині", () => {
+    const line = renderPendingCheckins(
+      pendingCheckins([member("Олена", 20, null), member("Петро", 40, null)], at),
+    );
+    expect(line).toContain("Олена");
+    expect(line).toContain("Петро");
+    expect(line).toContain("були");
   });
 });

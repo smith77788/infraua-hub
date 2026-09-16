@@ -15,7 +15,7 @@
 | `lead-threshold` | обидві (зіткнення) | ✅ зведено в одну реалізацію, `f3419b6` |
 | `shelter-safe-side` | сесія `01Ew98Vk` | ✅ вплетено |
 | `drone-weather`, `flight-night` | сесія `01Ew98Vk` | ✅ вплетено |
-| `circle-alert` | сесія `018iCM9h` | 🔨 в роботі |
+| `circle-alert` | сесія `018iCM9h` | ✅ вплетено |
 | `personal-journal` | — | вільно |
 | `threat-rhythm` | — | вільно |
 | `week-trend` | — | вільно |

@@ -41,6 +41,12 @@ import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
+import {
+  CIRCLE_ALERT_COOLDOWN_MS,
+  decideCircleAlert,
+  pendingCheckins,
+  renderPendingCheckins,
+} from "./lib/circle-alert";
 import { clampLead, renderLeadHelp, renderLeadSaved } from "./lib/lead-threshold";
 import {
   recordAlarmMinutes,
@@ -69,6 +75,7 @@ import { channelKeyboard, oblastOf } from "./lib/channel-post";
 import { distanceKm } from "./lib/infra-types";
 import {
   dangerIndex,
+  type DangerLevel,
   type PersonalAssessment,
   personalAssessment,
   verifyThreat,
@@ -1959,6 +1966,31 @@ async function broadcastOk(token: string, sub: Subscriber): Promise<void> {
   }
 }
 
+/**
+ * Хто з кола був під загрозою й досі не відмітився — рядком або `null`.
+ *
+ * Читання, без `ensureSubscriber`: питання про рідних не має заводити
+ * підписників, інакше лічильник рахував би не людей, а перевірки.
+ */
+async function circlePending(sub: Subscriber, now: number): Promise<string | null> {
+  if (!sub.circle) return null;
+  const circle = await getCircle(sub.circle);
+  if (!circle) return null;
+  const members = [];
+  for (const chatId of circle.members) {
+    if (chatId === sub.chatId) continue; // про себе людина знає сама
+    const member = await getSubscriber(chatId);
+    if (!member) continue;
+    members.push({
+      chatId,
+      name: member.displayName,
+      lastDangerAt: member.lastDangerAt,
+      okAt: member.okAt,
+    });
+  }
+  return renderPendingCheckins(pendingCheckins(members, now));
+}
+
 /** Показує коло людини: хто відмітився, хто ще ні. */
 async function circleView(sub: Subscriber, now: number): Promise<string | null> {
   if (!sub.circle) return null;
@@ -2376,6 +2408,14 @@ interface AlertPayload {
   oblast: string;
   /** Заповнене лише для другорядних місць — тоді записуємо кулдаун по місцю. */
   place?: MyPlace;
+  /**
+   * Заповнене лише для тривоги ПРО когось із кола.
+   *
+   * Таке повідомлення не про небезпеку над отримувачем, тож воно навмисно не
+   * торкається ні `lastAlertAt`, ні `lastAlertIds`: інакше звістка про матір у
+   * Львові зʼїла б власне попередження людини в Києві за кілька хвилин по тому.
+   */
+  circleNotice?: boolean;
 }
 
 const LEVEL_PRIORITY: Record<string, Priority> = {
@@ -2470,6 +2510,17 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   const considered = [...nearThreats, ...stateful];
 
   const queue: Envelope<AlertPayload>[] = [];
+  /**
+   * Рівень над кожним, кого встигли оцінити цим обходом.
+   *
+   * Потрібен для кола: родинне коло — це зазвичай люди в одному місті, і тоді
+   * тривога «над Оленою небезпечно» приходить тому, над ким рівно та сама
+   * небезпека. Він уже в укритті й уже попереджений — така звістка нічого не
+   * додає, а місце в черзі займає.
+   */
+  const ownLevel = new Map<number, DangerLevel>();
+  /** Хто цим обходом опинився в рівні «в укриття» і в кого є коло. */
+  const circleSubjects: { sub: Subscriber; nearestKm: number | null }[] = [];
 
   for (const raw of considered) {
     const sub = forgetStale(raw, now);
@@ -2550,15 +2601,23 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null });
       if (clear.send) {
         const summary = summarizeMonth(sub.stats, now);
+        /*
+         * Дзеркальне питання до тривоги кола: хто був під загрозою й досі не
+         * відмітився. Саме тут, після офіційного скасування, а не під час
+         * нальоту: тоді людина була зайнята власною безпекою, а тепер вийшла й
+         * може подзвонити.
+         */
+        const checkins = await circlePending(sub, now);
         queue.push({
           chatId: sub.chatId,
           priority: Priority.Routine,
           expiresAt: now + USEFUL_WINDOW_MS,
           payload: {
             sub,
-            text: renderPersonalAllClear(clear.durationMin, {
-              longestThisMonth: (summary?.longestAlarmMin ?? 0) <= clear.durationMin,
-            }),
+            text:
+              renderPersonalAllClear(clear.durationMin, {
+                longestThisMonth: (summary?.longestAlarmMin ?? 0) <= clear.durationMin,
+              }) + (checkins ? `\n\n👥 ${checkins}` : ""),
             keyboard: undefined,
             decision: null,
             pre: false,
@@ -2571,6 +2630,20 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
 
     const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
     const danger = dangerIndex(assess);
+    ownLevel.set(sub.chatId, danger.level);
+    if (danger.level === "shelter") {
+      /*
+       * Позначка «над цією людиною була небезпека» ставиться від РІВНЯ, а не
+       * від надісланого сповіщення. Людина могла попросити тиші вночі або мати
+       * поріг часу — небезпека від цього не зникла, і після відбою рідні мають
+       * питати саме про неї.
+       */
+      const nearest = assess.nearest.find((n) => n.inbound)?.distanceKm ?? null;
+      if (sub.circle) circleSubjects.push({ sub, nearestKm: nearest });
+      if (sub.lastDangerAt == null || now - sub.lastDangerAt > 60_000) {
+        await putSubscriber({ ...sub, lastDangerAt: now });
+      }
+    }
     const decision = decideAlert(sub, assess, danger, now, hour);
     if (!decision.send) {
       if (sub !== raw) await putSubscriber(sub);
@@ -2597,6 +2670,80 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
         oblast,
       },
     });
+  }
+
+  /*
+   * Тривога колу: рідні дізнаються, поки людина біжить в укриття.
+   *
+   * Найгостріший момент у колі — не «я в порядку», а протилежний: над кимось
+   * справді небезпечно, а він мовчить, бо якраз біжить або спить. Досі коло
+   * було одностороннім і про цей момент не знало нічого.
+   *
+   * Три межі, і кожна коштувала б довіри, якби її не було.
+   *
+   * 1. **Ніяких координат.** Лише смуга відстані: повідомлення можна переслати,
+   *    і точне місце рідного обернулося б проти нього.
+   * 2. **Два різні кулдауни.** Один за темою («не повторюймо про Олену»), другий
+   *    за отримувачем («не завалюймо Олену звістками про всіх інших»). Друга
+   *    межа тут не про ввічливість: родинне коло — це майже завжди люди в
+   *    одному місті, і без неї наліт дав би кожному по повідомленню про кожного.
+   * 3. **Хто під тією самою загрозою — не отримує нічого.** Він уже в укритті й
+   *    уже попереджений; звістка про сусіда додала б йому лише переляку.
+   *
+   * Черга — `Routine`: чуже попередження ніколи не має обігнати власне.
+   */
+  for (const { sub: subject, nearestKm } of circleSubjects) {
+    if (!subject.circle) continue;
+    const circle = await getCircle(subject.circle);
+    if (!circle) continue;
+    const decision = decideCircleAlert({
+      name: subject.displayName,
+      circleName: circle.name,
+      level: "shelter",
+      nearestKm,
+      lastCircleAlertAt: subject.lastCircleAlertAt,
+      now,
+    });
+    if (!decision.send) continue;
+
+    let queuedForAnyone = false;
+    for (const chatId of circle.members) {
+      if (chatId === subject.chatId) continue;
+      const member = await getSubscriber(chatId);
+      if (!member || member.muted) continue;
+      if (ownLevel.get(chatId) === "shelter") continue;
+      if (
+        member.lastCircleNoticeAt != null &&
+        now - member.lastCircleNoticeAt < CIRCLE_ALERT_COOLDOWN_MS
+      ) {
+        continue;
+      }
+      queuedForAnyone = true;
+      queue.push({
+        chatId,
+        priority: Priority.Routine,
+        expiresAt: now + USEFUL_WINDOW_MS,
+        payload: {
+          sub: member,
+          text: decision.text,
+          keyboard: undefined,
+          decision: null,
+          pre: false,
+          oblast: oblastOf(subject.point?.lat ?? 0, subject.point?.lon ?? 0),
+          circleNotice: true,
+        },
+      });
+    }
+    /*
+     * Кулдаун за темою ставиться, лише якщо комусь справді поставили в чергу.
+     * Інакше коло, де всі під тією самою загрозою, «витратило» б тему на
+     * порожній прохід — і коли за двадцять хвилин зʼявився б хтось, кому варто
+     * було сказати, ми б промовчали.
+     */
+    if (queuedForAnyone) {
+      const fresh = (await getSubscriber(subject.chatId)) ?? subject;
+      await putSubscriber({ ...fresh, lastCircleAlertAt: now });
+    }
   }
 
   /*
@@ -2640,7 +2787,13 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       const res = await telegramSend(token, sub.chatId, text, keyboard, true);
       if (res.ok) {
         const at = Date.now();
-        if (place) {
+        if (envelope.payload.circleNotice) {
+          // Тривога про іншого не є сповіщенням про небезпеку над отримувачем,
+          // тож із його стану чіпаємо рівно одне — коли йому востаннє писали
+          // про коло.
+          const fresh = (await getSubscriber(sub.chatId)) ?? sub;
+          await putSubscriber({ ...fresh, lastCircleNoticeAt: at });
+        } else if (place) {
           /*
            * Сповіщення про ЧУЖЕ місце не чіпає власного стану людини: інакше
            * звістка про Харків зарахувалась би як «ми вже попередили» і
