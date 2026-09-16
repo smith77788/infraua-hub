@@ -707,6 +707,35 @@ function readTrail(raw: unknown): { lat: number; lon: number; t: string }[] | nu
   return out.length >= 2 ? out : null;
 }
 
+/**
+ * ЄДИНЕ канонічне джерело повітряних цілей.
+ *
+ * Карта застосунку, картинка каналу, текст поста й публічний віджет мають
+ * читати ОДИН знімок, а не кожен свій — інакше на екрані «три різні картини».
+ * Тримаємо модульний кеш: у живому процесі (Railway) усі споживачі бачать ті
+ * самі байти в межах TTL; на ізоляті Cloudflare кеш свій, але фід і обробка ті
+ * самі, тож розбіжність не перевищує TTL. Джерело neptun уже дедупить за
+ * треками — свого злиття НЕ додаємо, бо саме воно й робило канал окремою
+ * правдою.
+ */
+let neptunCache: { at: number; threats: Threat[] } | null = null;
+export async function neptunThreatsCached(maxAgeMs = 60_000): Promise<Threat[]> {
+  const now = Date.now();
+  if (neptunCache && now - neptunCache.at < maxAgeMs) return neptunCache.threats;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const threats = (await fetchNeptunThreats(controller.signal)) ?? [];
+    neptunCache = { at: now, threats };
+    return threats;
+  } catch {
+    // Збій джерела не має стирати останню відому картину.
+    return neptunCache?.threats ?? [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] | null> {
   const res = await fetch(NEPTUN_ENDPOINT, {
     signal,
@@ -823,10 +852,12 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
-    // 1) Основне джерело — neptun: вже типізовані, дедупльовані треки з курсом.
+    // 1) Основне джерело — neptun через СПІЛЬНИЙ кеш: та сама пам'ять, з якої
+    // читає канал і публічний віджет, тож карта застосунку й пост показують
+    // один знімок, а не кожен свій.
     try {
-      const neptun = await fetchNeptunThreats(controller.signal);
-      if (neptun && neptun.length) {
+      const neptun = await neptunThreatsCached();
+      if (neptun.length) {
         return {
           threats: neptun, // вже дедупльовано джерелом — не зливаємо повторно
           fetchedAt: new Date().toISOString(),
