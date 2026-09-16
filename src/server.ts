@@ -3799,7 +3799,7 @@ async function adminCommand(
          * нова версія?» виникає рівно тоді, коли дивишся на стан системи.
          * Двічі поспіль на нього відповідали здогадом, і двічі помилково.
          */
-        renderBuild(BUILD, PROCESS_STARTED_AT, Date.now()),
+        renderBuild(currentBuild(), PROCESS_STARTED_AT, Date.now()),
       ].join("\n"),
     };
   }
@@ -4446,10 +4446,22 @@ async function ensureWebhook(request: Request): Promise<void> {
 /**
  * Мітка збірки, з якою запустився цей процес.
  *
- * Рахується один раз: усередині життя процесу вона не змінюється, а читати
- * оточення на кожен запит означало б удавати, що може.
+ * Рахується один раз і ЛІНИВО. Один раз — бо всередині життя процесу вона не
+ * змінюється, а читати оточення на кожен запит означало б удавати, що може.
+ * Ліниво — бо цей модуль збирається і під Cloudflare-подібну ціль, де
+ * `process` на верхньому рівні може не існувати взагалі; звернення до нього
+ * при завантаженні модуля поклало б увесь сервер, а не одну відповідь.
  */
-const BUILD = buildStamp(process.env as Record<string, string | undefined>);
+let buildCache: ReturnType<typeof buildStamp> | null = null;
+function currentBuild(): ReturnType<typeof buildStamp> {
+  if (buildCache) return buildCache;
+  const env =
+    typeof process !== "undefined" && process.env
+      ? (process.env as Record<string, string | undefined>)
+      : {};
+  buildCache = buildStamp(env);
+  return buildCache;
+}
 const PROCESS_STARTED_AT = Date.now();
 
 /**
@@ -4460,8 +4472,9 @@ const PROCESS_STARTED_AT = Date.now();
  * на сервер і повертає поточну. Різниця між ними і є доказом застрягання.
  */
 function withBuildStamp(html: string): string {
-  if (!BUILD.sha) return html;
-  const tag = `<meta name="x-build" content="${BUILD.sha}">`;
+  const build = currentBuild();
+  if (!build.sha) return html;
+  const tag = `<meta name="x-build" content="${build.sha}">`;
   return html.includes("</head>") ? html.replace("</head>", `${tag}</head>`) : tag + html;
 }
 
@@ -4544,8 +4557,9 @@ export default {
      * відповідь, яку можна взяти зі сховища, не доводить нічого про сервер.
      */
     if (pathname === "/api/build") {
+      const build = currentBuild();
       return new Response(
-        JSON.stringify({ sha: BUILD.sha, short: BUILD.short, source: BUILD.source }),
+        JSON.stringify({ sha: build.sha, short: build.short, source: build.source }),
         {
           headers: {
             "content-type": "application/json",
@@ -4573,7 +4587,7 @@ export default {
       const response = await handler.fetch(request, env, ctx);
       const shell = withShellCacheHeaders(await normalizeCatastrophicSsrResponse(response));
       const type = shell.headers.get("content-type") ?? "";
-      if (!type.includes("text/html") || !BUILD.sha) return shell;
+      if (!type.includes("text/html") || !currentBuild().sha) return shell;
       // Оболонку доводиться зібрати в памʼяті, щоб вшити мітку. Вона важить
       // десятки кілобайт — ціна прийнятна за можливість довести, яку саме
       // збірку бачить людина.
