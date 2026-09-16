@@ -220,7 +220,7 @@ describe("зумована карта каже, ДЕ це і в якому ма�
 
   it("пояснює ореол — на знімку він був найбільшим обʼєктом і нічого не значив", () => {
     const svg = situationSvgZoom([target], ZP, 70);
-    expect(svg).toContain("наскільки невідома її позиція");
+    expect(svg).toContain("де ціль може бути вже зараз");
   });
 
   it("назва міста не може зламати розмітку", () => {
@@ -283,5 +283,52 @@ describe("оглядова карта: орієнтація, заголовок,
     expect(withAlert).toContain("#ff3b3b");
     // Без тривог заливки немає — карта не вигадує зон.
     expect(situationSvg([])).not.toContain("#ff3b3b");
+  });
+});
+
+describe("карта показує, що позначка застаріла", () => {
+  const ZP = { lat: 47.838, lon: 35.139 };
+  const NOW = Date.parse("2026-09-16T21:07:58Z");
+  const stale = (agoSec: number): Threat => ({
+    id: "a",
+    name: "Шахед",
+    lat: ZP.lat + 0.064,
+    lon: ZP.lon + 0.095,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    lastSeen: new Date(NOW - agoSec * 1000).toISOString(),
+    type: "shahed",
+    heading: 225,
+    quality: {
+      uncertaintyKm: 4,
+      position: "confirmed",
+      lifecycle: "confirmed",
+      presumptiveCourse: false,
+      speedKmh: null,
+    },
+  });
+
+  it("свіжа позначка — без другого кола", () => {
+    const svg = situationSvgZoom([stale(10)], ZP, 70, { now: NOW });
+    expect(svg).not.toContain('stroke-dasharray="4 6"');
+  });
+
+  it("застаріла позначка отримує пунктирне коло", () => {
+    // Медіанний заміряний застій — 205 с, це 10 км польоту шахеда проти
+    // медіанного заявленого розкиду 4 км. Доти карта показувала лише 4.
+    const svg = situationSvgZoom([stale(205)], ZP, 70, { now: NOW });
+    expect(svg).toContain('stroke-dasharray="4 6"');
+  });
+
+  it("крапка лишається там, де ціль бачили — її не зсувають", () => {
+    // Розширити коло — визнати незнання; зсунути крапку — стверджувати знання.
+    // Курс у 21 цілі з 24 припущений, тож зсув їхав би за здогадкою.
+    const fresh = situationSvgZoom([stale(10)], ZP, 70, { now: NOW });
+    const old = situationSvgZoom([stale(400)], ZP, 70, { now: NOW });
+    const at = (svg: string) =>
+      svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="\d+" fill="#/)?.slice(1, 3);
+    expect(at(fresh)).toEqual(at(old));
   });
 });

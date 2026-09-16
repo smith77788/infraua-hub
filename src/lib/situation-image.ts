@@ -28,6 +28,7 @@ import { UA_OUTLINE } from "./ua-outline";
 import { UA_OBLASTS } from "./ua-oblasts";
 import { CITIES } from "./ua-cities";
 import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
+import { nowRadiusKm } from "./position-age";
 
 /**
  * Міста-орієнтири на карті.
@@ -112,8 +113,8 @@ type Proj = (lat: number, lon: number) => [number, number];
 /** Пікселів на кілометр для оглядової проєкції (SCALE — px на градус широти). */
 const PX_PER_KM = SCALE / 111.32;
 
-function marker(t: Threat): string {
-  return markerWith(t, project, PX_PER_KM);
+function marker(t: Threat, now: number): string {
+  return markerWith(t, project, PX_PER_KM, now);
 }
 
 /**
@@ -135,7 +136,7 @@ function marker(t: Threat): string {
  * припущений курс дає порожній контур замість залитого силуету: напрямок
  * видно, але видно й те, що це здогадка.
  */
-function markerWith(t: Threat, proj: Proj, pxPerKm: number): string {
+function markerWith(t: Threat, proj: Proj, pxPerKm: number, now: number): string {
   const type: ThreatType = t.type ?? "unknown";
   const [x, y] = proj(t.lat, t.lon);
   const color = COLOR[type];
@@ -150,7 +151,28 @@ function markerWith(t: Threat, proj: Proj, pxPerKm: number): string {
    */
   const rKm = displayRadiusKm(q);
   const r = Math.max(11, Math.round(rKm * pxPerKm));
+  /*
+   * Друге коло: де ціль може бути ЗАРАЗ.
+   *
+   * Перше коло каже, наскільки джерело не впевнене в позиції. Але позначка ще
+   * й стара: застій фікса заміряно медіаною 205 с, а це 10 км польоту шахеда —
+   * у два з половиною рази більше за медіанний заявлений розкид у 4 км. Доти
+   * карта малювала перше коло й мовчала про друге, тобто показувала, де ціль
+   * БУЛА, під виглядом того, де вона є.
+   *
+   * Пунктир, а не заливка: суцільне коло на пів області читалось би як
+   * «небезпека всюди тут», а це не те твердження. Пунктир читається як межа
+   * незнання — чим він більший, тим менше ми знаємо.
+   */
+  const nowR = nowRadiusKm(t, now);
+  const driftPx = Math.round(nowR.likelyKm * pxPerKm);
+  const drift =
+    driftPx > r + 3
+      ? `<circle cx="${x}" cy="${y}" r="${driftPx}" fill="none" stroke="${color}" ` +
+        `stroke-width="1" stroke-dasharray="4 6" opacity="0.5"/>`
+      : "";
   const halo =
+    drift +
     `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.16"/>` +
     // Заявлений джерелом радіус — тонкий контур; наше припущення, коли
     // джерело промовчало, лишається без нього.
@@ -235,19 +257,24 @@ function trackPath(track: TrackLine): string {
  */
 function legend(showPresumed: boolean): string {
   const x = PAD + 4;
-  const y = H - PAD - 34;
+  const y = H - PAD - 56;
   const rows = [
     `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="#ffd23f" opacity="0.16"/>` +
       `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="none" stroke="#ffd23f" stroke-width="0.8" opacity="0.4"/>` +
       `<circle cx="${x + 8}" cy="${y + 4}" r="3" fill="#ffd23f"/>` +
       `<text x="${x + 24}" y="${y + 8}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-      `коло — розкид позиції, як його називає джерело</text>`,
+      `суцільне коло — розкид позиції за джерелом</text>`,
+    `<circle cx="${x + 8}" cy="${y + 26}" r="9" fill="none" stroke="#ffd23f" stroke-width="1" ` +
+      `stroke-dasharray="4 6" opacity="0.5"/>` +
+      `<circle cx="${x + 8}" cy="${y + 26}" r="3" fill="#ffd23f"/>` +
+      `<text x="${x + 24}" y="${y + 30}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+      `пунктир — де ціль може бути вже зараз</text>`,
   ];
   if (showPresumed) {
     rows.push(
-      `<g transform="translate(${x + 8} ${y + 26}) scale(0.62)">` +
+      `<g transform="translate(${x + 8} ${y + 48}) scale(0.62)">` +
         `<path d="${DRONE}" fill="none" stroke="#ffd23f" stroke-width="1.6" stroke-linejoin="round"/></g>` +
-        `<text x="${x + 24}" y="${y + 30}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+        `<text x="${x + 24}" y="${y + 52}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
         `порожня стрілка — курс припущений, не спостережений</text>`,
     );
   }
@@ -334,8 +361,11 @@ export function situationSvg(
     timeLabel?: string | undefined;
     /** Полігони областей під офіційною тривогою (готові [lat,lon] кільця). */
     alertPolygons?: readonly (readonly [number, number][])[] | undefined;
+    /** Момент малювання — потрібен для кола «де ціль може бути зараз». */
+    now?: number;
   } = {},
 ): string {
+  const now = opts.now ?? Date.now();
   const outline = UA_OUTLINE.map(([lat, lon], i) => {
     const [x, y] = project(lat, lon);
     return `${i === 0 ? "M" : "L"}${x},${y}`;
@@ -503,8 +533,11 @@ export function situationSvgZoom(
   opts: {
     /** Підпис центра — назва міста. Без нього карта не каже, де це взагалі. */
     label?: string | undefined;
+    /** Момент малювання — для кола «де ціль може бути зараз». */
+    now?: number;
   } = {},
 ): string {
+  const now = opts.now ?? Date.now();
   const dLat = radiusKm / 111.32;
   const dLon = radiusKm / (111.32 * Math.cos((center.lat * Math.PI) / 180));
   const latMin = center.lat - dLat;
@@ -537,7 +570,7 @@ export function situationSvgZoom(
 
   const markers = threats
     .filter((t) => inView(t.lat, t.lon))
-    .map((t) => markerWith(t, pr, scale / 111.32))
+    .map((t) => markerWith(t, pr, scale / 111.32, now))
     .join("");
 
   // Сусідні населені пункти — орієнтир, якого не дають ні кільця, ні межі
@@ -573,7 +606,7 @@ export function situationSvgZoom(
    */
   const note =
     `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-    `коло довкола цілі — наскільки невідома її позиція</text>`;
+    `суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз</text>`;
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +
@@ -596,7 +629,7 @@ export async function renderZoomPng(
   threats: readonly Threat[],
   center: { lat: number; lon: number },
   radiusKm = 70,
-  opts: { label?: string | undefined } = {},
+  opts: { label?: string | undefined; now?: number } = {},
 ): Promise<Buffer | null> {
   try {
     const mod = "@resvg/resvg-js";
