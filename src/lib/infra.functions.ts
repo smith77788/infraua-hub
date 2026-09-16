@@ -4,6 +4,7 @@ import { TG_CHANNELS } from "./osint-sources";
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 import { formatVoltage, highestVoltage, plantOutputMw } from "./osm-tags";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
+import { corroborate, withCorroboration, type ChannelReport } from "./cross-source";
 
 import {
   classifyThreatType,
@@ -861,6 +862,61 @@ async function fetchThreatTypesByPlace(placeNames: string[]): Promise<Map<string
   return out;
 }
 
+/**
+ * Сирі повідомлення другого агрегатора — як НЕЗАЛЕЖНІ СВІДКИ, а не як фолбек.
+ *
+ * detoyshahed доти брали, лише коли neptun не відповів. Але його цінність не в
+ * тому, що він схожий на перший, а в тому, що він ІНШИЙ: віддає окремі
+ * повідомлення з назвою каналу, який їх написав. Заміряно на живому зрізі:
+ * 187 повідомлень від 10 різних каналів, і 8 цілей neptun із 29 (28%) не мали
+ * там жодного підтвердження. Ціль, яку бачать два незалежні збирачі, і ціль,
+ * про яку сказав один, — різні за вагою, а на карті виглядали однаково.
+ *
+ * Свій короткий кеш і власний строк: збій цього запиту не має валити головний
+ * шлях — без свідків картина лишається такою, як була, просто без підтверджень.
+ */
+const REPORTS_TTL_MS = 60_000;
+let reportsCache: { at: number; reports: ChannelReport[] } | null = null;
+
+export async function fetchChannelReports(signal?: AbortSignal): Promise<ChannelReport[]> {
+  const now = Date.now();
+  if (reportsCache && now - reportsCache.at < REPORTS_TTL_MS) return reportsCache.reports;
+  try {
+    const res = await fetch(THREATS_ENDPOINT, {
+      ...(signal ? { signal } : {}),
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(`reports ${res.status}`);
+    const data = (await res.json()) as {
+      incidents?: {
+        coordinates?: { lat: number; lng: number };
+        channel_name?: string;
+        created_at?: string;
+      }[];
+    };
+    const out: ChannelReport[] = [];
+    for (const it of data.incidents ?? []) {
+      const c = it.coordinates;
+      const channel = it.channel_name;
+      if (!c || !channel) continue;
+      const [lat, lon] = mercToLatLon(c.lng, c.lat);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      if (lat < UA_BBOX.south || lat > UA_BBOX.north || lon < UA_BBOX.west || lon > UA_BBOX.east) {
+        continue;
+      }
+      const at = Date.parse(it.created_at ?? "");
+      if (!Number.isFinite(at)) continue;
+      out.push({ lat, lon, channel, at });
+    }
+    reportsCache = { at: now, reports: out };
+    return out;
+  } catch {
+    // Свідків не дісталися — картина лишається без підтверджень, і це чесніше
+    // за спробу видати останній кеш за свіжі підтвердження.
+    return reportsCache && now - reportsCache.at < 5 * REPORTS_TTL_MS ? reportsCache.reports : [];
+  }
+}
+
 export const getThreats = createServerFn({ method: "GET" }).handler(async () => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
@@ -871,8 +927,20 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
     try {
       const neptun = await neptunThreatsCached();
       if (neptun.length) {
+        /*
+         * Перехресне підтвердження другим агрегатором. Знайдені канали
+         * домішуються в `sources`, а зважує їх наявна `verifyThreat` — вона
+         * вже вміє рахувати незалежність джерел і знає їхні ролі. Другої шкали
+         * довіри поряд із першою не заводимо: два різні числа про те саме в
+         * цьому проєкті вже проходили.
+         */
+        const reports = await fetchChannelReports(controller.signal);
+        const now = Date.now();
+        const threats = reports.length
+          ? withCorroboration(neptun, corroborate(neptun, reports, now))
+          : neptun;
         return {
-          threats: neptun, // вже дедупльовано джерелом — не зливаємо повторно
+          threats, // вже дедупльовано джерелом — не зливаємо повторно
           fetchedAt: new Date().toISOString(),
           degraded: false,
           source: "neptun",
