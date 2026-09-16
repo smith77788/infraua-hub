@@ -547,6 +547,12 @@ export function renderShelters(
   list: readonly NearbyShelter[],
   caveat: string,
   degraded = false,
+  /**
+   * Примітки про безпечний бік, за id укриття. Показуємо як мʼяку підказку, не
+   * змінюючи порядок за відстанню: під тривогою найближче важить найбільше, а
+   * бік — лише нюанс поверх нього.
+   */
+  safeNotes?: Record<string, string>,
 ): string {
   if (!list.length) {
     return [
@@ -568,6 +574,8 @@ export function renderShelters(
       `${KIND_EMOJI[s.kind]} <b>${escapeHtml(s.name)}</b> — ${s.walkMin} хв пішки (${s.distanceKm} км) · ${where}`,
     );
     lines.push(`<i>${escapeHtml(KIND_NOTE[s.kind])}</i>`);
+    const note = safeNotes?.[s.id];
+    if (note) lines.push(`<i>↳ ${escapeHtml(note)}</i>`);
   }
   lines.push("");
   lines.push(`<i>${escapeHtml(caveat)}</i>`);

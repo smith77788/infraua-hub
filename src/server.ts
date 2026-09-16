@@ -74,6 +74,7 @@ import {
 } from "./lib/advisory";
 import { inlineResults, parseInlineQuery } from "./lib/bot-inline";
 import { renderShareCard } from "./lib/share-card";
+import { rankBySafeSide } from "./lib/shelter-safe-side";
 import { clampLead } from "./lib/lead-threshold";
 import { matchPlace } from "./lib/places";
 import {
@@ -2019,7 +2020,30 @@ async function sendShelters(
     const { fetchShelters } = await import("./lib/infra.functions");
     const payload = await fetchShelters(point.lat, point.lon);
     const near = nearestShelters(point, payload.shelters, { limit: 4 });
-    await telegramSend(token, chatId, renderShelters(near, payload.caveat, payload.degraded));
+
+    // Безпечний бік: якщо на точку зараз ІДЕ ціль, мʼяко позначимо укриття, що
+    // НЕ в її бік. Порядок за відстанню лишається — це підказка, не наказ. Збій
+    // тут не має позбавити людину переліку укриттів, тому все у власному catch.
+    let safeNotes: Record<string, string> | undefined;
+    try {
+      const threats = await fetchThreatsCached(60_000);
+      const assess = personalAssessment(threats, point, { radiusKm: 150 });
+      const lead = assess.nearest.find((n) => n.inbound);
+      if (lead) {
+        safeNotes = {};
+        for (const m of rankBySafeSide(point, near, lead.bearingToThreat)) {
+          if (m.note && m.side !== "flank") safeNotes[m.item.id] = m.note;
+        }
+      }
+    } catch {
+      /* безпечний бік — необовʼязковий; перелік укриттів важливіший */
+    }
+
+    await telegramSend(
+      token,
+      chatId,
+      renderShelters(near, payload.caveat, payload.degraded, safeNotes),
+    );
   } catch {
     await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT, true));
   }
