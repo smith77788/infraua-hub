@@ -41,6 +41,7 @@ import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
+import { clampLead, renderLeadHelp, renderLeadSaved } from "./lib/lead-threshold";
 import {
   recordAlarmMinutes,
   recordAlarmStart,
@@ -80,7 +81,6 @@ import {
 import { inlineResults, parseInlineQuery } from "./lib/bot-inline";
 import { renderShareCard } from "./lib/share-card";
 import { rankBySafeSide } from "./lib/shelter-safe-side";
-import { clampLead } from "./lib/lead-threshold";
 import { droneWeather, type DroneWeatherVerdict } from "./lib/drone-weather";
 import { renderFlightNight } from "./lib/flight-night";
 import { matchPlace } from "./lib/places";
@@ -1729,6 +1729,9 @@ async function personalCommand(
     "me",
     "settings",
     "налаштування",
+    "lead",
+    "час",
+    "запас",
     "stop",
     "pause",
     "invite",
@@ -1943,6 +1946,27 @@ async function personalCommand(
     const body = res.body as { buckets?: { at: number; targets: number }[] } | null;
     const profile = buildCalmProfile(body?.buckets ?? []);
     return { text: renderCalmHours(profile) };
+  }
+
+  if (command === "lead" || command === "час" || command === "запас") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const raw = args.trim().toLowerCase();
+    if (!raw) {
+      return {
+        text: renderLeadHelp(sub.leadMin ?? null),
+        keyboard: settingsKeyboard(sub),
+      };
+    }
+    // «вимк», «0», «off» — однаково вимикають: людина пише те, що думає, а не
+    // те, що ми задокументували.
+    const off = raw === "0" || raw.startsWith("вимк") || raw === "off" || raw === "ні";
+    const n = Number(raw.replace(/[^0-9]/g, ""));
+    if (!off && !Number.isFinite(n)) {
+      return { text: renderLeadHelp(sub.leadMin ?? null) };
+    }
+    const value = off ? null : clampLead(n);
+    await putSubscriber({ ...sub, leadMin: value });
+    return { text: renderLeadSaved(value) };
   }
 
   if (command === "settings" || command === "налаштування") {

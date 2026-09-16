@@ -15,7 +15,7 @@
  * мережі, ні файлової системи, ні годинника, крім переданого часу.
  */
 
-import type { DangerIndex, DangerLevel, PersonalAssessment } from "./advisory";
+import type { DangerIndex, DangerLevel, PersonalAssessment, PersonalThreat } from "./advisory";
 import type { ThreatType } from "./air";
 import { kyivHour } from "./kyiv";
 import { withinLead } from "./lead-threshold";
@@ -66,16 +66,17 @@ export interface Subscriber {
   /** Коли востаннє дорахували хвилини тривоги, щоб приріст був чесним. */
   alarmCountedAt?: number | null;
   radiusKm: number;
-  tier: AlertTier;
-  night: NightMode;
   /**
-   * Поріг «будити за N хвилин льоту» — надбудова над радіусом.
+   * Поріг «будити за N хвилин льоту», хв. `null`/відсутнє — вимкнено.
    *
-   * `null`/відсутнє — поріг вимкнено, вирішує лише радіус (як було). Заданий —
-   * усередині радіуса тривога чекає, поки НАЙБЕЗПЕЧНІШИЙ час підльоту не впаде
-   * до порогу; ескалація рівня його пробиває, як і паузу.
+   * Надбудова над радіусом, а не заміна: радіус усе ще відсікає далеке, а цей
+   * поріг усередині нього вирішує, чи вже пора. Сенс у тому, що людина обирала
+   * не кілометри, а запас часу дійти до укриття, — а однакові кілометри для
+   * шахеда і для балістики означають зовсім різний запас.
    */
   leadMin?: number | null;
+  tier: AlertTier;
+  night: NightMode;
   /** Пауза без втрати налаштувань: `/stop` вимикає, `/my` вмикає назад. */
   muted: boolean;
   /** Власний код запрошення. */
@@ -212,6 +213,22 @@ export interface AlertDecision {
  * (наприклад, до шахедів додалась балістика або час до підльоту впав), людину
  * повідомляють навіть усередині восьмихвилинної паузи: саме цей момент і є
  * той єдиний, заради якого бота тримають.
+ *
+ * Поріг часу підльоту (`leadMin`) стоїть ДО перевірки ескалації — і це навмисно.
+ * Він не пауза, яку треба пробивати, а відповідь на питання «чи вже пора»: якщо
+ * людина просила будити за 10 хвилин льоту, то поява нового типу цілі за півгодини
+ * ходу — ще не той момент.
+ *
+ * Поставити його ПІСЛЯ ескалації спокусливо й здається безпечнішим, але робить
+ * поріг майже несправжнім: `lastLevel` у свіжого нальоту ще `null`, тобто
+ * `escalated` істинна, і ПЕРШЕ сповіщення проходило б повз поріг завжди. Людина,
+ * яка просила «за 10 хвилин», однаково діставала б підйом на далекому шахеді за
+ * пів години — рівно те, від чого поріг і рятує.
+ *
+ * Затримки це не додає: заглушене рішення не викликає `markAlerted`, тож
+ * `lastLevel` лишається старим, і в ту ж мить, коли ціль входить у вікно,
+ * спрацьовує та сама ескалація. Невідомий час підльоту порогом не відсікається
+ * ніколи.
  */
 export function decideAlert(
   sub: Subscriber,
@@ -252,6 +269,12 @@ export function decideAlert(
     };
   }
 
+  // Поріг часу підльоту. Рахуємо його по тому самому `pool`, який і будив би:
+  // якщо tier лишив саму балістику, то й запас часу має бути її, а не тієї
+  // повільної цілі, про яку людину все одно не повідомлять.
+  const lead = withinLead(poolEtaLowMin(pool), sub.leadMin);
+  if (!lead.within) return { send: false, reason: lead.reason, ids: [], level };
+
   const ids = pool.map((n) => n.threat.id).sort();
   const known = new Set(sub.lastAlertIds);
   const fresh = ids.filter((id) => !known.has(id));
@@ -259,18 +282,6 @@ export function decideAlert(
   const cooling = now - sub.lastAlertAt < ALERT_COOLDOWN_MS;
 
   if (escalated) return { send: true, reason: "обстановка загострилась", ids, level };
-
-  // Поріг часу підльоту — ПІСЛЯ ескалації (вона його пробиває) і до дедупу за
-  // цілями: доки найближча ціль поза обраним вікном часу, тривога чекає. Час
-  // беремо найбезпечніший (найраніший край вилки) серед цілей у пулі; коли його
-  // не оцінити — не глушимо (див. withinLead).
-  const poolEtaLow = pool.reduce<number | null>((min, n) => {
-    const eta = n.etaRangeMin?.[0] ?? n.etaMin;
-    if (eta == null) return min;
-    return min == null ? eta : Math.min(min, eta);
-  }, null);
-  const lead = withinLead(poolEtaLow, sub.leadMin ?? null);
-  if (!lead.within) return { send: false, reason: lead.reason, ids, level };
 
   if (now - sub.lastAlertAt < ALERT_FLOOR_MS) {
     return { send: false, reason: "щойно надсилали сповіщення", ids, level };
@@ -282,6 +293,23 @@ export function decideAlert(
     return { send: false, reason: "нових цілей на вашу точку немає", ids, level };
   }
   return { send: true, reason: "нова вхідна ціль", ids, level };
+}
+
+/**
+ * Найбезпечніший (найраніший) оцінений час підльоту серед цілей, які будили б.
+ *
+ * Береться нижній край вилки: ціль може бути ближчою, ніж її позначка. Якщо
+ * жодна ціль часу не має — `null`, і поріг це прочитає як «невідомо», тобто як
+ * привід попередити, а не проґавити.
+ */
+function poolEtaLowMin(pool: readonly PersonalThreat[]): number | null {
+  let best: number | null = null;
+  for (const n of pool) {
+    const eta = n.etaRangeMin?.[0] ?? n.etaMin;
+    if (eta === null || eta === undefined) continue;
+    if (best === null || eta < best) best = eta;
+  }
+  return best;
 }
 
 const LEVEL_RANK: Record<DangerLevel, number> = { calm: 0, watch: 1, attention: 2, shelter: 3 };

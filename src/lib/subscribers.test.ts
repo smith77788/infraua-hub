@@ -2,9 +2,11 @@ import { describe, expect, it } from "bun:test";
 
 import { dangerIndex, personalAssessment } from "./advisory";
 import type { Threat, ThreatType } from "./air";
+import { withinLead } from "./lead-threshold";
 import {
   ALERT_COOLDOWN_MS,
   ALERT_FLOOR_MS,
+  ALERT_FORGET_MS,
   clampRadius,
   decideAlert,
   forgetStale,
@@ -126,12 +128,39 @@ describe("decideAlert", () => {
     expect(d.send).toBe(true);
   });
 
-  it("поріг часу пробиває ескалація — перше сповіщення йде попри запас часу", () => {
-    // Свіжий підписник (lastLevel null): поява цілі — це ескалація, і вона
-    // важливіша за поріг часу.
-    const d = decide(sub({ radiusKm: 120, leadMin: 5 }), [inbound("a", "shahed", 90)]);
-    expect(d.send).toBe(true);
-    expect(d.reason).toContain("загострилась");
+  it("ескалація поріг часу НЕ пробиває — інакше поріг був би несправжнім", () => {
+    // Спокуслива й неправильна версія цього правила — «ескалація важливіша за
+    // поріг». Вона робить поріг майже неіснуючим, і ось чому: `forgetStale`
+    // скидає `lastLevel` у null після 45 хв тиші, тобто на початку КОЖНОГО
+    // нальоту. Свіжий `lastLevel: null` дає `escalated === true`, і перше
+    // сповіщення обходило б поріг щоразу — саме те далеке нічне, від якого
+    // людина й ставила «будити за 5 хв».
+    const fresh = sub({ radiusKm: 120, leadMin: 5 });
+    expect(fresh.lastLevel).toBe(null);
+    const d = decide(fresh, [inbound("a", "shahed", 90)]);
+    expect(d.send).toBe(false);
+    expect(d.reason).toContain("ще є час");
+  });
+
+  it("заглушене порогом не запамʼятовується — щойно ціль у вікні, сповіщення йде", () => {
+    // Друга половина того самого рішення: затримки поріг не додає. Мовчання не
+    // викликає markAlerted, тож lastLevel лишається null — і в ту ж мить, коли
+    // ціль входить у вікно, спрацьовує звичайна ескалація.
+    const s = sub({ radiusKm: 120, leadMin: 5 });
+    expect(decide(s, [inbound("a", "shahed", 90)]).send).toBe(false);
+    const near = decide(s, [inbound("a", "shahed", 30)]);
+    expect(near.send).toBe(true);
+    expect(near.reason).toContain("загострилась");
+  });
+
+  it("поріг переживає forgetStale — він не стан, а налаштування", () => {
+    const s = forgetStale(
+      { ...sub({ radiusKm: 120, leadMin: 5 }), lastAlertAt: 1, lastLevel: "shelter" },
+      1 + ALERT_FORGET_MS + 1,
+    );
+    expect(s.lastLevel).toBe(null);
+    expect(s.leadMin).toBe(5);
+    expect(decide(s, [inbound("a", "shahed", 90)]).send).toBe(false);
   });
 
   it("поріг часу вимкнено — радіус вирішує, як раніше", () => {
@@ -205,5 +234,63 @@ describe("розбір налаштувань", () => {
     expect(clampRadius(1)).toBe(10);
     expect(clampRadius(9999)).toBe(200);
     expect(clampRadius(Number.NaN)).toBe(50);
+  });
+});
+
+describe("поріг запасу часу (leadMin)", () => {
+  it("мовчить, поки до підльоту більше, ніж просили", () => {
+    // Шахед за 90 км: найбезпечніше прочитання часу — 8 хв. Людина просила
+    // будити за 5. Це не проґавлена ціль, а рівно те, про що домовлялись.
+    const d = decide(sub({ leadMin: 5, radiusKm: 100 }), [inbound("a", "shahed", 90)]);
+    expect(d.send).toBe(false);
+    expect(d.reason).toContain("поріг");
+  });
+
+  it("будить, коли та сама ціль підійшла в межі порога", () => {
+    const d = decide(sub({ leadMin: 5, radiusKm: 100 }), [inbound("a", "shahed", 45)]);
+    expect(d.send).toBe(true);
+  });
+
+  it("швидку ціль пропускає там, де повільну затримав би", () => {
+    const far = 90;
+    const slow = decide(sub({ leadMin: 5, radiusKm: 100 }), [inbound("a", "shahed", far)]);
+    const fast = decide(sub({ leadMin: 5, radiusKm: 100 }), [inbound("b", "ballistic", far)]);
+    expect(slow.send).toBe(false);
+    expect(fast.send).toBe(true);
+  });
+
+  it("без порога поводиться точно як раніше", () => {
+    const withOff = decide(sub({ radiusKm: 100 }), [inbound("a", "shahed", 90)]);
+    const withNull = decide(sub({ leadMin: null, radiusKm: 100 }), [inbound("a", "shahed", 90)]);
+    expect(withOff.send).toBe(true);
+    expect(withNull.send).toBe(true);
+  });
+
+  it("ціль без курсу відсікає не поріг, а відсутність напрямку на точку", () => {
+    // Важлива межа: сьогодні «вхідна» і «має оцінений час підльоту» — це те
+    // саме. Ціль без курсу не потрапляє в pool взагалі, тож про поріг тут не
+    // йдеться, і причина має називати саме це, а не запас часу.
+    const { heading: _drop, ...noHeading } = inbound("a", "shahed", 90);
+    const d = decide(sub({ leadMin: 5, radiusKm: 100 }), [noHeading]);
+    expect(d.send).toBe(false);
+    expect(d.reason).toContain("нічого не йде");
+    expect(d.reason).not.toContain("поріг");
+  });
+
+  it("невідомий час підльоту поріг пропускає, а не відсікає", () => {
+    // Оборонна гілка: `personalAssessment` сьогодні завжди дає час для вхідної
+    // цілі, тож із `decideAlert` цей випадок не досяжний. Але правило перевірене
+    // тут навмисно — щоб зміна оцінювача не перетворила «не знаю» на «мовчи».
+    expect(withinLead(null, 5).within).toBe(true);
+    expect(withinLead(null, 5).reason).toContain("невідом");
+  });
+
+  it("поріг рахується по тих цілях, які будили б, а не по всіх у радіусі", () => {
+    // tier «лише критичне» лишає балістику; шахед поруч не має підміняти собою
+    // запас часу тієї цілі, про яку людину справді повідомлять.
+    const s = sub({ leadMin: 5, radiusKm: 100, tier: "critical" });
+    const d = decide(s, [inbound("slow", "shahed", 95), inbound("fast", "ballistic", 90)]);
+    expect(d.send).toBe(true);
+    expect(d.ids).toEqual(["fast"]);
   });
 });

@@ -23,6 +23,7 @@ import type { SoundKind } from "./acoustic";
 import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
 import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
 import { KIND_EMOJI, KIND_NOTE, type NearbyShelter } from "./shelters";
+import { clampLead } from "./lead-threshold";
 
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
@@ -362,6 +363,7 @@ export function renderSettings(sub: Subscriber): string {
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
     "",
     "<i>Нічний режим лише звужує денний — він ніколи не розбудить вас тим, чого ви не просили вдень.</i>",
+    "<i>Поріг часу міряє не кілометри, а запас часу дійти до укриття: шахед за 50 км — це пів години, балістика за ті самі 50 км — менше хвилини. Коли час підльоту оцінити не вдалося, поріг вас не глушить — попереджаємо.</i>",
   ].join("\n");
 }
 
@@ -375,11 +377,11 @@ export const PERSONAL_ACTIONS = {
   tierPrefix: "t:",
   nightPrefix: "n:",
   radiusPrefix: "km:",
+  leadPrefix: "ld:",
   mute: "mu:1",
   unmute: "mu:0",
   shelter: "sh",
   share: "shr",
-  leadPrefix: "ld:",
 } as const;
 
 /** Варіанти порогу «будити за N хв льоту». `off` — вимкнено (вирішує радіус). */
@@ -434,6 +436,7 @@ export function parsePersonalAction(
   | { kind: "tier"; value: AlertTier }
   | { kind: "night"; value: NightMode }
   | { kind: "radius"; value: number }
+  | { kind: "lead"; value: number | null }
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
   | { kind: "share" }
@@ -467,10 +470,14 @@ export function parsePersonalAction(
     return Number.isFinite(n) ? { kind: "radius", value: n } : null;
   }
   if (data.startsWith(PERSONAL_ACTIONS.leadPrefix)) {
+    // «off» окремим словом, а не нулем: вимкнений поріг і поріг у нуль хвилин
+    // означали б протилежне, і сплутати їх коштувало б сповіщення.
     const v = data.slice(PERSONAL_ACTIONS.leadPrefix.length);
     if (v === "off") return { kind: "lead", value: null };
     const n = Number(v);
-    return Number.isFinite(n) ? { kind: "lead", value: n } : null;
+    // Межі тримає розбір, а не віра в те, що кнопка прийшла саме наша:
+    // callback_data приходить від клієнта й може бути будь-яким.
+    return Number.isFinite(n) ? { kind: "lead", value: clampLead(n) } : null;
   }
   return null;
 }
