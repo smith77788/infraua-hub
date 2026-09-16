@@ -5,6 +5,7 @@ import type { Threat, ThreatType } from "@/lib/air";
 import { UK } from "@/lib/channel-lexicon";
 import { subsetVector } from "@/lib/swarm-forecast";
 import type { Wave } from "@/lib/waves";
+import CollapsiblePanel from "./CollapsiblePanel";
 
 const COLOR: Record<ThreatType, string> = {
   shahed: "#ffd23f",
@@ -62,12 +63,18 @@ export default function ActiveWaves({
   if (active < 2) return null;
 
   return (
-    <div className="pointer-events-auto max-h-full max-w-[230px] overflow-y-auto rounded border border-orange-500/40 bg-background/92 px-2.5 py-2 backdrop-blur">
-      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-orange-300">
-        <Layers3 className="size-3" />
-        Активних хвиль: {active}
-      </div>
-      <ul className="mt-1.5 space-y-1">
+    <CollapsiblePanel
+      storageKey="waves"
+      borderClass="border-orange-500/40"
+      textClass="text-orange-300"
+      title={
+        <>
+          <Layers3 className="size-3 shrink-0" />
+          Активних хвиль: {active}
+        </>
+      }
+    >
+      <ul className="space-y-1">
         {rows.map(({ wave, dir }) => (
           <li key={wave.id} className="flex items-baseline gap-1.5 text-[11px] leading-tight">
             <span
@@ -88,6 +95,6 @@ export default function ActiveWaves({
       <div className="mt-1.5 text-[8px] leading-snug text-muted-foreground/80">
         окремі скоординовані групи; курс кожної — з її власного треку
       </div>
-    </div>
+    </CollapsiblePanel>
   );
 }
