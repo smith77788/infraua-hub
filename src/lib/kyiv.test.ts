@@ -26,3 +26,22 @@ describe("formatDuration", () => {
     expect(formatDuration(10e3)).toBe("менш ніж хвилина");
   });
 });
+
+describe("formatDuration — нечисло", () => {
+  it("не друкує NaN: інакше воно потрапляє в канал", () => {
+    /*
+     * Тривалість рахується з відновленого зі сховища стану, куди поле могли
+     * додати пізніше за сам запис. Одне `undefined` — і в канал іде
+     * «Хвиля тривала NaN год NaN хв».
+     */
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(formatDuration(bad)).not.toContain("NaN");
+      expect(formatDuration(bad)).toBe("невідомо скільки");
+    }
+  });
+
+  it("не вигадує «менш ніж хвилина» там, де тривалість невідома", () => {
+    // Це був би не запобіжник, а тиха неправда.
+    expect(formatDuration(NaN)).not.toBe("менш ніж хвилина");
+  });
+});

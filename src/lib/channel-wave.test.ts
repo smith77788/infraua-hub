@@ -18,6 +18,7 @@ import {
   renderRoute,
   updateWave,
   waveEnded,
+  waveStateUsable,
 } from "./channel-wave";
 
 function threat(p: Partial<Threat>): Threat {
@@ -293,5 +294,48 @@ describe("маршрут хвилі", () => {
     w = updateWave(w, snap({ Чернігівщина: { shahed: 4 } }), 0);
     w = updateWave(w, snap({ Київщина: { shahed: 2 } }), 30 * 60e3);
     expect(renderAllClear(w, 60 * 60e3)).toContain("🛣 Шлях:");
+  });
+});
+
+describe("waveStateUsable — стан із минулої збірки", () => {
+  const good = {
+    startedAt: 1,
+    lastActiveAt: 2,
+    peakTargets: 3,
+    oblasts: { Сумщина: 2 },
+    types: {},
+    messageId: null,
+    edits: 0,
+    officialAlertSeen: false,
+  };
+
+  it("повний стан придатний", () => {
+    expect(waveStateUsable(good)).toBe(true);
+  });
+
+  it("бракує часу початку — непридатний", () => {
+    /*
+     * Саме цей випадок і виходив у канал рядком «Хвиля тривала NaN год NaN хв»:
+     * старіша збірка записала стан без поля, новіша прочитала його без помилки.
+     */
+    const { startedAt: _drop, ...rest } = good;
+    expect(waveStateUsable(rest)).toBe(false);
+  });
+
+  it("час є, але не число — непридатний", () => {
+    expect(waveStateUsable({ ...good, lastActiveAt: "щойно" })).toBe(false);
+    expect(waveStateUsable({ ...good, startedAt: null })).toBe(false);
+  });
+
+  it("порожнеча й не-обʼєкт — непридатні", () => {
+    expect(waveStateUsable(null)).toBe(false);
+    expect(waveStateUsable(undefined)).toBe(false);
+    expect(waveStateUsable("wave")).toBe(false);
+  });
+
+  it("брак НОВОГО прапорця не робить стан непридатним", () => {
+    // Інакше кожне нове поле скидало б живу хвилю при редеплої.
+    const { officialAlertSeen: _drop, ...rest } = good;
+    expect(waveStateUsable(rest)).toBe(true);
   });
 });

@@ -127,6 +127,7 @@ import {
   markOfficialAlert,
   renderQuietHold,
   WAVE_ABANDON_MS,
+  waveStateUsable,
   renderAllClear,
   renderDigest,
   newCriticalTypes,
@@ -1250,7 +1251,18 @@ async function hydrateLiveState(now: number): Promise<void> {
   if (!raw) return;
   try {
     const s = JSON.parse(raw) as Partial<ChannelState>;
-    if (s.wave && typeof s.lastPostAt === "number" && now - s.lastPostAt <= LIVE_POST_MAX_MS) {
+    /*
+     * Стан хвилі перевіряється, а не приймається на віру. Запис, зроблений
+     * старішою збіркою, розбереться без помилки й дасть `undefined` там, де
+     * код чекає число — а звідти воно виходить у канал як «NaN год NaN хв».
+     * Непридатний стан просто відкидаємо: почати хвилю заново дешевше, ніж
+     * постити арифметику з порожнечі.
+     */
+    if (
+      waveStateUsable(s.wave) &&
+      typeof s.lastPostAt === "number" &&
+      now - s.lastPostAt <= LIVE_POST_MAX_MS
+    ) {
       wave = s.wave;
       // Разом із живим постом відновлюємо його зріз і підпис: інакше перший же
       // тік після редеплою бачить фальшиву ескалацію (порожнє «було») і постить

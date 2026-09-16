@@ -158,6 +158,31 @@ export function renderForecast(entries: readonly ForecastEntry[], max = 3): stri
 
 /* ─── 2. Хвиля як сесія ─────────────────────────────────────────────────── */
 
+/**
+ * Чи придатний відновлений зі сховища стан хвилі.
+ *
+ * Стан переживає редеплой у JSON, а поля до `WaveState` додавали кілька разів
+ * і кількома сесіями. Запис, зроблений старішою збіркою, розбереться без
+ * помилки — і мовчки дасть `undefined` там, де код чекає число. Далі це
+ * потрапляє в арифметику часу й виходить у КАНАЛ рядком «Хвиля тривала
+ * NaN год NaN хв».
+ *
+ * Перевіряються саме ті поля, без яких стан не має сенсу: час початку, час
+ * останньої активності й лічильники. Решту (нові прапорці) відновлюємо за
+ * усталеним — їхня відсутність нічого не ламає, лише трохи збіднює пост.
+ */
+export function waveStateUsable(value: unknown): value is WaveState {
+  if (typeof value !== "object" || value === null) return false;
+  const w = value as Partial<WaveState>;
+  return (
+    Number.isFinite(w.startedAt) &&
+    Number.isFinite(w.lastActiveAt) &&
+    Number.isFinite(w.peakTargets) &&
+    typeof w.oblasts === "object" &&
+    w.oblasts !== null
+  );
+}
+
 export interface WaveState {
   startedAt: number;
   /** Коли востаннє в небі щось було. */
