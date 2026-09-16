@@ -774,34 +774,23 @@ let lastChannelPost: { signature: string; at: number; snapshot: AirSnapshot | un
 };
 
 /**
- * Згладжування картини каналу в часі.
+ * Набір цілей для каналу — РІВНО той самий, що на карті бота.
  *
- * `fetchNeptunThreats` віддає лише миттєвий «активний» набір, а OSINT-звіти
- * спорадичні: ціль зникає з набору на один-два опити й повертається. Без
- * згладжування сусідні пости за 4 хвилини виглядали «категорично різними» —
- * хоча шахед за 4 хв нікуди не подівся. Тримаємо кожну нещодавно бачену ціль
- * до HOLD_MS, зливаючи близькі за типом (той самий фізичний апарат, різні
- * звіти), тож картина ЕВОЛЮЦІОНУЄ, а не стрибає, і «відбій» по області
- * настає лише після справжньої відсутності, а не через один пропущений звіт.
+ * Тут колись жило власне «згладжування»: злиття однотипних цілей у радіусі
+ * 22 км і утримання зниклих до 8 хв. Ідея була добра — не смикати пост через
+ * блимання OSINT, — але наслідок виявився гіршим за хворобу: канал зажив
+ * ОКРЕМОЮ правдою. Там, де карта бота (сирий фід neptun) показувала 24 цілі,
+ * злиття збивало їх у «8 у небі», і читач бачив на карті одне число, а в
+ * тексті — інше. Саме це й була «третя картина».
+ *
+ * Джерело neptun уже віддає дедупльовані треки зі стабільними id, тож повторне
+ * злиття лише КРИВИЛО картину. Тепер канал бере фід як є — і пост, картинка
+ * каналу та карта бота показують ОДНІ Й ТІ САМІ обʼєкти. Стабільність поста
+ * тримають не підміна набору, а дедуп за підписом і редагування живого поста
+ * (нижче): блимання дає короткочасну правку, а не окрему хибну картину.
  */
-const CHANNEL_MEMORY_HOLD_MS = 8 * 60 * 1000;
-const CHANNEL_MERGE_KM = 22;
-let channelThreatMemory: { threat: Threat; seenAt: number }[] = [];
-function smoothChannelThreats(current: Threat[], now: number): Threat[] {
-  channelThreatMemory = channelThreatMemory.filter((m) => now - m.seenAt < CHANNEL_MEMORY_HOLD_MS);
-  for (const t of current) {
-    const type = t.type ?? "unknown";
-    const hit = channelThreatMemory.find(
-      (m) => (m.threat.type ?? "unknown") === type && distanceKm(m.threat, t) < CHANNEL_MERGE_KM,
-    );
-    if (hit) {
-      hit.threat = t;
-      hit.seenAt = now;
-    } else {
-      channelThreatMemory.push({ threat: t, seenAt: now });
-    }
-  }
-  return channelThreatMemory.map((m) => m.threat);
+function channelThreats(current: Threat[]): Threat[] {
+  return current;
 }
 
 interface ChannelTickResult {
@@ -1394,9 +1383,9 @@ async function runChannelTickCore(
   const now = Date.now();
   const threats = await fetchThreatsCached(60_000);
 
-  // Згладжуємо картину в часі, щоб сусідні пости не «стрибали» через блимання
-  // OSINT-набору. Пам'ять оновлюється щотику (навіть коли не постимо).
-  const smoothed = smoothChannelThreats(threats, now);
+  // Канал показує РІВНО той самий набір, що й карта бота (сирий neptun): без
+  // власного злиття/утримання, які й давали окрему «третю картину».
+  const smoothed = channelThreats(threats);
   // Трек складається з послідовних опитувань — тому історію оновлюємо щотику,
   // навіть коли не постимо: пропущений тик — це розрив у лінії.
   // Довший строк і більше точок, ніж на карті: тут трек має пережити цілу
