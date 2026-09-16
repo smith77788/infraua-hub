@@ -222,7 +222,8 @@ export function projectForward(
   const distKm = (v.speedKmh * minutes) / 60;
   const [lat, lon] = destPoint(from.lat, from.lon, v.bearingDeg, distKm);
   // База 3 км (розмитість самої позначки) + розхід, що росте з часом і з
-  // браком упевненості. 0.12 рад ≈ ±7° конус при повній невпевненості.
+  // браком упевненості: піврозхил конуса від 0.05 рад (~3°) при повній
+  // упевненості до 0.20 рад (~11°) при повній невпевненості.
   const spread = distKm * (0.05 + 0.15 * (1 - v.confidence));
   const uncertaintyKm = 3 + spread + minutes * 0.2 * (1 - v.confidence);
   return { lat, lon, uncertaintyKm: Math.round(uncertaintyKm * 10) / 10, minutes };
@@ -236,9 +237,14 @@ export interface ReachedPlace {
 }
 
 /**
- * Які орієнтири траєкторія накриває за `horizonMin`: для кожного місця шукаємо
- * момент, коли проєкція найближча, і якщо тоді вона в межах свого конуса +
- * радіуса міста — це «на курсі». Раніший ETA сильніший.
+ * Які орієнтири траєкторія накриває за `horizonMin`. Для кожного місця шукаємо
+ * момент НАЙБЛИЖЧОГО проходження (мінімум відстані центрлінії до міста), і якщо
+ * тоді центрлінія лягає в коридор «конус невизначеності + радіус міста» — це «на
+ * курсі», з ETA цього найближчого проходження. Раніший ETA сильніший.
+ *
+ * Саме найближче проходження, а не перший дотик зростаючого конуса: інакше
+ * далеке місто «входить» у конус ще тоді, коли той величезний, і ETA виходить
+ * оманливо ранній — небезпечно в панелі, яку читають як «встигну/не встигну».
  */
 export function reachedPlaces(
   from: { lat: number; lon: number },
@@ -250,18 +256,23 @@ export function reachedPlaces(
   const step = opts.stepMin ?? 2;
   const cityRadiusKm = opts.cityRadiusKm ?? 25;
 
-  const out = new Map<string, ReachedPlace>();
-  for (let m = step; m <= horizon; m += step) {
-    const p = projectForward(from, v, m);
-    for (const c of places) {
+  const out: ReachedPlace[] = [];
+  for (const c of places) {
+    let bestMiss = Infinity;
+    let bestM = 0;
+    let bestUnc = 0;
+    for (let m = step; m <= horizon; m += step) {
+      const p = projectForward(from, v, m);
       const miss = haversineKm(p.lat, p.lon, c.lat, c.lon);
-      if (miss <= p.uncertaintyKm + cityRadiusKm) {
-        const prev = out.get(c.name);
-        if (!prev || m < prev.etaMin) {
-          out.set(c.name, { name: c.name, etaMin: m, missKm: Math.round(miss) });
-        }
+      if (miss < bestMiss) {
+        bestMiss = miss;
+        bestM = m;
+        bestUnc = p.uncertaintyKm;
       }
     }
+    if (bestMiss <= bestUnc + cityRadiusKm) {
+      out.push({ name: c.name, etaMin: bestM, missKm: Math.round(bestMiss) });
+    }
   }
-  return [...out.values()].sort((a, b) => a.etaMin - b.etaMin);
+  return out.sort((a, b) => a.etaMin - b.etaMin);
 }

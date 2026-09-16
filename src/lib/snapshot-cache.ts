@@ -21,7 +21,7 @@
  * чисті функції під тестами, і працює на сервері (SSR) без вікна.
  */
 
-import { ageFromEpoch } from "./freshness";
+import { ageFromEpoch, FRESHNESS_THRESHOLDS } from "./freshness";
 
 /** Мінімальний контракт сховища — рівно те, що дає `localStorage`. */
 export interface KeyValueStore {
@@ -52,10 +52,11 @@ interface Envelope {
 }
 
 const DEFAULT_MAX_AGE_MS = 30 * 60_000; // старший — не воскрешаємо
-// За скільки знімок стає «підстарілим» / «застарілим», хв. Ті самі пороги, що
-// й для живого фіду повітря: свіжість тут теж міряє РОБОТУ фіду.
-const RECENT_AFTER_MIN = 3;
-const STALE_AFTER_MIN = 10;
+// Пороги «підстаріле» / «застаріле» беремо з ОДНОГО джерела з живим фідом
+// повітря: це і є вік того самого фіду, тож 12-хвилинна кешована картина не
+// сміє казати «застаріло», поки живий фід того самого віку каже «підстаріло».
+const RECENT_AFTER_MIN = FRESHNESS_THRESHOLDS.air.aging;
+const STALE_AFTER_MIN = FRESHNESS_THRESHOLDS.air.stale;
 
 /**
  * Сховище в памʼяті — запасне для SSR і тестів, де `localStorage` немає.
@@ -148,7 +149,7 @@ export function dropSnapshot(store: KeyValueStore, key: string): void {
 
 /**
  * Вік знімка як рівень + підпис. Пороги — ті самі, що для живого повітря
- * (підстаріле від 3 хв, застаріле від 10 хв), бо це і є вік того самого фіду.
+ * (FRESHNESS_THRESHOLDS.air), бо це і є вік того самого фіду.
  */
 export function staleness(at: number, now: number = Date.now()): Staleness {
   const info = ageFromEpoch(at, RECENT_AFTER_MIN, STALE_AFTER_MIN, now);
