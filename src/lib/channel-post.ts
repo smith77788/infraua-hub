@@ -26,9 +26,11 @@ import { distanceKm } from "./infra-types";
 import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta";
 import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 import { swarmForecast } from "./swarm";
+import { swarmForecastFor } from "./swarm-forecast";
 import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
 import { verifyThreat } from "./advisory";
 import { roleOfSource } from "./osint-sources";
+import { kyivHour } from "./kyiv";
 
 /** Індекс румба 0..7 за курсом. Слова дає словник — вони різні в різних мовах. */
 function courseIndex(heading: number | undefined): number | null {
@@ -324,10 +326,17 @@ export function renderChannelPost(
      * `assemblePost`.
      */
     maxChars?: number;
+    /**
+     * Момент складання поста — лише для тих формулювань, що залежать від пори
+     * доби (див. `pickHead` у лексиконі). Параметром, а не `Date.now()`
+     * всередині, щоб тест міг перевірити полудень, не чекаючи полудня.
+     */
+    now?: number;
   } = {},
 ): ChannelPost | null {
   if (!threats.length) return null;
   const maxOblasts = opts.maxOblasts ?? 12;
+  const hourKyiv = kyivHour(new Date(opts.now ?? Date.now()));
   const lex = LEXICONS[opts.lang ?? "uk"];
 
   const groups = new Map<string, Group>();
@@ -429,32 +438,55 @@ export function renderChannelPost(
   const signature = sigParts.sort().join("|");
   const seed = seedFrom(signature);
 
-  // Напрямок хвилі рою — «куди зміщується маса, які області на черзі».
-  // Даємо лише коли напрямок виражений (див. swarmForecast), інакше мовчимо.
-  const wave = swarmForecast(threats, CITY_REFS);
   /*
-   * Прогноз називає, на скількох спостережених курсах він стоїть.
+   * Напрямок хвилі рою — «куди зміщується маса, які області на черзі».
    *
-   * «Хвиля йде на північний захід, далі Полтавщина» звучить однаково впевнено
-   * і коли під ним дванадцять спостережених курсів, і коли три з дванадцяти, —
-   * а це різні за вагою твердження. Припущені курси в розрахунок уже не
-   * входять (див. swarmForecast), і коли їх відкинуто помітну частину, читач
-   * має право це знати, не питаючи.
+   * Перевага — СПОСТЕРЕЖЕНИЙ рух: курс І швидкість, виведені з трейлів цілей (з
+   * відсівом стрибків-ототожнень), а не задекларований у полі курс. Це дає ще й
+   * ETA у хвилинах: «на черзі Полтавщина (~12 хв)», а не просто «Полтавщина».
+   *
+   * Коли руху ще не видно (на початку нальоту трейли короткі) — відкат на курс
+   * із поля джерела (swarm.ts, лише спостережені курси), щоб канал не змовк саме
+   * тоді, коли прогноз найпотрібніший. Обидва мовчать, якщо напрямок невиражений.
    */
-  const waveLine =
-    wave && wave.next.length
-      ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) +
-        (wave.presumed > 0
-          ? ` (за ${wave.count} спостереженими курсами з ${wave.count + wave.presumed})`
-          : "")
-      : null;
+  const now = opts.now ?? Date.now();
+  const observed = swarmForecastFor(threats, now, CITY_REFS, { horizonMin: 40, cityRadiusKm: 55 });
+  let waveLine: string | null = null;
+  if (
+    observed &&
+    observed.tracked >= 3 &&
+    observed.swarm.coherence >= 0.6 &&
+    observed.reach.length
+  ) {
+    waveLine =
+      lex.wave(
+        courseIndex(observed.swarm.bearingDeg) ?? 0,
+        observed.reach.map((r) => lex.eta(r.name, r.etaMin)),
+      ) + ` · за ${observed.tracked} спостереженими треками`;
+  } else {
+    /*
+     * Прогноз називає, на скількох спостережених курсах він стоїть: «далі
+     * Полтавщина» звучить однаково впевнено і за дванадцятьма курсами, і за
+     * трьома з дванадцяти, — а це різні за вагою твердження. Припущені курси в
+     * розрахунок не входять (див. swarmForecast), і коли їх відкинуто помітну
+     * частину, читач має право це знати.
+     */
+    const wave = swarmForecast(threats, CITY_REFS);
+    waveLine =
+      wave && wave.next.length
+        ? lex.wave(courseIndex(wave.heading) ?? 0, wave.next) +
+          (wave.presumed > 0
+            ? ` (за ${wave.count} спостереженими курсами з ${wave.count + wave.presumed})`
+            : "")
+        : null;
+  }
 
   const tags = hashtags(
     ordered.map((g) => g.oblast),
     allTypes,
     lex,
   );
-  const headline = lex.headline(headlineKind(allTypes, shaheds), seed);
+  const headline = lex.headline(headlineKind(allTypes, shaheds), seed, hourKyiv);
   const footer = lex.footer(targets, lex.tail(isRocketish(allTypes) || allTypes.has("kab"), seed));
 
   const text = assemblePost({

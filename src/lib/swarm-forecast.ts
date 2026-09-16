@@ -63,8 +63,17 @@ export interface SwarmForecast {
   tracked: number;
 }
 
-/** Загальний вектор рою + куди він виходить за горизонт. `null`, якщо руху нема. */
-export function swarmForecast(threats: readonly Threat[], now: number): SwarmForecast | null {
+/**
+ * Прогноз рою по заданому переліку орієнтирів. `places` параметром, бо консоль
+ * хоче міста (ALL_PLACES), а канал — обласні центри (грубший, «на черзі область»).
+ * `null`, якщо руху ще не видно.
+ */
+export function swarmForecastFor(
+  threats: readonly Threat[],
+  now: number,
+  places: readonly { name: string; lat: number; lon: number }[],
+  opts: { horizonMin?: number; cityRadiusKm?: number } = {},
+): SwarmForecast | null {
   const confident: { lat: number; lon: number; v: Velocity }[] = [];
   for (const t of threats) {
     const v = observedVelocity(t, now);
@@ -77,8 +86,16 @@ export function swarmForecast(threats: readonly Threat[], now: number): SwarmFor
     lat: confident.reduce((s, c) => s + c.lat, 0) / confident.length,
     lon: confident.reduce((s, c) => s + c.lon, 0) / confident.length,
   };
-  const reach = reachedPlaces(centroid, swarm, ALL_PLACES, { horizonMin: 30 }).slice(0, 3);
+  const reach = reachedPlaces(centroid, swarm, places, {
+    horizonMin: opts.horizonMin ?? 30,
+    ...(opts.cityRadiusKm !== undefined ? { cityRadiusKm: opts.cityRadiusKm } : {}),
+  }).slice(0, 3);
   return { swarm, reach, centroid, tracked: confident.length };
+}
+
+/** Загальний вектор рою + куди він виходить за горизонт. `null`, якщо руху нема. */
+export function swarmForecast(threats: readonly Threat[], now: number): SwarmForecast | null {
+  return swarmForecastFor(threats, now, ALL_PLACES);
 }
 
 /** Спільний вектор підмножини цілей (членів однієї хвилі). */

@@ -1858,7 +1858,9 @@ async function personalCommand(
     const point = named ? { lat: named.lat, lon: named.lon } : sub.point;
     if (!point) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
     const weather = await fetchDroneWeather(point.lat, point.lon);
-    return { text: renderFlightNight({ weather, rhythm: null }) };
+    return {
+      text: renderFlightNight({ weather, rhythm: null, hourKyiv: kyivHour(new Date()) }),
+    };
   }
 
   /*
