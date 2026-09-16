@@ -74,7 +74,7 @@ export default function RaidReplay({ frames, onCursor }: Props) {
       });
 
   return (
-    <div className="pointer-events-auto absolute inset-x-0 bottom-[46px] z-[500] flex items-center gap-2 border-t border-border/70 bg-background/88 px-3 py-1.5 backdrop-blur">
+    <div className="pointer-events-auto flex items-center gap-2 border-t border-border/70 bg-background/88 px-3 py-1.5 backdrop-blur">
       <span className="hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-primary/80 sm:inline">
         Реплей нальоту
       </span>

@@ -286,7 +286,7 @@ export default function PersonalThreatPanel({
         type="button"
         onClick={() => setOpen(true)}
         title="Що загрожує саме моїй точці"
-        className="absolute left-14 top-2 z-[600] flex items-center gap-1.5 rounded border border-cyan-400/40 bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300 hover:border-cyan-400"
+        className="pointer-events-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-cyan-400/40 bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300 hover:border-cyan-400"
       >
         <Crosshair className="size-3.5" /> Я тут
       </button>
@@ -301,7 +301,7 @@ export default function PersonalThreatPanel({
         : "text-emerald-400";
 
   return (
-    <div className="absolute left-14 top-2 z-[600] w-[250px] max-w-[calc(100vw-4rem)] rounded border border-cyan-400/40 bg-background/95 p-2.5 backdrop-blur">
+    <div className="pointer-events-auto w-[250px] max-w-[calc(100vw-5rem)] rounded border border-cyan-400/40 bg-background/95 p-2.5 backdrop-blur">
       <div className="mb-2 flex items-center gap-2">
         <Crosshair className="size-3.5 text-cyan-300" />
         <span className="flex-1 font-mono text-[10px] uppercase tracking-[0.14em] text-cyan-300">

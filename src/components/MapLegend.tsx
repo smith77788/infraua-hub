@@ -47,15 +47,21 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
     return (
       <button
         onClick={() => setOpen(true)}
-        className="absolute bottom-14 left-3 z-[500] flex items-center gap-1.5 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+        className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
       >
         <HelpCircle className="size-3.5" /> Легенда
       </button>
     );
   }
 
+  /*
+   * `max-w-full`, а не частка від екрана: на 320 px під легенду лишалось
+   * 202 px (решту зʼїдають кути з кнопками Leaflet), а «80vw» дозволяло 256 —
+   * і панель заходила просто на перемикач підкладки. Межу задає те місце, куди
+   * панель кладуть, а не здогад про ширину телефона.
+   */
   return (
-    <div className="absolute bottom-14 left-3 z-[500] max-h-[70svh] w-60 overflow-y-auto rounded border border-border bg-background/95 p-3 backdrop-blur">
+    <div className="pointer-events-auto max-h-full w-60 max-w-full overflow-y-auto rounded border border-border bg-background/95 p-3 backdrop-blur">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
           Легенда карти
