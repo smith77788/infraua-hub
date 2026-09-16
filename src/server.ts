@@ -4708,10 +4708,23 @@ export default {
      * Жива мітка збірки. Найдешевший запит у системі й навмисно без кешу:
      * відповідь, яку можна взяти зі сховища, не доводить нічого про сервер.
      */
+    /*
+     * Сюди ж — чи ОЗБРОЄНИЙ сторож конвеєра.
+     *
+     * Перевірка стану конвеєра мовчить, коли не знає, який репозиторій питати.
+     * Мовчазний сторож ззовні не відрізняється від справного — це рівно та
+     * вада, яку він і має ловити. Тому він каже про себе сам, і це видно без
+     * доступу до змінних оточення.
+     */
     if (pathname === "/api/build") {
       const build = currentBuild();
       return new Response(
-        JSON.stringify({ sha: build.sha, short: build.short, source: build.source }),
+        JSON.stringify({
+          sha: build.sha,
+          short: build.short,
+          source: build.source,
+          pipelineRepo: pipelineRepo(),
+        }),
         {
           headers: {
             "content-type": "application/json",
