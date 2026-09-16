@@ -75,6 +75,7 @@ describe("selectFreshCityAlerts (кулдаун)", () => {
     etaMin: 8,
     etaRangeMin: [6, 11],
     distanceKm: 24,
+    missKm: 2,
     uncertaintyKm: 8,
     uncertaintyStated: true,
     count: 2,
@@ -107,6 +108,7 @@ describe("cityAlertCaption", () => {
       etaMin: 8,
       etaRangeMin: [7, 10],
       distanceKm: 24,
+      missKm: 2,
       uncertaintyKm: 6,
       uncertaintyStated: true,
       count: 3,
@@ -180,5 +182,41 @@ describe("cityAlerts — адресний сигнал лише зі спост�
     const alerts = cityAlerts([nearPoltava({ quality: presumed }), nearPoltava()]);
     expect(alerts).toHaveLength(1);
     expect(alerts[0]!.count).toBe(1);
+  });
+});
+
+describe("сигнал розрізняє підліт і проліт повз", () => {
+  const base = {
+    name: "Полтавщина",
+    lat: 49.59,
+    lon: 34.55,
+    etaMin: 8,
+    etaRangeMin: [7, 10] as [number, number],
+    distanceKm: 24,
+    uncertaintyKm: 4,
+    uncertaintyStated: true,
+    count: 1,
+    type: "shahed" as const,
+  };
+
+  it("ціль на місто — «на підльоті»", () => {
+    const text = cityAlertCaption({ ...base, missKm: 2 });
+    expect(text).toContain("на підльоті");
+    expect(text).toContain("Підліт:");
+  });
+
+  it("ціль мине за двадцять кілометрів — не «на підльоті»", () => {
+    // Найгучніший сигнал продукту не можна витрачати на проліт повз: місто,
+    // яке двічі підняли даремно, на третій раз не повірить.
+    const text = cityAlertCaption({ ...base, missKm: 20 });
+    expect(text).not.toContain("на підльоті");
+    expect(text).toContain("проходить поруч");
+    expect(text).toContain("мине приблизно за 20 км");
+  });
+
+  it("межа міста не вважається пролетом повз", () => {
+    // У межах приблизного радіуса міста курс уже не відрізняє центр від
+    // околиці, і казати «мине за 6 км» означало б удавану точність.
+    expect(cityAlertCaption({ ...base, missKm: 6 })).toContain("на підльоті");
   });
 });

@@ -46,6 +46,14 @@ export interface CityAlert {
    */
   etaRangeMin: [number, number];
   distanceKm: number;
+  /**
+   * Наскільки ціль промине місто, км (0 — рівно на нього).
+   *
+   * «Іде на вас» і «пройде за двадцять кілометрів» — різні повідомлення, а
+   * кутовий коридор їх не розрізняв: ті самі 30° на 60 км означають промах у
+   * тридцять кілометрів, а на 10 км — у пʼять.
+   */
+  missKm: number;
   /** Розкид позиції найближчої цілі, км, і чи назвало його джерело. */
   uncertaintyKm: number;
   uncertaintyStated: boolean;
@@ -120,6 +128,7 @@ export function cityAlerts(
           etaMin: h.etaMin,
           etaRangeMin: h.etaRangeMin,
           distanceKm: h.distanceKm,
+          missKm: h.missKm,
           uncertaintyKm: displayRadiusKm(q),
           uncertaintyStated: radiusIsStated(q),
           count: 1,
@@ -134,6 +143,7 @@ export function cityAlerts(
           cur.etaMin = h.etaMin;
           cur.etaRangeMin = h.etaRangeMin;
           cur.distanceKm = h.distanceKm;
+          cur.missKm = h.missKm;
           cur.uncertaintyKm = displayRadiusKm(q);
           cur.uncertaintyStated = radiusIsStated(q);
           cur.type = type;
@@ -184,10 +194,26 @@ export function cityAlertCaption(a: CityAlert): string {
   const spread = a.uncertaintyStated
     ? `позиція ±${a.uncertaintyKm} км за даними джерела`
     : `позиція ±${a.uncertaintyKm} км — джерело розкиду не вказало, це наша стеля`;
+  /*
+   * Заголовок каже, ЩО саме відбувається, а не просто «увага».
+   *
+   * Ціль, яка мине місто за двадцять кілометрів, — це не «на підльоті», і
+   * назвати це однаково означало б витратити найгучніший сигнал продукту на
+   * проліт повз. Поріг у 8 км — приблизно радіус міста: у цих межах курс уже
+   * не відрізняє центр від околиці.
+   */
+  const head =
+    a.missKm <= 8
+      ? `❗️ <b>${a.name}</b> — ціль на підльоті`
+      : `❗️ <b>${a.name}</b> — ціль проходить поруч`;
+  const path =
+    a.missKm <= 8
+      ? `Підліт: <b>${when}</b> · відстань ~${a.distanceKm} км`
+      : `Траверз: <b>${when}</b> · мине приблизно за ${a.missKm} км`;
   return [
-    `❗️ <b>${a.name}</b> — ціль на підльоті`,
+    head,
     "",
-    `Підліт: <b>${when}</b> · відстань ~${a.distanceKm} км`,
+    path,
     `Курсом сюди: <b>${what}</b>`,
     `<i>${spread}</i>`,
     "",
