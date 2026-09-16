@@ -83,12 +83,25 @@ export function circleAlertTargets(
   return out;
 }
 
+/**
+ * Імена екрануються, і це не педантизм.
+ *
+ * Імʼя в колі задає сама людина (`/circle імʼя ...`). Незекранована кутова
+ * дужка ламає HTML, і Telegram відхиляє повідомлення ЦІЛКОМ — тобто звістка
+ * про тривогу в рідних не доходить узагалі. Найгірший наслідок тут не
+ * підроблений текст, а тиша.
+ *
+ * Ця сама вада вже була в `circle.ts` (запис 29 у findings) і повернулась тут
+ * разом із новим модулем — тож межа тепер під тестом.
+ */
+function safe(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export function renderRelativeAlarm(names: readonly string[], oblast: string): string {
-  const who = names.length === 1 ? names[0]! : names.join(", ");
-  return `🔴 <b>Тривога в рідних</b> · ${who} — ${oblast}`;
+  return `🔴 <b>Тривога в рідних</b> · ${names.map(safe).join(", ")} — ${safe(oblast)}`;
 }
 
 export function renderRelativeClear(names: readonly string[], oblast: string): string {
-  const who = names.length === 1 ? names[0]! : names.join(", ");
-  return `🟢 <b>Відбій у рідних</b> · ${who} — ${oblast}`;
+  return `🟢 <b>Відбій у рідних</b> · ${names.map(safe).join(", ")} — ${safe(oblast)}`;
 }

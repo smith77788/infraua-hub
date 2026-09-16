@@ -47,6 +47,22 @@ export function oblastTransitions(
 }
 
 /**
+ * Екранування назв, бо вони приходять ЗЗОВНІ.
+ *
+ * Назва області — не наш рядок: вона розібрана з відповіді джерела офіційних
+ * тривог. Досить одній кутовій дужці потрапити у відповідь — і Telegram
+ * відхилить повідомлення ЦІЛКОМ. Тобто найгірший наслідок тут не підроблений
+ * текст, а тиша саме в тій події, заради якої існує весь бот.
+ *
+ * Назви місць теж проходять через це: вони з нашого довідника, але правило
+ * «усе, що не наша розмітка, — екрануємо» дешевше за розбір, чий саме рядок
+ * тут опинився.
+ */
+function safe(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
  * Текст початку тривоги.
  *
  * Джерело названо в першому рядку навмисно. Людина має за секунду зрозуміти,
@@ -54,9 +70,10 @@ export function oblastTransitions(
  * вона встане.
  */
 export function renderAlertStarted(oblast: string, places: readonly string[]): string {
-  const where = places.length > 1 ? `\nВаші місця в цій області: ${places.join(", ")}` : "";
+  const where =
+    places.length > 1 ? `\nВаші місця в цій області: ${places.map(safe).join(", ")}` : "";
   return [
-    `🔴 <b>Повітряна тривога — ${oblast}</b>`,
+    `🔴 <b>Повітряна тривога — ${safe(oblast)}</b>`,
     "",
     `Оголошено офіційно.${where}`,
     "",
@@ -72,9 +89,9 @@ export function renderAlertStarted(oblast: string, places: readonly string[]): s
  */
 export function renderAlertCleared(oblast: string, durationText: string | null): string {
   return [
-    `🟢 <b>Відбій — ${oblast}</b>`,
+    `🟢 <b>Відбій — ${safe(oblast)}</b>`,
     "",
-    durationText ? `Тривога тривала ${durationText}.` : "Офіційну тривогу знято.",
+    durationText ? `Тривога тривала ${safe(durationText)}.` : "Офіційну тривогу знято.",
     "",
     "<i>Відбій офіційний.</i>",
   ].join("\n");

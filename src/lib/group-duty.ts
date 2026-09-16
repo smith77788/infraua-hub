@@ -72,11 +72,19 @@ const LEVEL_LABEL: Record<GroupLevel, string> = {
   all: "будь-який рух поблизу",
 };
 
+/** Локальне екранування — модуль лишається без залежностей від бота. */
+function escapeDuty(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export function renderDuty(duty: GroupDuty): string {
   return [
     `🛡 <b>Черговий по чату: увімкнено</b>`,
     "",
-    `Точка: <b>${duty.label}</b> · радіус ${duty.radiusKm} км`,
+    // Назва місця з нашого довідника, але правило одне: усе, що не наша
+    // розмітка, — екрануємо. Розбирати щоразу, чий саме це рядок, дорожче за
+    // сам виклик, а ціна помилки — Telegram відхиляє повідомлення цілком.
+    `Точка: <b>${escapeDuty(duty.label)}</b> · радіус ${duty.radiusKm} км`,
     `Попереджати: <b>${LEVEL_LABEL[duty.level]}</b>`,
     "",
     "<code>/duty off</code> — вимкнути · <code>/duty радіус 40</code> · <code>/duty рівень все</code>",
