@@ -22,6 +22,14 @@ import {
   type Threat,
   type ThreatType,
 } from "@/lib/air";
+import {
+  LEVEL_COLOR,
+  LEVEL_LABEL,
+  levelForOblast,
+  raionsOf,
+  reasonsFor,
+  type AlertLevels,
+} from "@/lib/alert-levels";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { UA_OUTLINE } from "@/lib/ua-outline";
 import { UA_OBLASTS } from "@/lib/ua-oblasts";
@@ -56,6 +64,14 @@ interface Props {
   edges: GraphEdge[];
   alerts: AlertRegion[];
   zones: AlertZone[];
+  /**
+   * Рівні тривог по областях і районах. `null` — джерело не відповіло.
+   *
+   * Саме `null`, а не порожній обʼєкт: без рівнів зони малюються як досі,
+   * одним кольором. Пофарбувати їх «спокійними» через мовчання джерела було б
+   * твердженням, якого ми не маємо права робити.
+   */
+  alertLevels?: AlertLevels | null;
   threats: Threat[];
   frontline: FrontlineArea[];
   showFrontline: boolean;
@@ -312,6 +328,22 @@ function AttributionPrefixOff() {
   return null;
 }
 
+/**
+ * Куди можна доїхати зумом.
+ *
+ * `MAX_ZOOM` — межа САМОЇ карти, `maxNativeZoom` — до якого зуму в підкладки
+ * взагалі є плитки. Різниця між ними і є те, чого бракувало: темна підкладка
+ * має плитки лише до 16, і без `maxNativeZoom` Leaflet просто зупиняв зум на
+ * цьому числі. Тобто наблизитись до будинку було неможливо не через дані про
+ * цілі, а через підкладку.
+ *
+ * З `maxNativeZoom` карта наближається далі, розтягуючи останню наявну плитку:
+ * підкладка стає розмитою, а позначка цілі лишається на своєму місці з повною
+ * точністю. Розмита підкладка чесно показує, що детальнішої картинки НЕМАЄ, —
+ * і це краще, ніж упертись у стелю й не побачити нічого.
+ */
+const MAX_ZOOM = 19;
+
 function BaseLayers() {
   return (
     <LayersControl position="topright">
@@ -319,28 +351,32 @@ function BaseLayers() {
         <TileLayer
           attribution="&copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={16}
+          maxNativeZoom={16}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       <LayersControl.BaseLayer name="Супутник">
         <TileLayer
           attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={18}
+          maxNativeZoom={18}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       <LayersControl.BaseLayer name="Гібрид (мітки)">
         <TileLayer
           attribution="Labels &copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={18}
+          maxNativeZoom={18}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       <LayersControl.BaseLayer name="Схема (OSM)">
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
+          maxNativeZoom={19}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       {/*
@@ -354,7 +390,8 @@ function BaseLayers() {
       <LayersControl.Overlay checked name="Межі областей і міста">
         <TileLayer
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={18}
+          maxNativeZoom={18}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.Overlay>
     </LayersControl>
@@ -835,6 +872,7 @@ export default function InfraMap({
   edges,
   alerts,
   zones,
+  alertLevels = null,
   threats,
   frontline,
   showFrontline,
@@ -873,6 +911,7 @@ export default function InfraMap({
       center={[48.6, 31.2]}
       zoom={6}
       minZoom={5}
+      maxZoom={MAX_ZOOM}
       scrollWheelZoom
       className="size-full"
       style={{ background: "#0a0e14" }}
@@ -985,15 +1024,25 @@ export default function InfraMap({
 
       {/* Зони тривог: реальні полігони регіонів, або кола-фолбек */}
       {zones.length > 0
-        ? zones.flatMap((z) =>
-            z.polygons.map((ring, i) => (
+        ? zones.flatMap((z) => {
+            /*
+             * Колір за РІВНЕМ, а не один на всі тривоги. Жовтий і червоний —
+             * це не «слабше/сильніше», а різний запас часу: дрон лишає час
+             * дійти до укриття, ракета — ні. Коли рівня не знаємо, лишається
+             * попередній єдиний колір: вигаданий рівень гірший за його брак.
+             */
+            const level = alertLevels ? levelForOblast(alertLevels, z.region) : null;
+            const color = level ? LEVEL_COLOR[level] : ALERT_EDGE;
+            const reasons = alertLevels ? reasonsFor(alertLevels, z.region) : [];
+            const raions = alertLevels ? raionsOf(alertLevels, z.region) : [];
+            return z.polygons.map((ring, i) => (
               <Polygon
                 key={`zone-${z.region}-${i}`}
                 positions={ring}
                 pathOptions={{
-                  color: ALERT_EDGE,
-                  fillColor: ALERT_EDGE,
-                  fillOpacity: 0.05,
+                  color,
+                  fillColor: color,
+                  fillOpacity: level === "red" ? 0.1 : 0.05,
                   weight: 1.2,
                   // Пунктир — стан, що минає. Суцільна лінія нижче належить
                   // території, яку тримають місяцями.
@@ -1002,14 +1051,26 @@ export default function InfraMap({
               >
                 <Popup>
                   <div className="space-y-1 font-sans text-xs">
-                    <p className="font-semibold text-red-600">Повітряна тривога</p>
+                    <p className="font-semibold" style={{ color }}>
+                      Повітряна тривога
+                      {level ? ` · ${LEVEL_LABEL[level]}` : ""}
+                    </p>
                     <p className="opacity-80">{z.region}</p>
-                    {z.type ? <p className="opacity-60">{z.type}</p> : null}
+                    {/* Причина головніша за колір: вона й каже, що робити. */}
+                    {reasons.map((r) => (
+                      <p key={r} className="opacity-70">
+                        {r}
+                      </p>
+                    ))}
+                    {raions.length > 0 ? (
+                      <p className="opacity-60">Райони: {raions.map((a) => a.name).join(", ")}</p>
+                    ) : null}
+                    {z.type && reasons.length === 0 ? <p className="opacity-60">{z.type}</p> : null}
                   </div>
                 </Popup>
               </Polygon>
-            )),
-          )
+            ));
+          })
         : alerts
             .filter((r) => r.active)
             .map((r) => (

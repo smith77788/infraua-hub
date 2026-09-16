@@ -65,6 +65,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getAlerts,
+  getAlertLevels,
   getAlertZones,
   getEvents,
   getFacilities,
@@ -325,6 +326,19 @@ function Console() {
   const [pushState, setPushState] = useState<
     { status: "idle" | "sending" } | { status: "done"; text: string; ok: boolean }
   >({ status: "idle" });
+
+  /*
+   * Рівні тривог — окремим запитом від зон: зони дають геометрію, рівні —
+   * зміст. Темп той самий, бо разом вони й малюють одну картину.
+   */
+  const levelsFn = useServerFn(getAlertLevels);
+  const levelsQuery = useQuery({
+    queryKey: ["alert-levels"],
+    queryFn: () => levelsFn(),
+    staleTime: 45 * 1000,
+    refetchInterval: 45 * 1000,
+  });
+  const alertLevels = levelsQuery.data?.levels ?? null;
 
   const zonesFn = useServerFn(getAlertZones);
   const zonesQuery = useQuery({
@@ -1431,6 +1445,7 @@ function Console() {
                     edges={edges}
                     alerts={regions}
                     zones={zones}
+                    alertLevels={alertLevels}
                     threats={mapThreats}
                     frontline={frontline}
                     showFrontline={showFrontline}

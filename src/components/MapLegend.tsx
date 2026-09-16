@@ -1,5 +1,6 @@
 import { useState } from "react";
 import CollapsiblePanel from "./CollapsiblePanel";
+import { LEVEL_COLOR } from "@/lib/alert-levels";
 import { HelpCircle, X } from "lucide-react";
 
 /*
@@ -119,9 +120,22 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         <div className="flex items-center gap-2">
           <Swatch color="#ff3b30" shape="dot" /> Пожежі (FIRMS, за FRP)
         </div>
+        {/*
+          Два рівні тривоги — не «слабше/сильніше», а різний ЗАПАС ЧАСУ, і саме
+          так вони й підписані. Колір сам по собі цього не каже, а людині під
+          тривогою треба знати не колір, а чи встигне вона дійти.
+        */}
         <div className="flex items-center gap-2">
-          <Swatch color="#ff4d4d" shape="line" /> Зони повітряної тривоги (пунктир)
+          <Swatch color={LEVEL_COLOR.red} shape="line" /> Тривога, червоний рівень — ракетна
+          загроза: часу дійти може не бути
         </div>
+        <div className="flex items-center gap-2">
+          <Swatch color={LEVEL_COLOR.yellow} shape="line" /> Тривога, жовтий рівень — переважно
+          дронова: час дійти до укриття є
+        </div>
+        <p className="pl-1 text-[10px] leading-snug opacity-60">
+          Рівень і причину дає джерело тривог; де воно рівня не дало, зона лишається одного кольору.
+        </p>
         {showInfra ? (
           <>
             <div className="flex items-center gap-2">

@@ -19,6 +19,7 @@ import {
   type ThreatType,
   type WeatherNow,
 } from "./air";
+import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { readQuality } from "./threat-quality";
 import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
@@ -1383,6 +1384,36 @@ function ringToLatLon(ring: number[][]): [number, number][] {
   }
   return out;
 }
+
+/**
+ * Рівні тривог: жовтий і червоний, плюс розріз по районах.
+ *
+ * Окремим джерелом від `getAlertZones`, і це не дубль: зони дають ГЕОМЕТРІЮ
+ * (де саме межа регіону), а це джерело — ЗМІСТ (який рівень і чому). Наше
+ * основне джерело тривог уміє лише «так/ні» на цілу область, тож «дронова
+ * загроза» і «ракетна загроза» виглядали однаково — а це різні дії й різний
+ * запас часу.
+ *
+ * Помилка джерела дає `null`, а не порожній перелік: порожній фарбує карту в
+ * спокій, тобто СТВЕРДЖУЄ, що ніде не тривожно.
+ */
+const ALERT_LEVELS_ENDPOINT = "https://neptun.in.ua/api/v1/alerts";
+
+export const getAlertLevels = createServerFn({ method: "GET" }).handler(
+  async (): Promise<{ levels: AlertLevels | null; fetchedAt: number }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(ALERT_LEVELS_ENDPOINT, { signal: controller.signal });
+      if (!res.ok) return { levels: null, fetchedAt: Date.now() };
+      return { levels: parseAlertLevels(await res.json()), fetchedAt: Date.now() };
+    } catch {
+      return { levels: null, fetchedAt: Date.now() };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
 
 export const getAlertZones = createServerFn({ method: "GET" }).handler(async () => {
   const controller = new AbortController();
