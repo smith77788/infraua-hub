@@ -17,9 +17,9 @@
 
 import type { DangerIndex, DangerLevel, PersonalAssessment } from "./advisory";
 import type { ThreatType } from "./air";
-import type { SavedPlace } from "./saved-places";
-import type { Diary } from "./diary";
 import { kyivHour } from "./kyiv";
+import type { MyPlace, PlaceAlertState } from "./places-mine";
+import type { PersonalStats } from "./personal-stats";
 
 /** На що будити. Порядок — від найвужчого до найширшого. */
 export type AlertTier = "critical" | "inbound" | "all";
@@ -36,8 +36,34 @@ export interface SubscriberPoint {
 
 export interface Subscriber {
   chatId: number;
-  /** `null` — людина написала боту, але точку ще не дала. */
+  /**
+   * Головна точка людини.
+   *
+   * Лишається окремим полем попри появу `places`: усе, що стосується самої
+   * людини (її радіус, її нічний режим, її відбій), рахується звідси, а
+   * перехід на кілька місць не має ламати тих, хто вже задав одну точку.
+   * Синхронізується з головним місцем — див. `places-mine.ts`.
+   */
   point: SubscriberPoint | null;
+  /**
+   * Місця, за які людина хвилюється: дім, робота, батьки, школа.
+   *
+   * Найбільша прогалина продукту до цього: радар знав ОДНУ координату, а
+   * людина не живе в одній. Питання «а там як?» — про батьків в іншому місті
+   * — будило найчастіше, і відповісти на нього було нічим.
+   */
+  places?: MyPlace[];
+  /** Коли востаннє казали про кожне місце — щоб стеження не стало потоком. */
+  placeAlerts?: PlaceAlertState;
+  /**
+   * Особиста статистика по місяцях: скільки тривог, скільки годин, на скільки
+   * випередили сирену. Обіцянку неможливо оскаржити — заміряне число можна.
+   */
+  stats?: PersonalStats;
+  /** Початок поточної безперервної тривоги — щоб рахувати найдовшу. */
+  alarmSince?: number | null;
+  /** Коли востаннє дорахували хвилини тривоги, щоб приріст був чесним. */
+  alarmCountedAt?: number | null;
   radiusKm: number;
   tier: AlertTier;
   night: NightMode;
@@ -78,22 +104,12 @@ export interface Subscriber {
    */
   liveUntil?: number | null;
   /**
-   * Місця людини: дім, робота, батьки.
-   *
-   * `point` лишається головним місцем — весь код, що вміє «точку людини»,
-   * продовжує працювати без змін. Тут — решта, заради яких радар перестає
-   * мовчати про все, що поза однією точкою.
-   */
-  places?: SavedPlace[];
-  /**
    * Офіційні тривоги в областях моїх місць.
    *
    * Окремий вимикач від наших оцінок навмисно: це різні класи повідомлення.
    * Людина може не хотіти наших попереджень і хотіти офіційних тривог.
    */
   officialAlerts?: boolean;
-  /** Щоденник тривог — те, чим діляться. */
-  diary?: Diary;
   /** Коли востаннє надсилали тижневий підсумок (київська доба). */
   weeklySentAt?: string | null;
 }
@@ -158,30 +174,6 @@ export function newSubscriber(chatId: number, at: string, ref: string | null = n
     officialAlerts: true,
     weeklySentAt: null,
   };
-}
-
-/**
- * Усі місця людини як єдиний перелік.
- *
- * Стара точка (`point`) і нові місця (`places`) — та сама сутність, записана в
- * різні часи. Тут вони зводяться в одне, щоб решта коду не думала про
- * переходовий період: людина, яка задала точку рік тому, має бути прикрита так
- * само, як та, що вчора додала «дім» і «роботу».
- */
-export function allPlaces(sub: Subscriber): SavedPlace[] {
-  const saved = sub.places ?? [];
-  if (saved.length > 0) return saved;
-  if (!sub.point) return [];
-  return [
-    {
-      id: "main",
-      label: sub.point.label,
-      lat: sub.point.lat,
-      lon: sub.point.lon,
-      radiusKm: sub.radiusKm,
-      primary: true,
-    },
-  ];
 }
 
 /** Година за Києвом живе в `kyiv.ts` — її ділять і бот, і канал. */

@@ -39,6 +39,32 @@ import {
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
+import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
+import {
+  recordAlarmMinutes,
+  recordAlarmStart,
+  recordAlert,
+  recordLead,
+  renderStats,
+  summarizeMonth,
+  summarizeWeek,
+  weeklyDue,
+} from "./lib/personal-stats";
+import {
+  addPlace,
+  decidePlaceAlert,
+  markPlaceAlerted,
+  placesFromLegacy,
+  primaryPlace,
+  removePlace,
+  renderPlaceAlert,
+  renderPlaces,
+  validatePlaceName,
+  parsePlaceTail,
+  placeRadiusKm,
+  MAX_PLACES,
+  type MyPlace,
+} from "./lib/places-mine";
 import { publicOrigin } from "./lib/request-origin";
 import type { Threat, ThreatType } from "./lib/air";
 import type { AirSnapshot } from "./lib/channel-post";
@@ -87,15 +113,6 @@ import {
 import { formatDuration, kyivDate, kyivHour } from "./lib/kyiv";
 import { cityAlertCaption, cityAlerts, selectFreshCityAlerts } from "./lib/city-alert";
 import { oblastKeyboard, parsePickerAction } from "./lib/oblast-picker";
-import {
-  addPlace,
-  MAX_PLACES,
-  parsePlaceArgs,
-  placeId,
-  removePlace,
-  renderPlaces,
-  type SavedPlace,
-} from "./lib/saved-places";
 import { buildRoute, renderRoute, type RoutePoint } from "./lib/route";
 import {
   newGroupDuty,
@@ -114,7 +131,7 @@ import {
   renderAlertStarted,
   updateAlertStarts,
 } from "./lib/oblast-watch";
-import { allPlaces, CRITICAL_TYPES, isNight } from "./lib/subscribers";
+import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
 import { circleAlertTargets, renderRelativeAlarm, renderRelativeClear } from "./lib/circle-alerts";
 import {
   detectCarrier,
@@ -123,13 +140,6 @@ import {
   type CarrierWarning,
 } from "./lib/carriers";
 import { renderAdvice, worstAdvice } from "./lib/safety-advice";
-import {
-  recordEvent,
-  emptyDiary,
-  totals as diaryTotals,
-  renderSummary,
-  weeklyDue,
-} from "./lib/diary";
 import {
   buildBackup,
   mergeCircles,
@@ -1647,6 +1657,12 @@ async function personalCommand(
     "my",
     "shelter",
     "укриття",
+    "place",
+    "місця",
+    "місце",
+    "month",
+    "місяць",
+    "статистика",
     "сховатись",
     "radar",
     "me",
@@ -1660,8 +1676,10 @@ async function personalCommand(
     "place",
     "місце",
     "places",
-    "diary",
-    "щоденник",
+    "місця",
+    "month",
+    "місяць",
+    "статистика",
     "route",
     "дорога",
   ]);
@@ -1752,6 +1770,80 @@ async function personalCommand(
     return "handled";
   }
 
+  /*
+   * Мої місця — найбільша прогалина, яку закриває ця команда.
+   *
+   * Радар знав ОДНУ координату, а людина не живе в одній: дім, робота, батьки
+   * в іншому місті, школа дитини. Питання «а там як?» будило найчастіше, і
+   * відповісти на нього було нічим.
+   */
+  if (command === "place" || command === "місця" || command === "місце") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const places = placesFromLegacy(sub.point, sub.places, Date.now());
+    const [verb = "", ...rest] = args.trim().split(/\s+/);
+    const tail = rest.join(" ").trim();
+
+    if (verb === "прибрати" || verb === "видалити" || verb === "remove") {
+      const r = removePlace(places, tail);
+      if (!r.removed) return { text: `Місця «${escapeHtml(tail)}» немає. Перелік: /place` };
+      // Головне місце могло щойно зникнути — `point` має піти за новим, інакше
+      // весь код, що вміє «точку людини», лишиться при видаленій координаті.
+      await putSubscriber(syncPrimary({ ...sub, places: r.places }), true);
+      return { text: `Прибрано: <b>${escapeHtml(r.removed.title)}</b>` };
+    }
+
+    if (verb && verb !== "перелік" && verb !== "list") {
+      // `/place мама Харків` — назва, далі місто, за бажанням радіус.
+      const name = validatePlaceName(verb);
+      if (!name.ok) return { text: name.error ?? "Не зрозумів назву." };
+      if (!tail) {
+        return {
+          text: `Скажіть, де це: <code>/place ${escapeHtml(name.value)} Харків</code>`,
+        };
+      }
+      const { query, radiusKm } = parsePlaceTail(tail);
+      const found = matchPlace(query);
+      if (!found) {
+        return { text: `Не впізнав «${escapeHtml(query)}». Напишіть місто або область.` };
+      }
+      const r = addPlace(
+        places,
+        {
+          title: name.value,
+          lat: found.lat,
+          lon: found.lon,
+          label: found.name,
+          ...(radiusKm !== undefined ? { radiusKm } : {}),
+        },
+        Date.now(),
+      );
+      if (r.error) return { text: r.error };
+      await putSubscriber(syncPrimary({ ...sub, places: r.places }), true);
+      return {
+        text: [
+          `${r.replaced ? "Оновлено" : "Додано"}: <b>${escapeHtml(name.value)}</b> — ${escapeHtml(found.name)}` +
+            (radiusKm !== undefined ? ` · радіус ${radiusKm} км` : ""),
+          "",
+          `Стежу за ${r.places.length} з ${MAX_PLACES} місць. Перелік: /place`,
+        ].join("\n"),
+      };
+    }
+
+    return { text: renderPlaces(places) };
+  }
+
+  /*
+   * Особиста статистика окремою командою, а не всередині `/my`.
+   *
+   * `/my` відповідає на «що зараз» — це те, заради чого бота відкривають під
+   * тривогою, і домішувати туди місячні підсумки означало б відсунути
+   * терміновe заради цікавого.
+   */
+  if (command === "month" || command === "місяць" || command === "статистика") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    return { text: renderStats(summarizeMonth(sub.stats, Date.now())) };
+  }
+
   if (command === "settings" || command === "налаштування") {
     const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
     return { text: renderSettings(sub), keyboard: settingsKeyboard(sub) };
@@ -1767,60 +1859,6 @@ async function personalCommand(
         "Налаштування й точка збережені — /my вмикає назад одним дотиком.",
       ].join("\n"),
     };
-  }
-
-  // Кілька місць: дім, робота, батьки. Радар з однією точкою мовчить про все,
-  // що поза нею, — і мовчить непомітно.
-  if (command === "place" || command === "місце" || command === "places") {
-    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
-    const places = sub.places ?? [];
-    const raw = args.trim();
-
-    if (raw.startsWith("-")) {
-      const id = placeId(raw.slice(1));
-      const next = removePlace(places, id);
-      await putSubscriber(syncPrimary({ ...sub, places: next }), true);
-      return { text: renderPlaces(next) };
-    }
-
-    const parsed = parsePlaceArgs(raw);
-    if (!parsed) return { text: renderPlaces(places) };
-
-    const found = await findPlacePoint(parsed.query);
-    if (!found) {
-      return {
-        text: `Не знайшов «${escapeHtml(parsed.query)}». Спробуйте назву міста або області.`,
-      };
-    }
-    const place: SavedPlace = {
-      id: placeId(parsed.label),
-      label: parsed.label,
-      lat: found.lat,
-      lon: found.lon,
-      radiusKm: sub.radiusKm,
-      primary: false,
-    };
-    const result = addPlace(places, place);
-    if (result.outcome === "full") {
-      return {
-        text: `Більше за ${MAX_PLACES} місць — це вже не турбота, а шум. Приберіть зайве: <code>/place -назва</code>`,
-      };
-    }
-    await putSubscriber(syncPrimary({ ...sub, places: result.places }), true);
-    return {
-      text:
-        `✅ ${result.outcome === "replaced" ? "Оновлено" : "Додано"}: <b>${escapeHtml(parsed.label)}</b> — ${escapeHtml(found.label)}\n\n` +
-        renderPlaces(result.places),
-    };
-  }
-
-  // Щоденник: скільки це вже триває особисто для вас.
-  if (command === "diary" || command === "щоденник") {
-    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
-    const diary = sub.diary;
-    if (!diary) return { text: "Щоденник ще порожній — рахувати нема чого." };
-    const text = renderSummary(diaryTotals(diary), "Ваш місяць");
-    return { text: text ?? "За останній місяць ані тривог, ані попереджень. Хай так і буде." };
   }
 
   // Дорога: що чекає між пунктом А і Б. Питання, якого не ставив ніхто.
@@ -2220,13 +2258,12 @@ async function findPlacePoint(query: string): Promise<RoutePoint | null> {
  * працює без змін, і його не треба переписувати заради нової можливості.
  */
 function syncPrimary(sub: Subscriber): Subscriber {
-  const places = sub.places ?? [];
-  const main = places.find((p) => p.primary) ?? places[0];
+  const main = primaryPlace(sub.places ?? []);
   if (!main) return sub;
   return {
     ...sub,
     point: { lat: main.lat, lon: main.lon, label: main.label },
-    radiusKm: main.radiusKm,
+    radiusKm: placeRadiusKm(main, sub.radiusKm),
   };
 }
 
@@ -2401,12 +2438,14 @@ async function officialAlertSweep(): Promise<void> {
   if (transitions.length === 0) return;
 
   const subs = await allSubscribers();
-  const queue: Envelope<{ chatId: number; text: string; diary: DiaryHook | null }>[] = [];
+  const queue: Envelope<{ chatId: number; text: string; stats: StatsHook | null }>[] = [];
 
   // Коло рідних: хто за ким стежить і в яких вони областях.
   const circleMembers = new Map<string, { chatId: number; name: string; oblasts: string[] }[]>();
   for (const sub of subs) {
-    const oblasts = [...new Set(allPlaces(sub).map((p) => oblastOf(p.lat, p.lon)))];
+    const oblasts = [
+      ...new Set(placesFromLegacy(sub.point, sub.places, now).map((p) => oblastOf(p.lat, p.lon))),
+    ];
     if (sub.circle) {
       const list = circleMembers.get(sub.circle) ?? [];
       list.push({ chatId: sub.chatId, name: sub.displayName ?? "Хтось", oblasts });
@@ -2417,7 +2456,9 @@ async function officialAlertSweep(): Promise<void> {
   for (const t of transitions) {
     for (const sub of subs) {
       if (sub.muted || sub.officialAlerts === false) continue;
-      const mine = allPlaces(sub).filter((p) => oblastOf(p.lat, p.lon) === t.oblast);
+      const mine = placesFromLegacy(sub.point, sub.places, now).filter(
+        (p) => oblastOf(p.lat, p.lon) === t.oblast,
+      );
       if (mine.length === 0) continue;
       const text =
         t.kind === "started"
@@ -2439,10 +2480,21 @@ async function officialAlertSweep(): Promise<void> {
         payload: {
           chatId: sub.chatId,
           text,
-          diary:
-            t.kind === "cleared" && startsBefore.has(t.oblast)
-              ? { sub, minutes: (now - startsBefore.get(t.oblast)!) / 60_000 }
-              : null,
+          /*
+           * Статистика пишеться лише за фактом ДОСТАВКИ: порахувати тривогу
+           * тій, кому повідомлення не дійшло, означало б показати їй у
+           * підсумку місяця чужий місяць.
+           */
+          stats:
+            t.kind === "started"
+              ? { sub, kind: "started" as const, minutes: 0 }
+              : startsBefore.has(t.oblast)
+                ? {
+                    sub,
+                    kind: "cleared" as const,
+                    minutes: (now - startsBefore.get(t.oblast)!) / 60_000,
+                  }
+                : null,
         },
       });
     }
@@ -2460,7 +2512,8 @@ async function officialAlertSweep(): Promise<void> {
               t.kind === "started"
                 ? renderRelativeAlarm([target.aboutName], t.oblast)
                 : renderRelativeClear([target.aboutName], t.oblast),
-            diary: null,
+            // Тривога в чужій області — не подія власного місяця людини.
+            stats: null,
           },
         });
       }
@@ -2477,9 +2530,25 @@ async function officialAlertSweep(): Promise<void> {
         undefined,
         true,
       );
-      const hook = envelope.payload.diary;
+      const hook = envelope.payload.stats;
       if (res.ok && hook) {
-        await putSubscriber(noteDiary(hook.sub, { kind: "alarm", minutes: hook.minutes }, now));
+        /*
+         * Тривалість пишеться за фактом ВІДБОЮ, а сама тривога — за фактом
+         * початку. Рахувати «скільки вже триває» щотика означало б записати ту
+         * саму тривогу десятки разів; чекати відбою, щоб її порахувати, —
+         * втратити ті, що тривають досі.
+         *
+         * Читаємо підписника свіжим: черга розтягнута в часі, і за цей час
+         * людину могло зачепити власне попередження.
+         */
+        const fresh = (await getSubscriber(hook.sub.chatId)) ?? hook.sub;
+        await putSubscriber({
+          ...fresh,
+          stats:
+            hook.kind === "started"
+              ? recordAlarmStart(fresh.stats, now)
+              : recordAlarmMinutes(fresh.stats, hook.minutes, hook.minutes, now),
+        });
       }
       return {
         ok: res.ok,
@@ -2491,20 +2560,11 @@ async function officialAlertSweep(): Promise<void> {
   );
 }
 
-interface DiaryHook {
+interface StatsHook {
   sub: Subscriber;
+  /** `started` — рахуємо саму тривогу; `cleared` — її тривалість. */
+  kind: "started" | "cleared";
   minutes: number;
-}
-
-/** Записує подію у щоденник людини — те, з чого потім складається підсумок. */
-function noteDiary(
-  sub: Subscriber,
-  event: Parameters<typeof recordEvent>[1],
-  now: number,
-): Subscriber {
-  const at = new Date(now);
-  const diary = sub.diary ?? emptyDiary(at);
-  return { ...sub, diary: recordEvent(diary, { ...event, night: isNight(kyivHour(at)) }, at) };
 }
 
 /* ─── Зліт носіїв: попередження за десять хвилин до пізно ───────────────── */
@@ -2530,7 +2590,9 @@ async function carrierSweep(threats: readonly Threat[], now: number): Promise<vo
   lastCarrier = found;
 
   const text = renderCarrierWarning(found);
-  const subs = (await allSubscribers()).filter((s) => !s.muted && allPlaces(s).length > 0);
+  const subs = (await allSubscribers()).filter(
+    (s) => !s.muted && placesFromLegacy(s.point, s.places, Date.now()).length > 0,
+  );
   const queue: Envelope<{ chatId: number }>[] = subs.map((sub) => ({
     chatId: sub.chatId,
     priority: Priority.Attention,
@@ -2592,9 +2654,12 @@ interface AlertPayload {
   sub: Subscriber;
   text: string;
   keyboard: unknown;
-  decision: ReturnType<typeof decideAlert>;
+  /** `null` — це сповіщення про ЧУЖЕ місце, і власний стан людини воно не чіпає. */
+  decision: ReturnType<typeof decideAlert> | null;
   pre: boolean;
   oblast: string;
+  /** Заповнене лише для другорядних місць — тоді записуємо кулдаун по місцю. */
+  place?: MyPlace;
 }
 
 const LEVEL_PRIORITY: Record<string, Priority> = {
@@ -2714,6 +2779,12 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     // звітує заміряним числом, а не обіцянкою.
     if (phase === "official" && sub.preAlert && sub.preAlert.oblast === oblast) {
       const lead = leadMinutes(sub.preAlert.at, now);
+      /*
+       * Заміряне випередження лягає в особисту статистику ОДРАЗУ, а не після
+       * доставки: сам вимір відбувся тут, і втратити його через недоставлене
+       * повідомлення означало б занизити власний звіт на користь собі.
+       */
+      await putSubscriber({ ...sub, stats: recordLead(sub.stats, lead, now) });
       queue.push({
         chatId: sub.chatId,
         priority: Priority.Routine,
@@ -2727,6 +2798,61 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
           oblast,
         },
       });
+      continue;
+    }
+
+    /*
+     * Хвилини під тривогою рахуються тут, бо саме тут відома фаза для точки
+     * людини. Приріст береться з годинника, а не зі сталого кроку планувальника:
+     * тик смикають і зовнішній крон, і рестарти, а стеля в 15 хвилин обрізає
+     * прогалину після перезапуску.
+     */
+    const underAlarm = phase === "official";
+    if (underAlarm) {
+      const since = sub.alarmSince ?? now;
+      const countedAt = sub.alarmCountedAt ?? now;
+      const add = Math.min((now - countedAt) / 60_000, 15);
+      const run = (now - since) / 60_000;
+      await putSubscriber({
+        ...sub,
+        alarmSince: since,
+        alarmCountedAt: now,
+        stats: recordAlarmMinutes(sub.stats, add, run, now),
+      });
+    } else if (sub.alarmSince) {
+      /*
+       * Тривога скінчилась. Це єдине місце, де можна сказати «можна виходити»,
+       * і воно чекає саме на ОФІЦІЙНЕ скасування: `phase` рахується з даних
+       * Повітряних Сил, а не з нашої картини неба. Порожньо в OSINT означає
+       * лише, що ніхто нічого не бачить.
+       */
+      const clear = decideAllClear({
+        officialActive: false,
+        alarmSince: sub.alarmSince,
+        // Турбували ми людину за цю тривогу чи ні — видно з часу останнього
+        // сповіщення: якщо воно було вже після початку тривоги, значить так.
+        wasAlerted: sub.lastAlertAt >= sub.alarmSince,
+        now,
+      });
+      await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null });
+      if (clear.send) {
+        const summary = summarizeMonth(sub.stats, now);
+        queue.push({
+          chatId: sub.chatId,
+          priority: Priority.Routine,
+          expiresAt: now + USEFUL_WINDOW_MS,
+          payload: {
+            sub,
+            text: renderPersonalAllClear(clear.durationMin, {
+              longestThisMonth: (summary?.longestAlarmMin ?? 0) <= clear.durationMin,
+            }),
+            keyboard: undefined,
+            decision: null,
+            pre: false,
+            oblast,
+          },
+        });
+      }
       continue;
     }
 
@@ -2767,19 +2893,73 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     });
   }
 
+  /*
+   * Другорядні місця — окремим проходом і за суворішим правилом.
+   *
+   * Про власну точку людина може діяти на будь-якому рівні. Про дім батьків за
+   * триста кілометрів вона не може зробити нічого, крім як хвилюватись, тож
+   * «підвищена готовність» там — чиста тривога без дії. Кажемо лише про
+   * серйозне й не частіше разу на двадцять хвилин.
+   */
+  for (const raw of subs) {
+    const places = placesFromLegacy(raw.point, raw.places, now);
+    const primary = primaryPlace(places);
+    for (const place of places) {
+      if (primary && place.title === primary.title) continue; // про себе вже сказали вище
+      // Радіус місця, а не людини: навколо дачі поле, навколо дому — місто.
+      const pAssess = personalAssessment(threats, place, {
+        radiusKm: placeRadiusKm(place, raw.radiusKm),
+        motionOf,
+      });
+      const pDanger = dangerIndex(pAssess);
+      const pDecision = decidePlaceAlert(place, pDanger.level, raw.placeAlerts, now);
+      if (!pDecision.send) continue;
+      queue.push({
+        chatId: raw.chatId,
+        priority: Priority.Watch,
+        expiresAt: now + USEFUL_WINDOW_MS,
+        payload: {
+          sub: raw,
+          text: renderPlaceAlert(place, pDanger.verdict, pDanger.caveat),
+          keyboard: undefined,
+          decision: null,
+          pre: false,
+          oblast: oblastOf(place.lat, place.lon),
+          place,
+        },
+      });
+    }
+  }
+
   const report = await deliver(
     queue,
     async (envelope) => {
-      const { sub, text, keyboard, decision, pre, oblast } = envelope.payload;
+      const { sub, text, keyboard, decision, pre, oblast, place } = envelope.payload;
       const res = await telegramSend(token, sub.chatId, text, keyboard, true);
       if (res.ok) {
         const at = Date.now();
-        const marked = noteDiary(
-          markAlerted(sub, decision, at),
-          { kind: "alert", shelter: decision.level === "shelter" },
-          at,
-        );
-        await putSubscriber(pre ? { ...marked, preAlert: { at, oblast } } : marked);
+        if (place) {
+          /*
+           * Сповіщення про ЧУЖЕ місце не чіпає власного стану людини: інакше
+           * звістка про Харків зарахувалась би як «ми вже попередили» і
+           * з'їла б її власне попередження за кілька хвилин по тому.
+           */
+          const fresh = (await getSubscriber(sub.chatId)) ?? sub;
+          await putSubscriber({
+            ...fresh,
+            placeAlerts: markPlaceAlerted(fresh.placeAlerts, place, at),
+          });
+        } else if (decision) {
+          const marked = markAlerted(
+            {
+              ...sub,
+              stats: recordAlert(sub.stats, at, { shelter: decision.level === "shelter" }),
+            },
+            decision,
+            at,
+          );
+          await putSubscriber(pre ? { ...marked, preAlert: { at, oblast } } : marked);
+        }
       } else if (res.status === 403) {
         // Бота заблокували або видалили чат. Далі слати — марно витрачати
         // бюджет, потрібний тим, хто чекає.
@@ -3074,10 +3254,13 @@ async function maybeWeeklySummary(token: string, now: number): Promise<void> {
   const subs = await allSubscribers();
   const queue: Envelope<{ chatId: number; text: string; sub: Subscriber }>[] = [];
   for (const sub of subs) {
-    if (sub.muted || !sub.diary) continue;
+    if (sub.muted || !sub.stats) continue;
     if (!weeklyDue(at, sub.weeklySentAt ?? null, hour)) continue;
-    const text = renderSummary(diaryTotals(sub.diary, 7), "Ваш тиждень");
-    if (!text) continue;
+    const summary = summarizeWeek(sub.stats, now);
+    // Порожній підсумок («0 тривог за 0 днів») — це не скромність, а
+    // повідомлення без змісту: такого не шлемо взагалі.
+    if (!summary || (summary.alerts === 0 && summary.alarms === 0)) continue;
+    const text = renderStats(summary);
     queue.push({
       chatId: sub.chatId,
       // Найнижчий пріоритет із можливих: підсумок ніколи не має займати
