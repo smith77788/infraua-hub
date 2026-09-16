@@ -202,6 +202,20 @@ export class AirActivityStore {
     return out.slice(0, limit);
   }
 
+  /**
+   * Raw buckets for the hourly-calm profile.
+   *
+   * Exposed as plain data rather than a computed profile so the reasoning about
+   * what "calm" means lives with the consumer: the console renders it for a
+   * person, and that judgement belongs next to the wording, not in storage.
+   */
+  buckets(sinceMs?: number): { at: number; targets: number }[] {
+    const from = sinceMs ?? 0;
+    return this.observations
+      .filter((o) => o.t >= from)
+      .map((o) => ({ at: o.t, targets: o.count }));
+  }
+
   size(): number {
     return this.observations.length;
   }

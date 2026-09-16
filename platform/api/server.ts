@@ -548,6 +548,19 @@ app.get('/api/platform/air/anomalies', (_req, res) => {
   res.json({ ...airActivity.surge(), regions: airActivity.regionSurges() });
 });
 
+/**
+ * Raw activity buckets for the hourly-calm profile.
+ *
+ * Returns data, not a verdict: what counts as "calm" is a judgement that
+ * belongs next to the wording shown to a person, not in the store.
+ */
+app.get('/api/platform/air/buckets', (req, res) => {
+  const days = Number(req.query['days'] ?? 30);
+  const window = Number.isFinite(days) && days > 0 ? Math.min(days, 90) : 30;
+  const since = Date.now() - window * 24 * 60 * 60 * 1000;
+  res.json({ buckets: airActivity.buckets(since), windowDays: window });
+});
+
 /** Accepts the console's [{region,count}] array or a {region:count} map. */
 function parseRegions(raw: unknown): Record<string, number> | undefined {
   if (Array.isArray(raw)) {

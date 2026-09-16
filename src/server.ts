@@ -40,6 +40,7 @@ import {
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
+import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import {
   recordAlarmMinutes,
   recordAlert,
@@ -1630,6 +1631,9 @@ async function personalCommand(
     "month",
     "місяць",
     "статистика",
+    "calm",
+    "тихо",
+    "сон",
     "сховатись",
     "radar",
     "me",
@@ -1783,6 +1787,27 @@ async function personalCommand(
   if (command === "month" || command === "місяць" || command === "статистика") {
     const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
     return { text: renderStats(summarizeMonth(sub.stats, Date.now())) };
+  }
+
+  /*
+   * «Коли історично тихіше» — питання, яке людина ставить собі щовечора третій
+   * рік поспіль: лягати зараз чи все одно піднімуть.
+   *
+   * Дані беремо з платформи (там накопичення переживає перезапуски), а
+   * судження про те, що вважати спокоєм, лишається тут — поруч із текстом, який
+   * читає людина.
+   */
+  if (command === "calm" || command === "тихо" || command === "сон") {
+    const { platformFetch } = await import("./lib/platform-client");
+    const res = await platformFetch("/api/platform/air/buckets?days=30");
+    if (!res.ok) {
+      return {
+        text: "Історію активності зараз не дістати — спробуйте трохи пізніше.",
+      };
+    }
+    const body = res.body as { buckets?: { at: number; targets: number }[] } | null;
+    const profile = buildCalmProfile(body?.buckets ?? []);
+    return { text: renderCalmHours(profile) };
   }
 
   if (command === "settings" || command === "налаштування") {
