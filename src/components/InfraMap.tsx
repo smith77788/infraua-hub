@@ -3,6 +3,7 @@ import {
   MapContainer,
   TileLayer,
   LayersControl,
+  LayerGroup,
   CircleMarker,
   Circle,
   Marker,
@@ -344,10 +345,49 @@ function AttributionPrefixOff() {
  */
 const MAX_ZOOM = 19;
 
+/**
+ * З якого зуму усталений шар переходить на супутник.
+ *
+ * Чотирнадцять — там, де схема вже перестає додавати (окремі вулиці видно) і
+ * починає бракувати знімка: саме з цього масштабу питання стає «над яким
+ * будинком», а не «над яким містом».
+ */
+const SAT_FROM_ZOOM = 14;
+
 function BaseLayers() {
   return (
     <LayersControl position="topright">
-      <LayersControl.BaseLayer checked name="Темна">
+      {/*
+        Усталений шар передає естафету сам: темна схема на огляді країни,
+        супутник — щойно наближаєшся.
+        
+        Підняти стелю зуму було мало. Темний канвас — це СХЕМА, знімків у ньому
+        немає взагалі: розтягнута плитка на глибокому зумі дає просто темряву,
+        і питання «над яким будинком летить» лишалось без відповіді. Тому з
+        чотирнадцятого зуму під позначками зʼявляється супутниковий знімок —
+        той самий, що й у шарі «Супутник», лише без потреби його шукати.
+        
+        Окремі шари «Темна» і «Супутник» лишились: хто хоче тримати одне й те
+        саме на всіх зумах, обере вручну.
+      */}
+      <LayersControl.BaseLayer checked name="Авто: схема + супутник">
+        <LayerGroup>
+          <TileLayer
+            attribution="&copy; Esri"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+            maxNativeZoom={16}
+            maxZoom={SAT_FROM_ZOOM - 1}
+          />
+          <TileLayer
+            attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            minZoom={SAT_FROM_ZOOM}
+            maxNativeZoom={18}
+            maxZoom={MAX_ZOOM}
+          />
+        </LayerGroup>
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Темна">
         <TileLayer
           attribution="&copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
