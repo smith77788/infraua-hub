@@ -17,8 +17,8 @@
 
 import type { DangerIndex, DangerLevel, PersonalAssessment, PersonalThreat } from "./advisory";
 import type { ThreatType } from "./air";
-import { withinLead } from "./lead-threshold";
 import { kyivHour } from "./kyiv";
+import { withinLead } from "./lead-threshold";
 import type { MyPlace, PlaceAlertState } from "./places-mine";
 import type { PersonalStats } from "./personal-stats";
 
@@ -205,10 +205,18 @@ export interface AlertDecision {
  * Поріг часу підльоту (`leadMin`) стоїть ДО перевірки ескалації — і це навмисно.
  * Він не пауза, яку треба пробивати, а відповідь на питання «чи вже пора»: якщо
  * людина просила будити за 10 хвилин льоту, то поява нового типу цілі за півгодини
- * ходу — ще не той момент. На практиці ескалація його майже завжди проходить сама,
- * бо швидка ціль у межах радіуса — це одиниці хвилин; а коли не проходить, це
- * означає рівно те, що людина й просила. Невідомий час підльоту порогом не
- * відсікається ніколи.
+ * ходу — ще не той момент.
+ *
+ * Поставити його ПІСЛЯ ескалації спокусливо й здається безпечнішим, але робить
+ * поріг майже несправжнім: `lastLevel` у свіжого нальоту ще `null`, тобто
+ * `escalated` істинна, і ПЕРШЕ сповіщення проходило б повз поріг завжди. Людина,
+ * яка просила «за 10 хвилин», однаково діставала б підйом на далекому шахеді за
+ * пів години — рівно те, від чого поріг і рятує.
+ *
+ * Затримки це не додає: заглушене рішення не викликає `markAlerted`, тож
+ * `lastLevel` лишається старим, і в ту ж мить, коли ціль входить у вікно,
+ * спрацьовує та сама ескалація. Невідомий час підльоту порогом не відсікається
+ * ніколи.
  */
 export function decideAlert(
   sub: Subscriber,
@@ -262,6 +270,7 @@ export function decideAlert(
   const cooling = now - sub.lastAlertAt < ALERT_COOLDOWN_MS;
 
   if (escalated) return { send: true, reason: "обстановка загострилась", ids, level };
+
   if (now - sub.lastAlertAt < ALERT_FLOOR_MS) {
     return { send: false, reason: "щойно надсилали сповіщення", ids, level };
   }

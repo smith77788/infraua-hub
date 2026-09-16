@@ -357,13 +357,13 @@ export function renderSettings(sub: Subscriber): string {
     "",
     `Точка: ${sub.point ? `<b>${escapeHtml(sub.point.label)}</b>` : "<b>не задана</b>"}`,
     `Радіус: <b>${sub.radiusKm} км</b>`,
-    `Будити за: <b>${sub.leadMin == null ? "будь-якої вхідної" : `${sub.leadMin} хв льоту`}</b>`,
+    `Поріг часу: <b>${sub.leadMin != null ? `будити за ≤${sub.leadMin} хв льоту` : "за радіусом"}</b>`,
     `Будити: <b>${TIER_LABEL[sub.tier]}</b>`,
     `Уночі (23:00–07:00): <b>${NIGHT_LABEL[sub.night]}</b>`,
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
     "",
     "<i>Нічний режим лише звужує денний — він ніколи не розбудить вас тим, чого ви не просили вдень.</i>",
-    "<i>Поріг часу міряє не кілометри, а запас часу дійти до укриття: шахед за 50 км — це пів години, балістика за ті самі 50 км — менше хвилини. Коли час підльоту оцінити не вдалося, поріг мовчки вас не пропустить.</i>",
+    "<i>Поріг часу міряє не кілометри, а запас часу дійти до укриття: шахед за 50 км — це пів години, балістика за ті самі 50 км — менше хвилини. Коли час підльоту оцінити не вдалося, поріг вас не глушить — попереджаємо.</i>",
   ].join("\n");
 }
 
@@ -381,15 +381,17 @@ export const PERSONAL_ACTIONS = {
   mute: "mu:1",
   unmute: "mu:0",
   shelter: "sh",
+  share: "shr",
 } as const;
+
+/** Варіанти порогу «будити за N хв льоту». `off` — вимкнено (вирішує радіус). */
+const LEAD_OPTIONS: (number | "off")[] = ["off", 5, 10, 15];
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
 export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalButton[][] } {
   const tiers: AlertTier[] = ["critical", "inbound", "all"];
   const nights: NightMode[] = ["silent", "critical", "all"];
   const radii = [25, 50, 100];
-  // 0 — поріг вимкнено: людина знову хоче знати про будь-яку вхідну.
-  const leads = [0, 5, 10, 15];
   return {
     inline_keyboard: [
       tiers.map((t) => ({
@@ -404,10 +406,13 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
         text: `${sub.radiusKm === km ? "✅ " : ""}${km} км`,
         callback_data: `${PERSONAL_ACTIONS.radiusPrefix}${km}`,
       })),
-      leads.map((min) => ({
-        text: `${(sub.leadMin ?? 0) === min ? "✅ " : ""}${min === 0 ? "Час: будь-коли" : `${min} хв`}`,
-        callback_data: `${PERSONAL_ACTIONS.leadPrefix}${min}`,
-      })),
+      LEAD_OPTIONS.map((opt) => {
+        const current = (sub.leadMin ?? null) === (opt === "off" ? null : opt);
+        return {
+          text: `${current ? "✅ " : ""}${opt === "off" ? "За радіусом" : `≤${opt} хв`}`,
+          callback_data: `${PERSONAL_ACTIONS.leadPrefix}${opt}`,
+        };
+      }),
       [
         sub.muted
           ? { text: "🔔 Увімкнути сповіщення", callback_data: PERSONAL_ACTIONS.unmute }
@@ -434,6 +439,8 @@ export function parsePersonalAction(
   | { kind: "lead"; value: number | null }
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
+  | { kind: "share" }
+  | { kind: "lead"; value: number | null }
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
@@ -441,6 +448,7 @@ export function parsePersonalAction(
   if (data === PERSONAL_ACTIONS.wantGeo) return { kind: "wantGeo" };
   if (data === PERSONAL_ACTIONS.imOk) return { kind: "imOk" };
   if (data === PERSONAL_ACTIONS.shelter) return { kind: "shelter" };
+  if (data === PERSONAL_ACTIONS.share) return { kind: "share" };
   if (data.startsWith(PERSONAL_ACTIONS.soundPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.soundPrefix.length);
     return v === "drone" || v === "explosion" || v === "air-defence"
@@ -462,11 +470,14 @@ export function parsePersonalAction(
     return Number.isFinite(n) ? { kind: "radius", value: n } : null;
   }
   if (data.startsWith(PERSONAL_ACTIONS.leadPrefix)) {
-    const n = Number(data.slice(PERSONAL_ACTIONS.leadPrefix.length));
-    if (!Number.isFinite(n)) return null;
-    // Нуль — це «вимкнути», а не «нуль хвилин»: вимкнений поріг і поріг у нуль
-    // хвилин означали б протилежне, і сплутати їх коштувало б сповіщення.
-    return { kind: "lead", value: n === 0 ? null : clampLead(n) };
+    // «off» окремим словом, а не нулем: вимкнений поріг і поріг у нуль хвилин
+    // означали б протилежне, і сплутати їх коштувало б сповіщення.
+    const v = data.slice(PERSONAL_ACTIONS.leadPrefix.length);
+    if (v === "off") return { kind: "lead", value: null };
+    const n = Number(v);
+    // Межі тримає розбір, а не віра в те, що кнопка прийшла саме наша:
+    // callback_data приходить від клієнта й може бути будь-яким.
+    return Number.isFinite(n) ? { kind: "lead", value: clampLead(n) } : null;
   }
   return null;
 }
@@ -505,6 +516,9 @@ export function personalKeyboard(opts: { withOk?: boolean } = {}): {
       { text: "🔄 Оновити", callback_data: PERSONAL_ACTIONS.refresh },
       { text: "⚙️", callback_data: PERSONAL_ACTIONS.settings },
     ],
+    // Окремим рядком: картку обстановки пересилають рідним, і разом із нею їде
+    // посилання на бота — головний канал росту, не реклама.
+    [{ text: "📤 Поділитися обстановкою", callback_data: PERSONAL_ACTIONS.share }],
   ];
   if (opts.withOk) {
     rows.unshift([{ text: "✅ Я в порядку", callback_data: PERSONAL_ACTIONS.imOk }]);
@@ -540,6 +554,12 @@ export function renderShelters(
   list: readonly NearbyShelter[],
   caveat: string,
   degraded = false,
+  /**
+   * Примітки про безпечний бік, за id укриття. Показуємо як мʼяку підказку, не
+   * змінюючи порядок за відстанню: під тривогою найближче важить найбільше, а
+   * бік — лише нюанс поверх нього.
+   */
+  safeNotes?: Record<string, string>,
 ): string {
   if (!list.length) {
     return [
@@ -561,6 +581,8 @@ export function renderShelters(
       `${KIND_EMOJI[s.kind]} <b>${escapeHtml(s.name)}</b> — ${s.walkMin} хв пішки (${s.distanceKm} км) · ${where}`,
     );
     lines.push(`<i>${escapeHtml(KIND_NOTE[s.kind])}</i>`);
+    const note = safeNotes?.[s.id];
+    if (note) lines.push(`<i>↳ ${escapeHtml(note)}</i>`);
   }
   lines.push("");
   lines.push(`<i>${escapeHtml(caveat)}</i>`);

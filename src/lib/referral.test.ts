@@ -9,6 +9,10 @@ describe("parseStartPayload", () => {
   it("перехід із кнопки під постом каналу", () => {
     expect(parseStartPayload("ch")).toEqual({ ref: null, from: "channel" });
   });
+  it("перехід із пересланої картки обстановки", () => {
+    expect(parseStartPayload("sh")).toEqual({ ref: null, from: "share" });
+    expect(parseStartPayload("share")).toEqual({ ref: null, from: "share" });
+  });
   it("порожній /start — прямий захід", () => {
     expect(parseStartPayload("")).toEqual({ ref: null, from: "direct" });
   });

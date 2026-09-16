@@ -6,6 +6,7 @@ import { withinLead } from "./lead-threshold";
 import {
   ALERT_COOLDOWN_MS,
   ALERT_FLOOR_MS,
+  ALERT_FORGET_MS,
   clampRadius,
   decideAlert,
   forgetStale,
@@ -107,6 +108,66 @@ describe("decideAlert", () => {
   it("нічний режим «критичне» глушить шахед, але не ракету", () => {
     expect(decide(sub(), [inbound("a", "shahed", 40)], 1_000_000, 2).send).toBe(false);
     expect(decide(sub(), [inbound("b", "cruise", 40)], 1_000_000, 2).send).toBe(true);
+  });
+
+  it("поріг часу: далеку ціль тримаємо мовчки, поки є запас часу", () => {
+    // Радіус великий, але поріг «≤5 хв льоту»: шахед за 90 км (низ вилки ~8 хв)
+    // ще не терміновий. lastLevel = shelter, щоб перше сповіщення не рахувалось
+    // ескалацією (вона поріг пробиває — і це правильно).
+    const d = decide(sub({ radiusKm: 120, leadMin: 5, lastLevel: "shelter" }), [
+      inbound("a", "shahed", 90),
+    ]);
+    expect(d.send).toBe(false);
+    expect(d.reason).toContain("ще є час");
+  });
+
+  it("поріг часу: близька ціль у вікні — будимо", () => {
+    const d = decide(sub({ radiusKm: 120, leadMin: 5, lastLevel: "shelter" }), [
+      inbound("a", "shahed", 20),
+    ]);
+    expect(d.send).toBe(true);
+  });
+
+  it("ескалація поріг часу НЕ пробиває — інакше поріг був би несправжнім", () => {
+    // Спокуслива й неправильна версія цього правила — «ескалація важливіша за
+    // поріг». Вона робить поріг майже неіснуючим, і ось чому: `forgetStale`
+    // скидає `lastLevel` у null після 45 хв тиші, тобто на початку КОЖНОГО
+    // нальоту. Свіжий `lastLevel: null` дає `escalated === true`, і перше
+    // сповіщення обходило б поріг щоразу — саме те далеке нічне, від якого
+    // людина й ставила «будити за 5 хв».
+    const fresh = sub({ radiusKm: 120, leadMin: 5 });
+    expect(fresh.lastLevel).toBe(null);
+    const d = decide(fresh, [inbound("a", "shahed", 90)]);
+    expect(d.send).toBe(false);
+    expect(d.reason).toContain("ще є час");
+  });
+
+  it("заглушене порогом не запамʼятовується — щойно ціль у вікні, сповіщення йде", () => {
+    // Друга половина того самого рішення: затримки поріг не додає. Мовчання не
+    // викликає markAlerted, тож lastLevel лишається null — і в ту ж мить, коли
+    // ціль входить у вікно, спрацьовує звичайна ескалація.
+    const s = sub({ radiusKm: 120, leadMin: 5 });
+    expect(decide(s, [inbound("a", "shahed", 90)]).send).toBe(false);
+    const near = decide(s, [inbound("a", "shahed", 30)]);
+    expect(near.send).toBe(true);
+    expect(near.reason).toContain("загострилась");
+  });
+
+  it("поріг переживає forgetStale — він не стан, а налаштування", () => {
+    const s = forgetStale(
+      { ...sub({ radiusKm: 120, leadMin: 5 }), lastAlertAt: 1, lastLevel: "shelter" },
+      1 + ALERT_FORGET_MS + 1,
+    );
+    expect(s.lastLevel).toBe(null);
+    expect(s.leadMin).toBe(5);
+    expect(decide(s, [inbound("a", "shahed", 90)]).send).toBe(false);
+  });
+
+  it("поріг часу вимкнено — радіус вирішує, як раніше", () => {
+    const d = decide(sub({ radiusKm: 120, leadMin: null, lastLevel: "shelter" }), [
+      inbound("a", "shahed", 90),
+    ]);
+    expect(d.send).toBe(true);
   });
 
   it("нічний режим не РОЗШИРЮЄ денний: «лише критичне» вдень лишається таким і вночі", () => {

@@ -18,7 +18,7 @@
 import { escapeHtml } from "./telegram";
 
 /** Звідки прийшов перехід — щоб знати, який канал росту працює. */
-export type ArrivalSource = "ref" | "channel" | "inline" | "direct";
+export type ArrivalSource = "ref" | "channel" | "inline" | "share" | "direct";
 
 export interface StartPayload {
   /** Код того, хто запросив (якщо був). */
@@ -39,6 +39,7 @@ export function parseStartPayload(args: string): StartPayload {
   if (!raw) return { ref: null, from: "direct" };
   if (raw === "ch" || raw === "channel") return { ref: null, from: "channel" };
   if (raw === "inl" || raw === "inline") return { ref: null, from: "inline" };
+  if (raw === "sh" || raw === "share") return { ref: null, from: "share" };
   const m = /^r[_-]([a-z0-9]{3,12})$/i.exec(raw);
   if (m) return { ref: m[1]!.toLowerCase(), from: "ref" };
   return { ref: null, from: "direct" };
