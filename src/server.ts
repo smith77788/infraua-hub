@@ -74,6 +74,7 @@ import {
 } from "./lib/advisory";
 import { inlineResults, parseInlineQuery } from "./lib/bot-inline";
 import { renderShareCard } from "./lib/share-card";
+import { clampLead } from "./lib/lead-threshold";
 import { matchPlace } from "./lib/places";
 import {
   locationKeyboard,
@@ -2171,6 +2172,10 @@ async function handlePersonalPress(
   } else if (action.kind === "radius") {
     updated = { ...sub, radiusKm: clampRadius(action.value) };
     toast = `Радіус: ${updated.radiusKm} км`;
+  } else if (action.kind === "lead") {
+    updated = { ...sub, leadMin: action.value == null ? null : clampLead(action.value) };
+    toast =
+      updated.leadMin == null ? "Поріг часу: за радіусом" : `Будити за ≤${updated.leadMin} хв`;
   } else if (action.kind === "mute") {
     updated = { ...sub, muted: action.value };
     toast = action.value ? "Сповіщення на паузі" : "Сповіщення увімкнені";

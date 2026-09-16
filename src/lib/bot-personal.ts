@@ -356,6 +356,7 @@ export function renderSettings(sub: Subscriber): string {
     "",
     `Точка: ${sub.point ? `<b>${escapeHtml(sub.point.label)}</b>` : "<b>не задана</b>"}`,
     `Радіус: <b>${sub.radiusKm} км</b>`,
+    `Поріг часу: <b>${sub.leadMin != null ? `будити за ≤${sub.leadMin} хв льоту` : "за радіусом"}</b>`,
     `Будити: <b>${TIER_LABEL[sub.tier]}</b>`,
     `Уночі (23:00–07:00): <b>${NIGHT_LABEL[sub.night]}</b>`,
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
@@ -378,7 +379,11 @@ export const PERSONAL_ACTIONS = {
   unmute: "mu:0",
   shelter: "sh",
   share: "shr",
+  leadPrefix: "ld:",
 } as const;
+
+/** Варіанти порогу «будити за N хв льоту». `off` — вимкнено (вирішує радіус). */
+const LEAD_OPTIONS: (number | "off")[] = ["off", 5, 10, 15];
 
 /** Кнопки налаштувань. Показують ДІЮ, а не поточний стан — як в адмінпанелі. */
 export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalButton[][] } {
@@ -399,6 +404,13 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
         text: `${sub.radiusKm === km ? "✅ " : ""}${km} км`,
         callback_data: `${PERSONAL_ACTIONS.radiusPrefix}${km}`,
       })),
+      LEAD_OPTIONS.map((opt) => {
+        const current = (sub.leadMin ?? null) === (opt === "off" ? null : opt);
+        return {
+          text: `${current ? "✅ " : ""}${opt === "off" ? "За радіусом" : `≤${opt} хв`}`,
+          callback_data: `${PERSONAL_ACTIONS.leadPrefix}${opt}`,
+        };
+      }),
       [
         sub.muted
           ? { text: "🔔 Увімкнути сповіщення", callback_data: PERSONAL_ACTIONS.unmute }
@@ -425,6 +437,7 @@ export function parsePersonalAction(
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
   | { kind: "share" }
+  | { kind: "lead"; value: number | null }
   | null {
   if (data === PERSONAL_ACTIONS.refresh) return { kind: "refresh" };
   if (data === PERSONAL_ACTIONS.settings) return { kind: "settings" };
@@ -452,6 +465,12 @@ export function parsePersonalAction(
   if (data.startsWith(PERSONAL_ACTIONS.radiusPrefix)) {
     const n = Number(data.slice(PERSONAL_ACTIONS.radiusPrefix.length));
     return Number.isFinite(n) ? { kind: "radius", value: n } : null;
+  }
+  if (data.startsWith(PERSONAL_ACTIONS.leadPrefix)) {
+    const v = data.slice(PERSONAL_ACTIONS.leadPrefix.length);
+    if (v === "off") return { kind: "lead", value: null };
+    const n = Number(v);
+    return Number.isFinite(n) ? { kind: "lead", value: n } : null;
   }
   return null;
 }
