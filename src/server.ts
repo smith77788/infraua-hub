@@ -39,6 +39,17 @@ import {
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 import { buildStamp, renderBuild } from "./lib/build-info";
+import {
+  assessPipeline,
+  pipelineLine,
+  pipelineNotice,
+  renderPipelineAlert,
+  renderPipelineRecovered,
+  type CiConclusion,
+  type PipelineAssessment,
+  type PipelineFacts,
+  type PipelineLevel,
+} from "./lib/pipeline-health";
 import { verifyInitData } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
@@ -1335,6 +1346,9 @@ async function runChannelTickCore(
     await maybeDigest(token, channel, now);
     await maybeBackup(token, now);
     await maybeWeeklySummary(token, now);
+    // Конвеєр перевіряємо саме в тихому гілці тику: коли в небі порожньо, це
+    // єдиний прохід, який трапляється надійно й часто.
+    await maybePipelineAlert(token, now);
     if (!wave) return { posted: false, reason: "небо чисте" };
 
     const active = await fetchOfficialAlerts();
@@ -3631,6 +3645,137 @@ async function maybeWeeklySummary(token: string, now: number): Promise<void> {
   );
 }
 
+/* ─── Чи доїжджає код до людей ──────────────────────────────────────────── */
+
+/**
+ * Питаємо GitHub, що зараз у головній гілці.
+ *
+ * Без ключа: репозиторій публічний, а зайвий секрет у середовищі — зайва річ,
+ * яку треба берегти. Якщо колись стане приватним, відповідь буде 404 і оцінка
+ * чесно скаже «не змогли спитати» замість вигадати «усе гаразд».
+ */
+async function fetchHeadCommit(): Promise<{ sha: string; at: number | null } | null> {
+  const repo = pipelineRepo();
+  if (!repo) return null;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/commits/main`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "infraua-hub" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { sha?: string; commit?: { committer?: { date?: string } } };
+    if (typeof body.sha !== "string") return null;
+    const iso = body.commit?.committer?.date;
+    const at = iso ? Date.parse(iso) : NaN;
+    return { sha: body.sha, at: Number.isFinite(at) ? at : null };
+  } catch {
+    // Мережа мовчить — це не привід стверджувати щось про конвеєр.
+    return null;
+  }
+}
+
+/**
+ * Чим скінчилась перевірка на цьому коміті.
+ *
+ * Беремо зведення перевірок (`check-runs`), а не окремий робочий процес: воно
+ * не залежить від того, як названо файл у `.github/workflows`, і не розійдеться
+ * з реальністю, коли перевірок стане більше.
+ */
+async function fetchCiConclusion(sha: string): Promise<CiConclusion> {
+  const repo = pipelineRepo();
+  if (!repo) return "unknown";
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/check-runs`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "infraua-hub" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return "unknown";
+    const body = (await res.json()) as {
+      check_runs?: { status?: string; conclusion?: string | null }[];
+    };
+    const runs = body.check_runs ?? [];
+    if (runs.length === 0) return "unknown";
+    if (runs.some((r) => r.conclusion === "failure" || r.conclusion === "timed_out")) {
+      return "failure";
+    }
+    // «Ще йде» — не «впала»: інакше кожен пуш піднімав би тривогу.
+    if (runs.some((r) => r.status !== "completed")) return "pending";
+    return runs.some((r) => r.conclusion === "success") ? "success" : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Який саме репозиторій питати.
+ *
+ * Railway сам підставляє власника й назву; змінна лишається як запасний шлях
+ * для інших середовищ. Немає ні того, ні того — питати нема що, і оцінка стане
+ * «невідомо», а не «гаразд».
+ */
+function pipelineRepo(): string | null {
+  const env = typeof process !== "undefined" && process.env ? process.env : {};
+  const explicit = env["GITHUB_REPO"]?.trim();
+  if (explicit) return explicit;
+  const owner = env["RAILWAY_GIT_REPO_OWNER"]?.trim();
+  const name = env["RAILWAY_GIT_REPO_NAME"]?.trim();
+  return owner && name ? `${owner}/${name}` : null;
+}
+
+/**
+ * Стан конвеєра, порахований не частіше ніж раз на чверть години.
+ *
+ * GitHub обмежує запити без ключа, а стан конвеєра змінюється хвилинами, не
+ * секундами. Кеш тут не оптимізація, а відповідність тому, як швидко предмет
+ * виміру взагалі здатен змінюватись.
+ */
+const PIPELINE_CHECK_EVERY_MS = 15 * 60 * 1000;
+let pipelineCache: { at: number; facts: PipelineFacts; assessment: PipelineAssessment } | null =
+  null;
+
+async function pipelineState(
+  now: number,
+): Promise<{ facts: PipelineFacts; assessment: PipelineAssessment }> {
+  if (pipelineCache && now - pipelineCache.at < PIPELINE_CHECK_EVERY_MS) {
+    return { facts: pipelineCache.facts, assessment: pipelineCache.assessment };
+  }
+  const head = await fetchHeadCommit();
+  const facts: PipelineFacts = {
+    deployedSha: currentBuild().sha,
+    headSha: head?.sha ?? null,
+    headAt: head?.at ?? null,
+    ci: head ? await fetchCiConclusion(head.sha) : "unknown",
+  };
+  const assessment = assessPipeline(facts, now);
+  pipelineCache = { at: now, facts, assessment };
+  return { facts, assessment };
+}
+
+/**
+ * Сказати власнику, коли конвеєр став — і коли поїхав.
+ *
+ * Позначка стану лежить на томі, а не в памʼяті процесу: інакше кожен редеплой
+ * і кожен ізолят починали б з чистого аркуша й слали б те саме повідомлення
+ * заново. Саме таким спамом і знецінюються попередження.
+ */
+async function maybePipelineAlert(token: string, now: number): Promise<void> {
+  const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
+  if (!owner) return;
+  const { facts, assessment } = await pipelineState(now);
+  const last = ((await readMarker("pipeline-level")) as PipelineLevel | null) ?? null;
+  const notice = pipelineNotice(assessment.level, last);
+  if (!notice) return;
+  // Пишемо ПЕРЕД надсиланням: якщо два виконання зійшлися, друге змовкне.
+  await writeMarker("pipeline-level", assessment.level);
+  await telegramSend(
+    token,
+    Number(owner),
+    notice === "alert" ? renderPipelineAlert(assessment, facts) : renderPipelineRecovered(facts),
+    undefined,
+    true,
+  );
+}
+
 async function maybeBackup(token: string, now: number): Promise<void> {
   const owner = process.env["TELEGRAM_OWNER_ID"]?.trim();
   if (!owner) return;
@@ -3800,6 +3945,13 @@ async function adminCommand(
          * Двічі поспіль на нього відповідали здогадом, і двічі помилково.
          */
         renderBuild(currentBuild(), PROCESS_STARTED_AT, Date.now()),
+        // Мовчить, коли код доїжджає: рядок «усе гаразд» серед інших рядків
+        // читається як фон — і його зникнення теж перестає помічатись.
+        ...(await (async () => {
+          const { facts, assessment } = await pipelineState(Date.now());
+          const line = pipelineLine(assessment, facts);
+          return line ? ["", line] : [];
+        })()),
       ].join("\n"),
     };
   }
