@@ -229,6 +229,45 @@ export function projectForward(
   return { lat, lon, uncertaintyKm: Math.round(uncertaintyKm * 10) / 10, minutes };
 }
 
+export interface ForecastCone {
+  /** Центрлінія прогнозу: точки [lat, lon] від зараз до горизонту. */
+  centerline: [number, number][];
+  /** Замкнений контур коридору (конус невизначеності) для полігона. */
+  ring: [number, number][];
+  /** Вістря — найдальша спрогнозована точка (для мітки/ETA). */
+  tip: { lat: number; lon: number };
+}
+
+/**
+ * Коридор прогнозу як геометрія для карти: центрлінія + конус, що розширюється
+ * з невизначеністю (та сама, що в projectForward). Не «стрілка курсу», а чесне
+ * віяло: чим далі й чим менша впевненість — тим ширше.
+ */
+export function forecastCone(
+  from: { lat: number; lon: number },
+  v: Velocity,
+  opts: { horizonMin?: number; stepMin?: number } = {},
+): ForecastCone {
+  const horizon = opts.horizonMin ?? 18;
+  const step = opts.stepMin ?? 3;
+  const centerline: [number, number][] = [[from.lat, from.lon]];
+  const right: [number, number][] = [];
+  const left: [number, number][] = [];
+  let tip = { lat: from.lat, lon: from.lon };
+  for (let m = step; m <= horizon; m += step) {
+    const p = projectForward(from, v, m);
+    centerline.push([p.lat, p.lon]);
+    const [rLat, rLon] = destPoint(p.lat, p.lon, v.bearingDeg + 90, p.uncertaintyKm);
+    const [lLat, lLon] = destPoint(p.lat, p.lon, v.bearingDeg - 90, p.uncertaintyKm);
+    right.push([rLat, rLon]);
+    left.push([lLat, lLon]);
+    tip = { lat: p.lat, lon: p.lon };
+  }
+  // Контур: від носія праворуч уперед до вістря, потім ліворуч назад.
+  const ring: [number, number][] = [[from.lat, from.lon], ...right, ...left.reverse()];
+  return { centerline, ring, tip };
+}
+
 export interface ReachedPlace {
   name: string;
   etaMin: number;
