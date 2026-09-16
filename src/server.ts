@@ -1048,7 +1048,9 @@ async function maybeCityAlert(
     const { renderZoomPng } = await import("./lib/situation-image");
     const keyboard = await channelButtons(token);
     for (const a of fresh) {
-      const png = await renderZoomPng(threats, { lat: a.lat, lon: a.lon }, 70);
+      const png = await renderZoomPng(threats, { lat: a.lat, lon: a.lon }, 70, {
+        label: a.name,
+      });
       await sendChannelUpdate(token, channel, cityAlertCaption(a), a.count, png, keyboard, false);
     }
   } catch (error) {

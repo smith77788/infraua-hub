@@ -145,8 +145,13 @@ describe("situationSvgZoom", () => {
       { lat: 50.9, lon: 34.8 },
       50,
     );
-    // лише приціл-лінії, без позначок-glow (немає дрон-крапки поза в'юпортом)
-    expect((svg.match(/<circle /g) ?? []).length).toBe(1);
+    /*
+     * Перевіряємо сам намір: жодної позначки цілі. Рахувати `<circle>` було
+     * крихко — кільця відстані й перехрестя теж кола, і тест ламався від
+     * появи розмітки, яка позначок не додає. Колір шахеда в кадрі є рівно
+     * тоді, коли намальовано ціль.
+     */
+    expect(svg).not.toContain("#ffd23f");
   });
 });
 
@@ -175,5 +180,59 @@ describe("треки на картинці", () => {
     const svg = situationSvg([], [{ type: "shahed", points }]);
     const d = /d="(M[^"]+)"/.exec(svg.slice(svg.indexOf("stroke-linecap") - 400))?.[1] ?? "";
     expect(d.split("L")).toHaveLength(points.length);
+  });
+});
+
+describe("зумована карта каже, ДЕ це і в якому масштабі", () => {
+  const ZP = { lat: 47.838, lon: 35.139 };
+  const target: Threat = {
+    id: "a",
+    name: "Шахед",
+    lat: ZP.lat + 0.064,
+    lon: ZP.lon + 0.095,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+    type: "shahed",
+    heading: 225,
+  };
+
+  it("підписує місто — інакше перехрестя посеред чорного поля не впізнати", () => {
+    // Знімок із проду: карта показувала ледь помітну межу області, перехрестя
+    // й пляму. Де це — прочитати було ніяк.
+    const svg = situationSvgZoom([target], ZP, 70, { label: "Запоріжжя" });
+    expect(svg).toContain("Запоріжжя");
+  });
+
+  it("має кільця відстані — щоб «~10 км» було видно, а не лише заявлено", () => {
+    const svg = situationSvgZoom([target], ZP, 70, { label: "Запоріжжя" });
+    expect(svg).toContain("10 км");
+    expect(svg).toContain("25 км");
+  });
+
+  it("має масштаб і північ", () => {
+    const svg = situationSvgZoom([target], ZP, 70);
+    expect(svg).toContain("Пн");
+    // Лінійка малюється навіть без підпису міста.
+    expect(svg.match(/км</g)?.length ?? 0).toBeGreaterThan(1);
+  });
+
+  it("пояснює ореол — на знімку він був найбільшим обʼєктом і нічого не значив", () => {
+    const svg = situationSvgZoom([target], ZP, 70);
+    expect(svg).toContain("наскільки невідома її позиція");
+  });
+
+  it("назва міста не може зламати розмітку", () => {
+    const svg = situationSvgZoom([target], ZP, 70, { label: "<script>x</script>" });
+    expect(svg).not.toContain("<script>");
+    expect(svg).toContain("&lt;script&gt;");
+  });
+
+  it("кільця не виходять за межі кадру", () => {
+    // Драбина кілець має відсікати ті, що більші за сам радіус огляду.
+    const svg = situationSvgZoom([target], ZP, 30);
+    expect(svg).not.toContain(">50 км<");
+    expect(svg).not.toContain(">100 км<");
   });
 });

@@ -73,7 +73,10 @@ describe("selectFreshCityAlerts (кулдаун)", () => {
     lat: 49.59,
     lon: 34.55,
     etaMin: 8,
+    etaRangeMin: [6, 11],
     distanceKm: 24,
+    uncertaintyKm: 8,
+    uncertaintyStated: true,
     count: 2,
     type: "shahed",
   };
@@ -96,33 +99,56 @@ describe("selectFreshCityAlerts (кулдаун)", () => {
 });
 
 describe("cityAlertCaption", () => {
-  it("містить місто, підліт і правильну множину типу", () => {
-    const cap = cityAlertCaption({
+  const cap = (patch: Partial<CityAlert> = {}): string =>
+    cityAlertCaption({
       name: "Полтавщина",
       lat: 49.59,
       lon: 34.55,
       etaMin: 8,
+      etaRangeMin: [7, 10],
       distanceKm: 24,
+      uncertaintyKm: 6,
+      uncertaintyStated: true,
       count: 3,
       type: "shahed",
+      ...patch,
     });
-    expect(cap).toContain("<b>Полтавщина</b>");
-    expect(cap).toContain("~8 хв");
-    expect(cap).toContain("3 шахеди");
+
+  it("містить місто, підліт і правильну множину типу", () => {
+    const text = cap();
+    expect(text).toContain("<b>Полтавщина</b>");
+    expect(text).toContain("3 шахеди");
   });
 
   it("одна ціль — однина", () => {
-    const cap = cityAlertCaption({
-      name: "Сумщина",
-      lat: 50.91,
-      lon: 34.8,
-      etaMin: 5,
-      distanceKm: 15,
-      count: 1,
-      type: "shahed",
-    });
-    expect(cap).toContain("1 шахед");
-    expect(cap).not.toContain("1 шахеди");
+    const text = cap({ name: "Сумщина", count: 1 });
+    expect(text).toContain("1 шахед");
+    expect(text).not.toContain("1 шахеди");
+  });
+
+  it("вузька вилка — одне число, як і було", () => {
+    expect(cap({ etaMin: 8, etaRangeMin: [7, 9] })).toContain("~8 хв");
+  });
+
+  it("широка вилка — діапазон, а не середнє", () => {
+    const text = cap({ etaMin: 8, etaRangeMin: [4, 14] });
+    expect(text).toContain("4–14 хв");
+    expect(text).not.toContain("~8 хв");
+  });
+
+  it("вилка від нуля до далеко — не число, а те, що з нього випливає", () => {
+    // Саме випадок зі знімка проду: розкид позиції більший за відстань до
+    // міста. «~3 хв» там було формально правдиве й порожнє водночас.
+    const text = cap({ etaMin: 3, etaRangeMin: [1, 25] });
+    expect(text).toContain("може бути вже поруч");
+    expect(text).not.toContain("~3 хв");
+  });
+
+  it("називає розкид позиції й те, чиє це число", () => {
+    expect(cap({ uncertaintyKm: 6, uncertaintyStated: true })).toContain("±6 км за даними джерела");
+    const ours = cap({ uncertaintyKm: 15, uncertaintyStated: false });
+    expect(ours).toContain("±15 км");
+    expect(ours).toContain("розкиду не вказало");
   });
 });
 

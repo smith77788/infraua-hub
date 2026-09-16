@@ -287,11 +287,71 @@ export async function renderSituationPng(
  * цілей (лише ті, що у в'юпорті), межі областей і приціл на самому місті. Чиста
  * функція, як і situationSvg.
  */
+/** Екранування тексту для SVG: назва в розмітці не має права її зламати. */
+function escapeXml(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 const ZW = 800;
+/**
+ * Кільця відстані від центра — щоб «~10 км» у підписі було ВИДНО, а не лише
+ * заявлено.
+ *
+ * Без них зумована карта не має метричного сенсу взагалі: людина бачить точку
+ * й пляму й не може сказати, це вісім кілометрів чи вісімдесят. Радіуси
+ * беремо з драбини круглих чисел, щоб підпис кільця читався з одного погляду.
+ */
+const RING_LADDER = [5, 10, 25, 50, 100, 200];
+
+function distanceRings(cx: number, cy: number, pxPerKm: number, radiusKm: number): string {
+  const rings = RING_LADDER.filter((km) => km < radiusKm * 0.95).slice(-3);
+  return rings
+    .map((km) => {
+      const r = km * pxPerKm;
+      return (
+        `<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="#3b5a6e" ` +
+        `stroke-width="0.8" stroke-dasharray="3 5" opacity="0.7"/>` +
+        `<text x="${cx + 3}" y="${(cy - r + 12).toFixed(1)}" fill="#6b8496" ` +
+        `font-family="sans-serif" font-size="11">${km} км</text>`
+      );
+    })
+    .join("");
+}
+
+/** Масштабна лінійка: без неї зображення не можна ні перевірити, ні переказати. */
+function scaleBar(x: number, y: number, pxPerKm: number, radiusKm: number): string {
+  const km = RING_LADDER.filter((k) => k <= radiusKm / 2).pop() ?? 10;
+  const len = km * pxPerKm;
+  return (
+    `<line x1="${x}" y1="${y}" x2="${(x + len).toFixed(1)}" y2="${y}" stroke="#8fa3b5" stroke-width="2"/>` +
+    `<line x1="${x}" y1="${y - 4}" x2="${x}" y2="${y + 4}" stroke="#8fa3b5" stroke-width="2"/>` +
+    `<line x1="${(x + len).toFixed(1)}" y1="${y - 4}" x2="${(x + len).toFixed(1)}" y2="${y + 4}" ` +
+    `stroke="#8fa3b5" stroke-width="2"/>` +
+    `<text x="${x}" y="${y - 9}" fill="#8fa3b5" font-family="sans-serif" font-size="12">${km} км</text>`
+  );
+}
+
+/** Північ. Дешева позначка, без якої напрямок на карті доводиться вгадувати. */
+function northMark(x: number, y: number): string {
+  return (
+    `<path d="M${x},${y - 12} L${x + 5},${y + 4} L${x},${y} L${x - 5},${y + 4} Z" ` +
+    `fill="#8fa3b5" opacity="0.85"/>` +
+    `<text x="${x - 4}" y="${y + 18}" fill="#8fa3b5" font-family="sans-serif" font-size="11">Пн</text>`
+  );
+}
+
 export function situationSvgZoom(
   threats: readonly Threat[],
   center: { lat: number; lon: number },
   radiusKm = 70,
+  opts: {
+    /** Підпис центра — назва міста. Без нього карта не каже, де це взагалі. */
+    label?: string | undefined;
+  } = {},
 ): string {
   const dLat = radiusKm / 111.32;
   const dLon = radiusKm / (111.32 * Math.cos((center.lat * Math.PI) / 180));
@@ -329,17 +389,42 @@ export function situationSvgZoom(
     .join("");
 
   const [cx, cy] = pr(center.lat, center.lon);
+  const pxPerKm = scale / 111.32;
   const crosshair =
     `<circle cx="${cx}" cy="${cy}" r="9" fill="none" stroke="#67e8f9" stroke-width="1.6"/>` +
     `<line x1="${cx - 13}" y1="${cy}" x2="${cx + 13}" y2="${cy}" stroke="#67e8f9" stroke-width="1.2"/>` +
     `<line x1="${cx}" y1="${cy - 13}" x2="${cx}" y2="${cy + 13}" stroke="#67e8f9" stroke-width="1.2"/>`;
 
+  /*
+   * Підпис міста. Без нього карта не каже головного — ДЕ це. Перехрестя посеред
+   * чорного поля з ледь помітною межею області не впізнає навіть той, хто в
+   * цьому місті живе.
+   */
+  const title = opts.label
+    ? `<text x="${cx + 16}" y="${cy + 5}" fill="#e6f2f8" font-family="sans-serif" ` +
+      `font-size="17" font-weight="bold">${escapeXml(opts.label)}</text>`
+    : "";
+
+  /*
+   * Пояснення ореолу. На знімку з проду коричнева пляма була найбільшим
+   * обʼєктом кадру й не значила для читача нічого — а вона означає рівно те,
+   * наскільки ми НЕ знаємо, де ціль.
+   */
+  const note =
+    `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
+    `коло довкола цілі — наскільки невідома її позиція</text>`;
+
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +
     `<rect width="${ZW}" height="${zh}" fill="#0b0f16"/>` +
     `<path d="${borders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
+    distanceRings(cx, cy, pxPerKm, radiusKm) +
     crosshair +
+    title +
     markers +
+    scaleBar(14, zh - 34, pxPerKm, radiusKm) +
+    northMark(ZW - 26, 24) +
+    note +
     `</svg>`
   );
 }
@@ -349,11 +434,12 @@ export async function renderZoomPng(
   threats: readonly Threat[],
   center: { lat: number; lon: number },
   radiusKm = 70,
+  opts: { label?: string | undefined } = {},
 ): Promise<Buffer | null> {
   try {
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
-    return new Resvg(situationSvgZoom(threats, center, radiusKm), {
+    return new Resvg(situationSvgZoom(threats, center, radiusKm, opts), {
       background: "#0b0f16",
       fitTo: { mode: "width", value: ZW },
     })
