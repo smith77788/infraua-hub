@@ -1091,6 +1091,16 @@ async function holdQuietNotice(
 interface ChannelState {
   wave: WaveState | null;
   lastPostAt: number;
+  /**
+   * Зріз і підпис останнього поста — щоб після редеплою бот РЕДАГУВАВ живий
+   * пост, а не постив новий. Без зрізу `newCriticalTypes` бачить порожнє
+   * «було», тобто КОЖЕН критичний тип у небі — як щойно зʼявлений, оголошує
+   * фальшиву ескалацію й тим забороняє редагування (canEdit). Саме це й давало
+   * дубль поста під час хвилі одразу після перезапуску — те, що редеплой мав
+   * перестати ламати.
+   */
+  snapshot?: AirSnapshot | undefined;
+  signature?: string | undefined;
   /** Добова статистика й дедуп підсумку — щоб підсумок виходив і після редеплою. */
   currentDay?: DayStats;
   pendingDigest?: DayStats | null;
@@ -1106,7 +1116,14 @@ async function hydrateLiveState(now: number): Promise<void> {
     const s = JSON.parse(raw) as Partial<ChannelState>;
     if (s.wave && typeof s.lastPostAt === "number" && now - s.lastPostAt <= LIVE_POST_MAX_MS) {
       wave = s.wave;
-      lastChannelPost = { ...lastChannelPost, at: s.lastPostAt };
+      // Разом із живим постом відновлюємо його зріз і підпис: інакше перший же
+      // тік після редеплою бачить фальшиву ескалацію (порожнє «було») і постить
+      // НОВИЙ пост замість того, щоб відредагувати відновлений живий.
+      lastChannelPost = {
+        signature: typeof s.signature === "string" ? s.signature : "",
+        at: s.lastPostAt,
+        snapshot: s.snapshot,
+      };
     }
     // Добова статистика й дедуп підсумку теж мають пережити редеплой: інакше
     // підсумок доби не виходить, якщо перезапуск стався між зміною доби і 9:00
@@ -1133,6 +1150,8 @@ async function runChannelTick(
     const state: ChannelState = {
       wave,
       lastPostAt: lastChannelPost.at,
+      snapshot: lastChannelPost.snapshot,
+      signature: lastChannelPost.signature,
       currentDay,
       pendingDigest,
       digestPostedFor,
