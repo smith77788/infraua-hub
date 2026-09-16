@@ -39,6 +39,26 @@ import {
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
+import {
+  recordAlarmMinutes,
+  recordAlert,
+  recordLead,
+  renderStats,
+  summarizeMonth,
+} from "./lib/personal-stats";
+import {
+  addPlace,
+  decidePlaceAlert,
+  markPlaceAlerted,
+  placesFromLegacy,
+  primaryPlace,
+  removePlace,
+  renderPlaceAlert,
+  renderPlaces,
+  validatePlaceName,
+  MAX_PLACES,
+  type MyPlace,
+} from "./lib/places-mine";
 import { publicOrigin } from "./lib/request-origin";
 import type { Threat, ThreatType } from "./lib/air";
 import type { AirSnapshot } from "./lib/channel-post";
@@ -1603,6 +1623,12 @@ async function personalCommand(
     "my",
     "shelter",
     "укриття",
+    "place",
+    "місця",
+    "місце",
+    "month",
+    "місяць",
+    "статистика",
     "сховатись",
     "radar",
     "me",
@@ -1692,6 +1718,70 @@ async function personalCommand(
     if (!point) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
     await sendShelters(token, chatId, point);
     return "handled";
+  }
+
+  /*
+   * Мої місця — найбільша прогалина, яку закриває ця команда.
+   *
+   * Радар знав ОДНУ координату, а людина не живе в одній: дім, робота, батьки
+   * в іншому місті, школа дитини. Питання «а там як?» будило найчастіше, і
+   * відповісти на нього було нічим.
+   */
+  if (command === "place" || command === "місця" || command === "місце") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const places = placesFromLegacy(sub.point, sub.places, Date.now());
+    const [verb = "", ...rest] = args.trim().split(/\s+/);
+    const tail = rest.join(" ").trim();
+
+    if (verb === "прибрати" || verb === "видалити" || verb === "remove") {
+      const r = removePlace(places, tail);
+      if (!r.removed) return { text: `Місця «${escapeHtml(tail)}» немає. Перелік: /place` };
+      await putSubscriber({ ...sub, places: r.places }, true);
+      return { text: `Прибрано: <b>${escapeHtml(r.removed.title)}</b>` };
+    }
+
+    if (verb && verb !== "перелік" && verb !== "list") {
+      // `/place мама Харків` — назва, далі місто.
+      const name = validatePlaceName(verb);
+      if (!name.ok) return { text: name.error ?? "Не зрозумів назву." };
+      if (!tail) {
+        return {
+          text: `Скажіть, де це: <code>/place ${escapeHtml(name.value)} Харків</code>`,
+        };
+      }
+      const found = matchPlace(tail);
+      if (!found) {
+        return { text: `Не впізнав «${escapeHtml(tail)}». Напишіть місто або область.` };
+      }
+      const r = addPlace(
+        places,
+        { title: name.value, lat: found.lat, lon: found.lon, label: found.name },
+        Date.now(),
+      );
+      if (r.error) return { text: r.error };
+      await putSubscriber({ ...sub, places: r.places }, true);
+      return {
+        text: [
+          `${r.replaced ? "Оновлено" : "Додано"}: <b>${escapeHtml(name.value)}</b> — ${escapeHtml(found.name)}`,
+          "",
+          `Стежу за ${r.places.length} з ${MAX_PLACES} місць. Перелік: /place`,
+        ].join("\n"),
+      };
+    }
+
+    return { text: renderPlaces(places) };
+  }
+
+  /*
+   * Особиста статистика окремою командою, а не всередині `/my`.
+   *
+   * `/my` відповідає на «що зараз» — це те, заради чого бота відкривають під
+   * тривогою, і домішувати туди місячні підсумки означало б відсунути
+   * терміновe заради цікавого.
+   */
+  if (command === "month" || command === "місяць" || command === "статистика") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    return { text: renderStats(summarizeMonth(sub.stats, Date.now())) };
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -2099,9 +2189,12 @@ interface AlertPayload {
   sub: Subscriber;
   text: string;
   keyboard: unknown;
-  decision: ReturnType<typeof decideAlert>;
+  /** `null` — це сповіщення про ЧУЖЕ місце, і власний стан людини воно не чіпає. */
+  decision: ReturnType<typeof decideAlert> | null;
   pre: boolean;
   oblast: string;
+  /** Заповнене лише для другорядних місць — тоді записуємо кулдаун по місцю. */
+  place?: MyPlace;
 }
 
 const LEVEL_PRIORITY: Record<string, Priority> = {
@@ -2218,6 +2311,12 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     // звітує заміряним числом, а не обіцянкою.
     if (phase === "official" && sub.preAlert && sub.preAlert.oblast === oblast) {
       const lead = leadMinutes(sub.preAlert.at, now);
+      /*
+       * Заміряне випередження лягає в особисту статистику ОДРАЗУ, а не після
+       * доставки: сам вимір відбувся тут, і втратити його через недоставлене
+       * повідомлення означало б занизити власний звіт на користь собі.
+       */
+      await putSubscriber({ ...sub, stats: recordLead(sub.stats, lead, now) });
       queue.push({
         chatId: sub.chatId,
         priority: Priority.Routine,
@@ -2232,6 +2331,28 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
         },
       });
       continue;
+    }
+
+    /*
+     * Хвилини під тривогою рахуються тут, бо саме тут відома фаза для точки
+     * людини. Приріст береться з годинника, а не зі сталого кроку планувальника:
+     * тик смикають і зовнішній крон, і рестарти, а стеля в 15 хвилин обрізає
+     * прогалину після перезапуску.
+     */
+    const underAlarm = phase === "official";
+    if (underAlarm) {
+      const since = sub.alarmSince ?? now;
+      const countedAt = sub.alarmCountedAt ?? now;
+      const add = Math.min((now - countedAt) / 60_000, 15);
+      const run = (now - since) / 60_000;
+      await putSubscriber({
+        ...sub,
+        alarmSince: since,
+        alarmCountedAt: now,
+        stats: recordAlarmMinutes(sub.stats, add, run, now),
+      });
+    } else if (sub.alarmSince) {
+      await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null });
     }
 
     const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
@@ -2264,14 +2385,62 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     });
   }
 
+  /*
+   * Другорядні місця — окремим проходом і за суворішим правилом.
+   *
+   * Про власну точку людина може діяти на будь-якому рівні. Про дім батьків за
+   * триста кілометрів вона не може зробити нічого, крім як хвилюватись, тож
+   * «підвищена готовність» там — чиста тривога без дії. Кажемо лише про
+   * серйозне й не частіше разу на двадцять хвилин.
+   */
+  for (const raw of subs) {
+    const places = placesFromLegacy(raw.point, raw.places, now);
+    const primary = primaryPlace(places);
+    for (const place of places) {
+      if (primary && place.title === primary.title) continue; // про себе вже сказали вище
+      const pAssess = personalAssessment(threats, place, { radiusKm: raw.radiusKm, motionOf });
+      const pDanger = dangerIndex(pAssess);
+      const pDecision = decidePlaceAlert(place, pDanger.level, raw.placeAlerts, now);
+      if (!pDecision.send) continue;
+      queue.push({
+        chatId: raw.chatId,
+        priority: Priority.Watch,
+        expiresAt: now + USEFUL_WINDOW_MS,
+        payload: {
+          sub: raw,
+          text: renderPlaceAlert(place, pDanger.verdict, pDanger.caveat),
+          keyboard: undefined,
+          decision: null,
+          pre: false,
+          oblast: oblastOf(place.lat, place.lon),
+          place,
+        },
+      });
+    }
+  }
+
   const report = await deliver(
     queue,
     async (envelope) => {
-      const { sub, text, keyboard, decision, pre, oblast } = envelope.payload;
+      const { sub, text, keyboard, decision, pre, oblast, place } = envelope.payload;
       const res = await telegramSend(token, sub.chatId, text, keyboard, true);
       if (res.ok) {
-        const marked = markAlerted(sub, decision, Date.now());
-        await putSubscriber(pre ? { ...marked, preAlert: { at: Date.now(), oblast } } : marked);
+        const at = Date.now();
+        if (place) {
+          /*
+           * Сповіщення про ЧУЖЕ місце не чіпає власного стану людини: інакше
+           * звістка про Харків зарахувалась би як «ми вже попередили» і
+           * з'їла б її власне попередження за кілька хвилин по тому.
+           */
+          const fresh = (await getSubscriber(sub.chatId)) ?? sub;
+          await putSubscriber({
+            ...fresh,
+            placeAlerts: markPlaceAlerted(fresh.placeAlerts, place, at),
+          });
+        } else if (decision) {
+          const marked = markAlerted({ ...sub, stats: recordAlert(sub.stats, at) }, decision, at);
+          await putSubscriber(pre ? { ...marked, preAlert: { at, oblast } } : marked);
+        }
       } else if (res.status === 403) {
         // Бота заблокували або видалили чат. Далі слати — марно витрачати
         // бюджет, потрібний тим, хто чекає.

@@ -316,6 +316,8 @@ export function publicCommands(): TgBotCommand[] {
   return [
     { command: "my", description: "Чи летить на мене: мій радар за моєю точкою" },
     { command: "shelter", description: "Куди сховатися: укриття й метро поруч" },
+    { command: "place", description: "Мої місця: дім, робота, батьки, школа" },
+    { command: "month", description: "Ваш місяць: тривоги, години, випередження сирени" },
     { command: "settings", description: "Налаштування сповіщень: тип, радіус, ніч" },
     { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
     { command: "circle", description: "Коло: «я в порядку» одним дотиком замість дзвінків" },
