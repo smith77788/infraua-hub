@@ -19,6 +19,7 @@ import type { DangerIndex, DangerLevel, PersonalAssessment } from "./advisory";
 import type { ThreatType } from "./air";
 import { kyivHour } from "./kyiv";
 import type { MyPlace, PlaceAlertState } from "./places-mine";
+import type { PersonalStats } from "./personal-stats";
 
 /** На що будити. Порядок — від найвужчого до найширшого. */
 export type AlertTier = "critical" | "inbound" | "all";
@@ -54,6 +55,15 @@ export interface Subscriber {
   places?: MyPlace[];
   /** Коли востаннє казали про кожне місце — щоб стеження не стало потоком. */
   placeAlerts?: PlaceAlertState;
+  /**
+   * Особиста статистика по місяцях: скільки тривог, скільки годин, на скільки
+   * випередили сирену. Обіцянку неможливо оскаржити — заміряне число можна.
+   */
+  stats?: PersonalStats;
+  /** Початок поточної безперервної тривоги — щоб рахувати найдовшу. */
+  alarmSince?: number | null;
+  /** Коли востаннє дорахували хвилини тривоги, щоб приріст був чесним. */
+  alarmCountedAt?: number | null;
   radiusKm: number;
   tier: AlertTier;
   night: NightMode;

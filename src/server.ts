@@ -40,6 +40,13 @@ import {
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
 import {
+  recordAlarmMinutes,
+  recordAlert,
+  recordLead,
+  renderStats,
+  summarizeMonth,
+} from "./lib/personal-stats";
+import {
   addPlace,
   decidePlaceAlert,
   markPlaceAlerted,
@@ -1619,6 +1626,9 @@ async function personalCommand(
     "place",
     "місця",
     "місце",
+    "month",
+    "місяць",
+    "статистика",
     "сховатись",
     "radar",
     "me",
@@ -1760,6 +1770,18 @@ async function personalCommand(
     }
 
     return { text: renderPlaces(places) };
+  }
+
+  /*
+   * Особиста статистика окремою командою, а не всередині `/my`.
+   *
+   * `/my` відповідає на «що зараз» — це те, заради чого бота відкривають під
+   * тривогою, і домішувати туди місячні підсумки означало б відсунути
+   * терміновe заради цікавого.
+   */
+  if (command === "month" || command === "місяць" || command === "статистика") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    return { text: renderStats(summarizeMonth(sub.stats, Date.now())) };
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -2289,6 +2311,12 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     // звітує заміряним числом, а не обіцянкою.
     if (phase === "official" && sub.preAlert && sub.preAlert.oblast === oblast) {
       const lead = leadMinutes(sub.preAlert.at, now);
+      /*
+       * Заміряне випередження лягає в особисту статистику ОДРАЗУ, а не після
+       * доставки: сам вимір відбувся тут, і втратити його через недоставлене
+       * повідомлення означало б занизити власний звіт на користь собі.
+       */
+      await putSubscriber({ ...sub, stats: recordLead(sub.stats, lead, now) });
       queue.push({
         chatId: sub.chatId,
         priority: Priority.Routine,
@@ -2303,6 +2331,28 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
         },
       });
       continue;
+    }
+
+    /*
+     * Хвилини під тривогою рахуються тут, бо саме тут відома фаза для точки
+     * людини. Приріст береться з годинника, а не зі сталого кроку планувальника:
+     * тик смикають і зовнішній крон, і рестарти, а стеля в 15 хвилин обрізає
+     * прогалину після перезапуску.
+     */
+    const underAlarm = phase === "official";
+    if (underAlarm) {
+      const since = sub.alarmSince ?? now;
+      const countedAt = sub.alarmCountedAt ?? now;
+      const add = Math.min((now - countedAt) / 60_000, 15);
+      const run = (now - since) / 60_000;
+      await putSubscriber({
+        ...sub,
+        alarmSince: since,
+        alarmCountedAt: now,
+        stats: recordAlarmMinutes(sub.stats, add, run, now),
+      });
+    } else if (sub.alarmSince) {
+      await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null });
     }
 
     const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
@@ -2388,7 +2438,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
             placeAlerts: markPlaceAlerted(fresh.placeAlerts, place, at),
           });
         } else if (decision) {
-          const marked = markAlerted(sub, decision, at);
+          const marked = markAlerted({ ...sub, stats: recordAlert(sub.stats, at) }, decision, at);
           await putSubscriber(pre ? { ...marked, preAlert: { at, oblast } } : marked);
         }
       } else if (res.status === 403) {
