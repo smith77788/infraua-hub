@@ -1,6 +1,7 @@
 import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
+import { mainMenuKeyboard, parseMenuAction } from "./lib/bot-menu";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import { courseIsObserved, EMPTY_QUALITY } from "./lib/threat-quality";
 import {
@@ -1883,6 +1884,11 @@ async function personalCommand(
     return dutyCommand(parsed, userId);
   }
 
+  // Меню кнопок — поза гейтом: воно й є вхід до всього, зокрема до підписки.
+  if (command === "menu" || command === "меню") {
+    return { text: "Оберіть дію 👇", keyboard: mainMenuKeyboard() };
+  }
+
   // Гейт підписки. `/stop` навмисно поза ним: можливість вимкнути сповіщення
   // не може залежати ні від чого — людина має право замовкнути бота будь-коли.
   if (GATED_COMMANDS.has(command)) {
@@ -2361,6 +2367,46 @@ async function sendShelters(
   } catch {
     await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT, true));
   }
+}
+
+/**
+ * Натискання кнопки головного меню (`cmd:<назва>`).
+ *
+ * Кнопка робить те саме, що й набрана команда: збираємо синтетичну BotCommand і
+ * женемо ЧЕРЕЗ ТОЙ САМИЙ диспетчер (personalCommand), а start/help/status — через
+ * ті самі рендери, що й текстовий шлях. Жодної другої логіки: кнопка й команда
+ * не можуть розійтися. Відповідь несе меню знову — щоб дії ланцюжком не
+ * впиралися в потребу друкувати.
+ */
+async function handleMenuPress(
+  token: string,
+  press: NonNullable<ReturnType<typeof parseCallback>>,
+  request: Request,
+): Promise<boolean> {
+  const cmd = parseMenuAction(press.data);
+  if (!cmd) return false;
+  await telegramAnswerCallback(token, press.callbackId, "");
+  if (press.chatId < 0) {
+    await telegramSend(token, press.chatId, "Меню працює в особистому чаті з ботом.");
+    return true;
+  }
+  const parsed: BotCommand = { chatId: press.chatId, command: cmd, args: "", chatType: "private" };
+  const personal = await personalCommand(token, parsed, press.userId);
+  if (personal === "handled") return true;
+  if (personal) {
+    await telegramSend(token, press.chatId, personal.text, personal.keyboard ?? mainMenuKeyboard());
+    return true;
+  }
+  // Команди, що живуть поза personalCommand (start/help/status) — ті самі рендери.
+  const url = consoleUrl(request);
+  const text =
+    cmd === "status"
+      ? renderStatus(await situationBrief(request))
+      : cmd === "help"
+        ? renderHelp(url)
+        : renderStart(url);
+  await telegramSend(token, press.chatId, text, mainMenuKeyboard());
+  return true;
 }
 
 /** Натискання кнопок персонального радара. `false` — кнопка не наша. */
@@ -4423,9 +4469,11 @@ async function telegramWebhook(request: Request): Promise<Response> {
   if (press) {
     // Наборів кнопок тепер три. Персональні й вибір області перевіряються
     // першими, бо їх тиснуть усі, а адмінські — одна людина.
-    if (!(await handleGatePress(token, press))) {
-      if (!(await handlePickerPress(token, press))) {
-        if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+    if (!(await handleMenuPress(token, press, request))) {
+      if (!(await handleGatePress(token, press))) {
+        if (!(await handlePickerPress(token, press))) {
+          if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+        }
       }
     }
     return new Response("ok", { status: 200 });
@@ -4514,7 +4562,14 @@ async function telegramWebhook(request: Request): Promise<Response> {
       text = renderUnknown(parsed.command);
   }
 
-  await telegramSend(token, parsed.chatId, text, miniAppKeyboard(url, parsed.chatType));
+  // На /start — під кнопкою консолі ще й повне меню дій: новачок бачить усе, що
+  // вміє бот, одразу, не знаючи жодної команди.
+  const baseKb = miniAppKeyboard(url, parsed.chatType);
+  const keyboard =
+    parsed.command === "start" && baseKb
+      ? { inline_keyboard: [...baseKb.inline_keyboard, ...mainMenuKeyboard().inline_keyboard] }
+      : baseKb;
+  await telegramSend(token, parsed.chatId, text, keyboard);
   return new Response("ok", { status: 200 });
 }
 
