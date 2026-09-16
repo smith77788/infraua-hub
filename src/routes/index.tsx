@@ -1532,15 +1532,6 @@ function Console() {
                         else if (key === "graph") setShowGraph((v) => !v);
                       }}
                     />
-                    {/*
-                      Прогноз руху ховаємо на застиглих/офлайн даних:
-                      проєктувати траєкторію зі старих трейлів і подавати як
-                      поточну — оманливо. Банер зверху вже каже про застій.
-                    */}
-                    {(airConn.link === "live" || airConn.link === "delayed") &&
-                    raidCursor === null ? (
-                      <WaveForecast threats={threats} />
-                    ) : null}
                   </>
                 }
                 topCenter={
@@ -1581,19 +1572,7 @@ function Console() {
                     ) : null}
                   </>
                 }
-                topRight={
-                  /*
-                   * Під час перемотки ховаємо з тієї самої причини, що й на
-                   * застиглих даних: хвилі й прогноз рахуються з ЖИВОГО фіду, а
-                   * карта показує минуле. Подати живий прогноз поверх
-                   * історичного кадру — це не незручність, це хибне твердження.
-                   */
-                  (airConn.link === "live" || airConn.link === "delayed") && raidCursor === null ? (
-                    <ActiveWaves waves={waves} threats={threats} />
-                  ) : null
-                }
                 bottomLeft={<MapLegend showInfra={!infraDisabled} />}
-                bottomCenter={raidCursor === null ? <HotOblasts threats={threats} /> : null}
                 bars={
                   <>
                     <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
@@ -1697,6 +1676,23 @@ function Console() {
                 </Suspense>
               ) : null}
             </main>
+
+            {/*
+              Інформаційні панелі (прогноз руху, окремі хвилі, гарячі області)
+              живуть ПІД картою, а не поверх неї. На мапі лишається керування
+              (масштаб, «Я тут», шари, легенда) — а картинку неба ніщо не
+              затуляє. Панелі згорнуті за замовчуванням, тож смуга компактна;
+              `empty:hidden` прибирає її зовсім, коли показувати нічого.
+            */}
+            <div className="flex flex-wrap gap-2 px-2 pt-1.5 empty:hidden">
+              {(airConn.link === "live" || airConn.link === "delayed") && raidCursor === null ? (
+                <>
+                  <WaveForecast threats={threats} />
+                  <ActiveWaves waves={waves} threats={threats} />
+                </>
+              ) : null}
+              {raidCursor === null ? <HotOblasts threats={threats} /> : null}
+            </div>
 
             {/*
             Таблиця показує рівно те, що зараз на карті — ті самі фільтри й
