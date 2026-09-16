@@ -132,6 +132,15 @@ export interface Subscriber {
    * людину востаннє бачили, і про це ніхто не дізнається.
    */
   liveUntil?: number | null;
+  /**
+   * Офіційні тривоги в областях моїх місць.
+   *
+   * Окремий вимикач від наших оцінок навмисно: це різні класи повідомлення.
+   * Людина може не хотіти наших попереджень і хотіти офіційних тривог.
+   */
+  officialAlerts?: boolean;
+  /** Коли востаннє надсилали тижневий підсумок (київська доба). */
+  weeklySentAt?: string | null;
 }
 
 /** Типи, заради яких будять навіть того, хто просив тиші. */
@@ -190,6 +199,9 @@ export function newSubscriber(chatId: number, at: string, ref: string | null = n
     lastAlertAt: 0,
     lastAlertIds: [],
     lastLevel: null,
+    places: [],
+    officialAlerts: true,
+    weeklySentAt: null,
   };
 }
 

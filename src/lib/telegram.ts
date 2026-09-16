@@ -207,7 +207,9 @@ export function renderStart(consoleUrl: string): string {
     "🎯 /my — надішліть свою точку (можна <b>живу</b> — вона їде за вами), і бот сам напише, коли ціль піде на вас. Часто — <b>раніше за сирену</b>.",
     "⚙️ /settings — на що будити, на якій відстані, що дозволено вночі",
     "🛰 /status — обстановка по країні",
-    "👨‍👩‍👧 /circle — коло рідних: після тривоги одна кнопка замість двадцяти дзвінків",
+    "📍 /place — кілька місць: дім, робота, батьки. Радар з однією точкою мовчить про решту",
+    "🛣 /route — дорога: що чекає між двома містами, по областях і з часом",
+    "👨‍👩‍👧 /circle — коло рідних: «я в порядку» одним дотиком, і звістка, коли тривога в них",
     "🤝 /invite — покликати своїх",
     "",
     "Бот працює і в чужих чатах: наберіть його @імʼя й назву області — і надішлете живу картку обстановки туди, де його немає.",
@@ -218,23 +220,23 @@ export function renderStart(consoleUrl: string): string {
   ].join("\n");
 }
 
+/**
+ * Довідка складається з ТОГО САМОГО переліку, що й меню Telegram.
+ *
+ * Раніше це були два списки, і вони вже розійшлися: у меню зʼявились /place,
+ * /month, /calm і /weather, а в /help їх не було. Людина, яка шукає команду
+ * там, де їй сказали шукати, просто не знаходила половини бота — і жоден тест
+ * цього не ловив, бо обидва тексти окремо були правильні.
+ */
 export function renderHelp(consoleUrl: string): string {
+  const line = (c: TgBotCommand) => `/${c.command} — ${c.hint ?? c.description}`;
   return [
     "<b>Команди</b>",
     "",
-    "/my — мій радар: що йде на мою точку (надішліть геолокацію або <code>/my Харків</code>)",
-    "/settings — на що будити, радіус, нічний режим",
-    "/stop — пауза сповіщень; /my вмикає назад",
-    "/circle — коло рідних: «я в порядку» одним дотиком",
-    "/invite — посилання-запрошення й лічильник",
-    "/status — тривоги, події за добу, стан джерел",
-    "/start — про систему",
-    "/help — цей текст",
+    ...publicCommands().map(line),
     "",
     "<b>Для власника</b>",
-    "/admin — панель із кнопками",
-    "/layers on · /layers off — перемкнути без кнопок",
-    "/purge — прибрати з графа вже завантажені обʼєкти інфраструктури",
+    ...adminCommands().map(line),
     "",
     `Повна картина — у консолі: <a href="${consoleUrl}">${escapeHtml(consoleUrl)}</a>`,
   ].join("\n");
@@ -309,15 +311,41 @@ export function renderUnknown(command: string): string {
  */
 export interface TgBotCommand {
   command: string;
+  /** Рядок для меню Telegram: воно ріже описи, тож тут коротко. */
   description: string;
+  /**
+   * Довший рядок для `/help`, де місця більше і можна показати приклад.
+   *
+   * Без нього довідка бере `description` — так новий пункт меню не може
+   * загубитися в довідці, навіть якщо про неї забули.
+   */
+  hint?: string;
 }
 
 export function publicCommands(): TgBotCommand[] {
   return [
-    { command: "my", description: "Чи летить на мене: мій радар за моєю точкою" },
+    {
+      command: "my",
+      description: "Чи летить на мене: мій радар за моєю точкою",
+      hint: "мій радар: що йде на мою точку (надішліть геолокацію або <code>/my Харків</code>)",
+    },
     { command: "shelter", description: "Куди сховатися: укриття й метро поруч" },
-    { command: "place", description: "Мої місця: дім, робота, батьки, школа" },
+    {
+      command: "place",
+      description: "Мої місця: дім, робота, батьки, школа",
+      hint: "мої місця: <code>/place дім Харків</code>, <code>/place дача Ірпінь 30</code>",
+    },
+    {
+      command: "route",
+      description: "Дорога: що чекає між двома містами",
+      hint: "дорога: <code>/route Київ - Харків</code>",
+    },
     { command: "month", description: "Ваш місяць: тривоги, години, випередження сирени" },
+    {
+      command: "duty",
+      description: "Черговий по чату: попередження для всієї групи",
+      hint: "черговий по чату (в групі, для всіх одразу)",
+    },
     { command: "calm", description: "Коли історично тихіше — щоб спланувати сон" },
     { command: "lead", description: "Будити за запасом часу, а не за кілометрами" },
     { command: "weather", description: "Льотна ніч: чи сприяє погода заходу дронів" },
@@ -337,7 +365,11 @@ export function adminCommands(): TgBotCommand[] {
     { command: "channel", description: "Автоканал: прев'ю; /channel post — надіслати" },
     { command: "stats", description: "Скільки підписників і чи переживуть вони редеплой" },
     { command: "backup", description: "Надіслати копію підписників собі в чат" },
-    { command: "layers", description: "Шари інфраструктури: on / off" },
+    {
+      command: "layers",
+      description: "Шари інфраструктури: on / off",
+      hint: "шари інфраструктури: <code>/layers on</code> · <code>/layers off</code>",
+    },
     { command: "purge", description: "Прибрати завантажені обʼєкти з графа" },
   ];
 }

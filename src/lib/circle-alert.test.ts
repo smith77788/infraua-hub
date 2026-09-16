@@ -169,3 +169,38 @@ describe("renderPendingCheckins", () => {
     expect(line).toContain("були");
   });
 });
+
+describe("межа з circle-alerts (множинним)", () => {
+  const base = {
+    name: "Олена",
+    circleName: "Родина",
+    level: "shelter" as const,
+    nearestKm: 8,
+    lastCircleAlertAt: null,
+    now: 1_000_000,
+  };
+
+  it("не повторює фразу, яку вже сказав модуль офіційних тривог", () => {
+    // «У зоні тривоги» — це те, що людина вже прочитала, коли в області рідного
+    // оголосили тривогу. Повторити її тут означало б видати нову інформацію за
+    // ту саму й навчити не читати друге повідомлення.
+    const { text } = decideCircleAlert(base);
+    expect(text).not.toContain("у зоні тривоги");
+  });
+
+  it("каже саме те, що нового: ціль над точкою, а не оголошення в області", () => {
+    const { text } = decideCircleAlert(base);
+    expect(text).toContain("на її точку");
+    expect(text).toContain("не оголошення тривоги в області");
+  });
+
+  it("називає джерело оцінки — це наше небо, а не офіційне повідомлення", () => {
+    expect(decideCircleAlert(base).text).toContain("за нашою оцінкою");
+  });
+
+  it("смуга відстані замість точного місця лишається", () => {
+    const { text } = decideCircleAlert(base);
+    expect(text).toContain("ближче 10 км");
+    expect(text).not.toContain("8");
+  });
+});

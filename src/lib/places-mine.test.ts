@@ -8,6 +8,8 @@ import {
   canAddPlace,
   decidePlaceAlert,
   markPlaceAlerted,
+  parsePlaceTail,
+  placeRadiusKm,
   placesFromLegacy,
   primaryPlace,
   removePlace,
@@ -184,5 +186,40 @@ describe("renderPlaceAlert / renderPlaces", () => {
     const t = renderPlaces([p("дім", 100), p("мама", 200)]);
     expect(t).toContain("ваша точка");
     expect(t).toContain("мама");
+  });
+});
+
+describe("власний радіус місця", () => {
+  it("без свого радіуса діє радіус людини", () => {
+    // Нове поле не має нічого міняти тим, хто про нього не знає.
+    expect(placeRadiusKm(p("дім"), 50)).toBe(50);
+  });
+
+  it("свій радіус переважає", () => {
+    // Навколо дачі поле, навколо дому — місто.
+    expect(placeRadiusKm({ ...p("дача"), radiusKm: 30 }, 50)).toBe(30);
+  });
+
+  it("нуль не вважається радіусом", () => {
+    expect(placeRadiusKm({ ...p("дім"), radiusKm: 0 }, 50)).toBe(50);
+  });
+});
+
+describe("parsePlaceTail", () => {
+  it("без числа — саме лише місто", () => {
+    expect(parsePlaceTail("Кривий Ріг")).toEqual({ query: "Кривий Ріг" });
+  });
+
+  it("останнє число — радіус", () => {
+    expect(parsePlaceTail("Ірпінь 30")).toEqual({ query: "Ірпінь", radiusKm: 30 });
+  });
+
+  it("число поза межами лишається частиною назви", () => {
+    /*
+     * «Слобожанське 5» не має перетворитись на «Слобожанське» з радіусом
+     * пʼять кілометрів: таких радіусів наші дані все одно не розрізняють.
+     */
+    expect(parsePlaceTail("Слобожанське 5")).toEqual({ query: "Слобожанське 5" });
+    expect(parsePlaceTail("Село 999")).toEqual({ query: "Село 999" });
   });
 });

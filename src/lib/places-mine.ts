@@ -39,6 +39,15 @@ export interface MyPlace extends SubscriberPoint {
   title: string;
   /** Коли додали — щоб порядок був стабільним, а не випадковим. */
   addedAt: number;
+  /**
+   * Власний радіус саме цього місця, км.
+   *
+   * Необовʼязковий, і це змістово: дім і дача тривожать по-різному (навколо
+   * дачі поле, навколо дому — місто), але більшість людей радіус жодного разу
+   * не змінять. Без значення діє радіус людини — так нове поле нічого не
+   * ламає тим, хто про нього не знає.
+   */
+  radiusKm?: number;
 }
 
 export interface PlaceValidation {
@@ -60,6 +69,36 @@ export function validatePlaceName(raw: string): PlaceValidation {
     return { ok: false, value, error: `Назва довша за ${PLACE_NAME_MAX} символів.` };
   }
   return { ok: true, value };
+}
+
+/** Найбільший радіус, який ще має сенс: далі це вже не «моє місце», а область. */
+export const PLACE_RADIUS_MAX_KM = 200;
+/** Найменший: ближче за десять кілометрів наші дані все одно не розрізняють. */
+export const PLACE_RADIUS_MIN_KM = 10;
+
+/**
+ * Розбір хвоста `/place дім Харків 30` — місто й, за бажанням, радіус.
+ *
+ * Радіус останнім числом, а не окремою командою: людина, яка вже пише назву й
+ * місто, не піде вчити другий синтаксис заради одного числа. Числом може
+ * закінчуватись і назва міста («南»?) — ні, українські назви числами не
+ * закінчуються, тож двозначності тут немає.
+ */
+export function parsePlaceTail(tail: string): { query: string; radiusKm?: number } {
+  const m = /^(.*?)\s+(\d{1,3})$/.exec(tail.trim());
+  if (!m) return { query: tail.trim() };
+  const km = Number(m[2]);
+  if (km < PLACE_RADIUS_MIN_KM || km > PLACE_RADIUS_MAX_KM) {
+    // Число поза межами — це не радіус. Лишаємо його частиною назви, щоб
+    // «Слобожанське 5» не перетворилось на «Слобожанське» з дивним радіусом.
+    return { query: tail.trim() };
+  }
+  return { query: m[1]!.trim(), radiusKm: km };
+}
+
+/** Радіус місця: власний, якщо заданий, інакше — радіус людини. */
+export function placeRadiusKm(place: MyPlace, fallbackKm: number): number {
+  return place.radiusKm && place.radiusKm > 0 ? place.radiusKm : fallbackKm;
 }
 
 /** Чи можна додати ще одне місце. */
@@ -244,12 +283,16 @@ export function renderPlaces(places: readonly MyPlace[]): string {
   const lines = ["📍 <b>Мої місця</b>", ""];
   for (const p of places) {
     const mark = main && p.title === main.title ? " · ваша точка" : "";
-    lines.push(`• <b>${escapeHtmlPlace(p.title)}</b> — ${escapeHtmlPlace(p.label)}${mark}`);
+    const radius = p.radiusKm ? ` · ${p.radiusKm} км` : "";
+    lines.push(
+      `• <b>${escapeHtmlPlace(p.title)}</b> — ${escapeHtmlPlace(p.label)}${radius}${mark}`,
+    );
   }
   lines.push("");
   lines.push(`Ще можна додати: ${MAX_PLACES - places.length}`);
   lines.push("");
   lines.push("<code>/place мама Харків</code> — додати або змінити");
+  lines.push("<code>/place дача Ірпінь 30</code> — свій радіус для місця");
   lines.push("<code>/place прибрати мама</code> — прибрати");
   return lines.join("\n");
 }
