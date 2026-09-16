@@ -39,6 +39,7 @@ import {
 } from "./lib/telegram";
 import { renderErrorPage } from "./lib/error-page";
 import { verifyInitData } from "./lib/telegram-initdata";
+import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import {
   recordAlarmMinutes,
   recordAlert,
@@ -2352,7 +2353,40 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
         stats: recordAlarmMinutes(sub.stats, add, run, now),
       });
     } else if (sub.alarmSince) {
+      /*
+       * Тривога скінчилась. Це єдине місце, де можна сказати «можна виходити»,
+       * і воно чекає саме на ОФІЦІЙНЕ скасування: `phase` рахується з даних
+       * Повітряних Сил, а не з нашої картини неба. Порожньо в OSINT означає
+       * лише, що ніхто нічого не бачить.
+       */
+      const clear = decideAllClear({
+        officialActive: false,
+        alarmSince: sub.alarmSince,
+        // Турбували ми людину за цю тривогу чи ні — видно з часу останнього
+        // сповіщення: якщо воно було вже після початку тривоги, значить так.
+        wasAlerted: sub.lastAlertAt >= sub.alarmSince,
+        now,
+      });
       await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null });
+      if (clear.send) {
+        const summary = summarizeMonth(sub.stats, now);
+        queue.push({
+          chatId: sub.chatId,
+          priority: Priority.Routine,
+          expiresAt: now + USEFUL_WINDOW_MS,
+          payload: {
+            sub,
+            text: renderPersonalAllClear(clear.durationMin, {
+              longestThisMonth: (summary?.longestAlarmMin ?? 0) <= clear.durationMin,
+            }),
+            keyboard: undefined,
+            decision: null,
+            pre: false,
+            oblast,
+          },
+        });
+      }
+      continue;
     }
 
     const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
