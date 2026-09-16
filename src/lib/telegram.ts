@@ -329,6 +329,7 @@ export function publicCommands(): TgBotCommand[] {
       description: "Чи летить на мене: мій радар за моєю точкою",
       hint: "мій радар: що йде на мою точку (надішліть геолокацію або <code>/my Харків</code>)",
     },
+    { command: "menu", description: "Меню: усі дії кнопками, без набору команд" },
     { command: "shelter", description: "Куди сховатися: укриття й метро поруч" },
     {
       command: "place",
