@@ -367,3 +367,72 @@ describe("оцінка руху витісняє перевірку сектор
     expect(a.inboundCount).toBe(1);
   });
 });
+
+describe("рівень тривоги мусить РОЗРІЗНЯТИ, а не завжди кричати", () => {
+  const KYIV = { lat: 50.45, lon: 30.52 };
+  const NOW = Date.parse("2026-09-17T01:00:00Z");
+
+  /** Шахед за `km` на південь, курсом рівно на точку. */
+  function shahed(km: number, speedKmh: number | null): Threat {
+    return {
+      id: "a",
+      name: "Шахед",
+      lat: KYIV.lat - km / 111.32,
+      lon: KYIV.lon,
+      source: "neptun.in.ua",
+      count: 1,
+      since: "",
+      expires: "",
+      lastSeen: new Date(NOW - 60_000).toISOString(),
+      type: "shahed",
+      heading: 0,
+      quality: {
+        uncertaintyKm: 4,
+        position: "confirmed",
+        lifecycle: "confirmed",
+        presumptiveCourse: false,
+        speedKmh,
+      },
+    };
+  }
+
+  const level = (km: number, speedKmh: number | null = null): string =>
+    dangerIndex(personalAssessment([shahed(km, speedKmh)], KYIV, { radiusKm: 120, now: NOW }))
+      .level;
+
+  it("далека ціль без заміряної швидкості більше не «в укриття»", () => {
+    /*
+     * Було: нижній край вилки для «шахеда» бере 600 км/год (реактивна
+     * «Герань»), тож рівень «в укриття» мала КОЖНА ціль у радіусі ста
+     * кілометрів. Шкала не розрізняла нічого саме в найчастішому випадку, а
+     * рівень, який завжди найвищий, не означає нічого.
+     */
+    expect(level(100)).toBe("watch");
+    expect(level(80)).toBe("attention");
+  });
+
+  it("близька ціль лишається «в укриття» — асиметрія на місці", () => {
+    expect(level(10)).toBe("shelter");
+    expect(level(20)).toBe("shelter");
+  });
+
+  it("найшвидший край усе ще пробиває, коли ціль може бути вже над головою", () => {
+    // Особливий випадок, а не основа: при найшвидшому прочитанні ≤5 хв ціль
+    // справді може бути поруч, і тут поспіх важить більше за розрізнення.
+    const a = personalAssessment([shahed(50, null)], KYIV, { radiusKm: 120, now: NOW });
+    expect(a.minutesToNearestLow).toBeLessThanOrEqual(5);
+    expect(dangerIndex(a).level).toBe("shelter");
+  });
+
+  it("заміряна швидкість і таблиця класу дають однаковий рівень на дальніх", () => {
+    // Узгодженість, якої доти не було: з виміром 80 км давало «увагу», без
+    // виміру — «в укриття». Одна й та сама ціль, два різні рівні.
+    for (const km of [80, 100]) expect(level(km)).toBe(level(km, 180));
+  });
+
+  it("шкала монотонна: далі — не небезпечніше", () => {
+    const rank: Record<string, number> = { calm: 0, watch: 1, attention: 2, shelter: 3 };
+    const seq = [10, 20, 30, 40, 50, 60, 80, 100].map((km) => rank[level(km)]!);
+    expect(seq.every((v, i) => i === 0 || v <= seq[i - 1]!)).toBe(true);
+  });
+});
