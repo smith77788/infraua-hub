@@ -208,7 +208,8 @@ import {
 } from "./lib/acoustic";
 import {
   type Circle,
-  makeCircleCode,
+  randomCircleCode,
+  renderCodeRotated,
   normalizeCircleCode,
   renderCircle,
   renderCircleHelp,
@@ -248,6 +249,7 @@ import {
   stats as subscriberStats,
   writeMarker,
   isDurable as subscribersDurable,
+  rotateCircleCode,
 } from "./lib/subscriber-store";
 
 type ServerEntry = {
@@ -2357,9 +2359,29 @@ async function circleCommand(
   if (verb === "нова" || verb === "new" || verb === "створити") {
     const name = tail || "Моє коло";
     if (sub.circle) await leaveCircle(sub.circle, chatId);
-    const circle = await createCircle(name, chatId, makeCircleCode);
+    const circle = await createCircle(name, chatId, randomCircleCode);
     await putSubscriber({ ...sub, circle: circle.code, displayName: sub.displayName ?? "Я" }, true);
     return { text: (await circleView({ ...sub, circle: circle.code }, now)) ?? renderCircleHelp() };
+  }
+
+  if (verb === "новийкод" || verb === "rotate" || verb === "змінитикод") {
+    /*
+     * Зміна коду — не зручність, а виправлення.
+     *
+     * Кола, створені до переходу на випадкові коди, ВЖЕ вразливі: їхній код
+     * рахувався з ідентифікатора власника відкритою функцією, а приєднання
+     * нікого не питає. Той, хто колись порахував код і тихо ввійшов, лишається
+     * в колі назавжди — і бачить імена та сповіщення про небезпеку. Новий код
+     * відрізає такого гостя: старий перестає існувати.
+     */
+    if (!sub.circle) return { text: renderCircleHelp() };
+    const rotated = await rotateCircleCode(sub.circle, chatId, randomCircleCode);
+    if (!rotated) {
+      return {
+        text: "Змінити код може лише той, хто створив коло. Попросіть його надіслати <code>/circle новийкод</code>.",
+      };
+    }
+    return { text: renderCodeRotated(rotated.code, rotated.members.length) };
   }
 
   if (verb === "код" || verb === "join" || verb === "приєднатись") {

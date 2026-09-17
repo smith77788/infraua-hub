@@ -385,11 +385,18 @@ export async function putCircle(circle: Circle): Promise<void> {
 export async function createCircle(
   name: string,
   ownerChatId: number,
-  makeCode: (seed: number) => string,
+  /**
+   * Генератор коду — БЕЗ аргументів, і це принципово.
+   *
+   * Раніше сюди передавали `ownerChatId`, тобто код кола виводився з
+   * несекретного значення відкритою функцією. Підпис без параметра робить
+   * повернення до тієї схеми неможливим за побудовою, а не за домовленістю.
+   */
+  makeCode: () => string,
 ): Promise<Circle> {
   await load();
-  let code = makeCode(ownerChatId);
-  for (let i = 1; CIRCLES.has(code) && i < 50; i++) code = makeCode(ownerChatId + i * 7919);
+  let code = makeCode();
+  for (let i = 1; CIRCLES.has(code) && i < 50; i++) code = makeCode();
   const circle: Circle = {
     code,
     name,
@@ -418,6 +425,40 @@ export async function leaveCircle(code: string, chatId: number): Promise<void> {
   if (members.length === 0) CIRCLES.delete(code);
   else CIRCLES.set(code, { ...circle, members });
   scheduleFlush();
+}
+
+/**
+ * Видає колу новий код і переводить на нього всіх учасників.
+ *
+ * Потрібне, бо кола, створені до переходу на випадкові коди, ВЖЕ вразливі:
+ * їхній код рахується з ідентифікатора власника, і той, хто його колись
+ * порахував, лишається в колі назавжди. Нового коду досить, щоб відрізати
+ * такого гостя — старий код перестає існувати.
+ *
+ * `sub.circle` у кожного учасника переписується в тій самій операції: інакше
+ * половина родини лишилась би вказувати на код, якого вже немає.
+ */
+export async function rotateCircleCode(
+  code: string,
+  requestedBy: number,
+  makeCode: () => string,
+): Promise<Circle | null> {
+  await load();
+  const circle = CIRCLES.get(code);
+  // Змінювати код може лише власник: інакше будь-який гість міг би відрізати
+  // від кола саму родину.
+  if (!circle || circle.ownerChatId !== requestedBy) return null;
+  let next = makeCode();
+  for (let i = 1; CIRCLES.has(next) && i < 50; i++) next = makeCode();
+  const updated: Circle = { ...circle, code: next };
+  CIRCLES.delete(code);
+  CIRCLES.set(next, updated);
+  for (const chatId of circle.members) {
+    const sub = MEMORY.get(chatId);
+    if (sub && sub.circle === code) MEMORY.set(chatId, { ...sub, circle: next });
+  }
+  scheduleFlush();
+  return updated;
 }
 
 export async function joinCircle(code: string, chatId: number): Promise<Circle | null> {

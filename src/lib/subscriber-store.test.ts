@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { makeCircleCode } from "./circle";
+import { randomCircleCode } from "./circle";
 import {
   allSubscribers,
   createCircle,
@@ -19,6 +19,8 @@ import {
   putSubscriber,
   resetStoreForTests,
   stats,
+  rotateCircleCode,
+  getSubscriber,
 } from "./subscriber-store";
 
 const dir = await mkdtemp(join(tmpdir(), "radar-subs-"));
@@ -89,7 +91,7 @@ describe("сховище підписників", () => {
 
 describe("кола", () => {
   it("коло переживає перезапуск разом із підписниками", async () => {
-    const circle = await createCircle("Родина", 1, makeCircleCode);
+    const circle = await createCircle("Родина", 1, randomCircleCode);
     await joinCircle(circle.code, 2);
     await flushNow();
 
@@ -101,27 +103,27 @@ describe("кола", () => {
 
   it("код кола не видається двом різним колам", async () => {
     // Колізія тут означала б, що чужа людина мовчки бачить відмітки рідних.
-    const a = await createCircle("Перше", 1, makeCircleCode);
-    const b = await createCircle("Друге", 1, makeCircleCode);
+    const a = await createCircle("Перше", 1, randomCircleCode);
+    const b = await createCircle("Друге", 1, randomCircleCode);
     expect(a.code).not.toBe(b.code);
   });
 
   it("повторний вступ не дублює учасника", async () => {
-    const circle = await createCircle("Родина", 1, makeCircleCode);
+    const circle = await createCircle("Родина", 1, randomCircleCode);
     await joinCircle(circle.code, 2);
     const again = await joinCircle(circle.code, 2);
     expect(again?.members).toEqual([1, 2]);
   });
 
   it("вихід прибирає зі старого кола, а не лишає відмітку чужим", async () => {
-    const circle = await createCircle("Родина", 1, makeCircleCode);
+    const circle = await createCircle("Родина", 1, randomCircleCode);
     await joinCircle(circle.code, 2);
     await leaveCircle(circle.code, 2);
     expect((await getCircle(circle.code))?.members).toEqual([1]);
   });
 
   it("порожнє коло зникає — воно вже нічиє", async () => {
-    const circle = await createCircle("Родина", 1, makeCircleCode);
+    const circle = await createCircle("Родина", 1, randomCircleCode);
     await leaveCircle(circle.code, 1);
     expect(await getCircle(circle.code)).toBeUndefined();
   });
@@ -200,5 +202,44 @@ describe("де лежить сховище", () => {
     const bad = await probeWritable();
     expect(bad.ok).toBe(false);
     expect(bad.error).toBeTruthy();
+  });
+});
+
+describe("зміна коду кола", () => {
+  it("власник отримує новий код, старий перестає існувати", async () => {
+    // Кола, створені до переходу на випадкові коди, вже вразливі: їхній код
+    // рахувався з ідентифікатора власника. Новий код відрізає того, хто ввійшов
+    // тихо, — інакше він лишався б у колі назавжди.
+    const circle = await createCircle("Родина", 1, randomCircleCode);
+    const old = circle.code;
+    const rotated = await rotateCircleCode(old, 1, randomCircleCode);
+    expect(rotated).not.toBeNull();
+    expect(rotated!.code).not.toBe(old);
+    expect(await getCircle(old)).toBeUndefined();
+    expect(await getCircle(rotated!.code)).toBeDefined();
+  });
+
+  it("учасники лишаються в колі й переходять на новий код", async () => {
+    const circle = await createCircle("Родина", 2, randomCircleCode);
+    await joinCircle(circle.code, 3);
+    const { sub: member } = await ensureSubscriber(3, "2026-01-01T00:00:00Z");
+    await putSubscriber({ ...member, circle: circle.code });
+    const rotated = await rotateCircleCode(circle.code, 2, randomCircleCode);
+    expect(rotated!.members).toContain(3);
+    // Найлегше тут забути саме це: половина родини лишилась би вказувати на код,
+    // якого вже немає.
+    expect((await getSubscriber(3))?.circle).toBe(rotated!.code);
+  });
+
+  it("не власник змінити код не може", async () => {
+    // Інакше будь-який гість відрізав би від кола саму родину.
+    const circle = await createCircle("Родина", 4, randomCircleCode);
+    await joinCircle(circle.code, 5);
+    expect(await rotateCircleCode(circle.code, 5, randomCircleCode)).toBeNull();
+    expect(await getCircle(circle.code)).toBeDefined();
+  });
+
+  it("неіснуючий код змінити не можна", async () => {
+    expect(await rotateCircleCode("ZZZZZZ", 1, randomCircleCode)).toBeNull();
   });
 });

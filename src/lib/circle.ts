@@ -49,13 +49,51 @@ export const OK_FRESH_MS = 6 * 60 * 60 * 1000;
  */
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
-export function makeCircleCode(seed: number): string {
-  let n = Math.abs(Math.trunc(seed)) || 1;
+/**
+ * Код кола — ВИПАДКОВИЙ, а не виведений із чогось відомого.
+ *
+ * ## Чому це не дрібниця
+ *
+ * Доти код рахувався з `ownerChatId` цією ж функцією, а вона лежить у
+ * відкритому репозиторії. Telegram-ідентифікатор не таємниця: його бачить
+ * будь-який бот у спільній групі, він є в експортах чатів, він перебирається
+ * діапазоном. Приєднання ж нікого не питає — `joinCircle` додає того, хто
+ * назвав код.
+ *
+ * Отже ланцюг був повний: знаєш ідентифікатор людини → рахуєш код її кола →
+ * тихо входиш → бачиш імена рідних, час їхніх відміток і отримуєш сповіщення
+ * про небезпеку над ними зі смугою відстані. У країні під обстрілами це не
+ * «витік метаданих», а готове наведення.
+ *
+ * ## Як зроблено
+ *
+ * Байти з криптографічного джерела, з відкиданням залишку (rejection
+ * sampling), щоб не було перекосу за модулем: 256 не ділиться на 31 націло, і
+ * наївне `byte % 31` робило б перші символи абетки частішими.
+ *
+ * Простір той самий — 31⁶ ≈ 887 мільйонів, і він справді повний: перевірено
+ * заміром на 200 000 кодів (усі 31 символ на кожній із шести позицій).
+ * Змінилось не число варіантів, а те, що в ньому не можна вцілити знанням.
+ */
+export function randomCircleCode(
+  randomBytes: (n: number) => Uint8Array = defaultRandomBytes,
+): string {
+  const limit = Math.floor(256 / CODE_ALPHABET.length) * CODE_ALPHABET.length;
   let out = "";
-  for (let i = 0; i < 6; i++) {
-    out += CODE_ALPHABET[n % CODE_ALPHABET.length];
-    n = Math.trunc(n / CODE_ALPHABET.length) + 7919 * (i + 1);
+  while (out.length < 6) {
+    const chunk = randomBytes(12);
+    for (const b of chunk) {
+      if (out.length >= 6) break;
+      if (b >= limit) continue; // відкидаємо, щоб не було перекосу за модулем
+      out += CODE_ALPHABET[b % CODE_ALPHABET.length];
+    }
   }
+  return out;
+}
+
+function defaultRandomBytes(n: number): Uint8Array {
+  const out = new Uint8Array(n);
+  crypto.getRandomValues(out);
   return out;
 }
 
@@ -141,6 +179,7 @@ export function renderCircleHelp(): string {
     "",
     "<code>/circle нова Родина</code> — створити коло",
     "<code>/circle код ABC123</code> — приєднатись за кодом",
+    "<code>/circle новийкод</code> — змінити код, якщо підозрюєте зайвого",
     "",
     "<i>Коло не показує нічиїх координат — лише імʼя й час відмітки.</i>",
   ].join("\n");
@@ -149,4 +188,24 @@ export function renderCircleHelp(): string {
 /** Повідомлення решті кола про чиюсь відмітку. Один рядок — це сповіщення. */
 export function renderPeerOk(name: string, circleName: string): string {
   return `✅ <b>${escapeHtml(name)}</b> у порядку · ${escapeHtml(circleName)}`;
+}
+
+/**
+ * Підтвердження зміни коду.
+ *
+ * Каже не лише нове число, а й що саме сталося зі старим: людина міняє код
+ * тоді, коли підозрює зайвого в колі, і їй треба знати, що старий код більше
+ * не працює.
+ */
+export function renderCodeRotated(code: string, members: number): string {
+  return [
+    "🔑 <b>Код кола змінено</b>",
+    "",
+    `Новий код: <code>${escapeHtml(code)}</code>`,
+    "Старий більше не працює — хто знав його, до кола більше не ввійде.",
+    "",
+    members > 1
+      ? `Ті, хто вже в колі (${members}), лишаються — перепрошувати нікого не треба.`
+      : "Надішліть новий код тим, кого хочете бачити в колі.",
+  ].join("\n");
 }

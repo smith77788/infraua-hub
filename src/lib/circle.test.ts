@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import {
   OK_FRESH_MS,
-  makeCircleCode,
+  randomCircleCode,
   normalizeCircleCode,
   renderCircle,
   renderPeerOk,
@@ -22,13 +22,56 @@ describe("код кола", () => {
     // Код диктують у телефон: «нуль» і «О» нерозрізненні, а помилка означає,
     // що людина мовчки не потрапить у коло рідних.
     for (let seed = 1; seed < 200; seed++) {
-      expect(makeCircleCode(seed)).not.toMatch(/[01OIL]/);
-      expect(makeCircleCode(seed)).toHaveLength(6);
+      expect(randomCircleCode()).not.toMatch(/[01OIL]/);
+      expect(randomCircleCode()).toHaveLength(6);
     }
   });
 
-  it("стабільний для того самого джерела", () => {
-    expect(makeCircleCode(42)).toBe(makeCircleCode(42));
+  it("НЕ стабільний — саме сталість і була вразливістю", () => {
+    /*
+     * Тест перевіряв, що код той самий для того самого джерела. Джерелом був
+     * `ownerChatId`, а функція лежить у відкритому репозиторії — тобто код
+     * кола рахувався з несекретного значення. Приєднання ж нікого не питає.
+     * Ланцюг був повний: знаєш ідентифікатор → рахуєш код → тихо входиш →
+     * бачиш імена рідних і сповіщення про небезпеку над ними.
+     *
+     * Тому сталість тут не властивість, яку треба берегти, а те, що треба
+     * було прибрати.
+     */
+    const codes = new Set(Array.from({ length: 50 }, () => randomCircleCode()));
+    expect(codes.size).toBeGreaterThan(45);
+  });
+
+  it("не має перекосу за модулем — 256 не ділиться на 31 націло", () => {
+    /*
+     * Наївне `byte % 31` зробило б перші символи абетки частішими приблизно в
+     * 1,15 раза. Для коду, який боронить коло родини, це звуження простору
+     * перебору, тож байти поза межею відкидаються.
+     */
+    const counts = new Map<string, number>();
+    for (let i = 0; i < 4000; i++) {
+      for (const ch of randomCircleCode()) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    }
+    expect(counts.size).toBe(31);
+    const values = [...counts.values()];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    // На 24 000 символах рівномірний розподіл дає ~774 на символ; допуск
+    // широкий навмисно, бо ловимо систематичний перекіс, а не випадковість.
+    expect(max / min).toBeLessThan(1.35);
+  });
+
+  it("бере байти з переданого джерела — щоб властивості можна було перевірити", () => {
+    // Перші байти нижчі за межу відкидання, тож мапляться передбачувано.
+    const bytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(randomCircleCode(() => bytes)).toBe("ABCDEF");
+  });
+
+  it("байт поза межею відкидається, а не зсуває абетку", () => {
+    // 248..255 поза межею (248 = 8×31): якби їх не відкидали, «A» траплялась
+    // би частіше за решту.
+    const bytes = new Uint8Array([250, 0, 251, 1, 252, 2, 253, 3, 254, 4, 255, 5]);
+    expect(randomCircleCode(() => bytes)).toBe("ABCDEF");
   });
 
   it("прощає регістр і продиктовані «о» та «і»", () => {
