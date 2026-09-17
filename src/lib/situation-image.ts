@@ -28,6 +28,7 @@ import { UA_OUTLINE } from "./ua-outline";
 import { UA_OBLASTS } from "./ua-oblasts";
 import { CITIES } from "./ua-cities";
 import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
+import { type AlertLevel, LEVEL_COLOR, LEVEL_LABEL } from "./alert-levels";
 import { nowRadiusKm } from "./position-age";
 
 /**
@@ -374,21 +375,89 @@ function headerBanner(count: number, timeLabel?: string): string {
   );
 }
 
+/** Зона тривоги для картинки: кільце межі + рівень, оголошений джерелом. */
+export interface AlertRing {
+  ring: readonly [number, number][];
+  /**
+   * `null` — тривога є, але рівень джерело не назвало (або назва області не
+   * зійшлася). Тоді фарбуємо нейтрально: вигаданий «червоний» гірший за його
+   * відсутність, бо на нього діятимуть як на справжній.
+   */
+  level: AlertLevel | null;
+}
+
+/** Колір заливки зони за рівнем. Невідомий рівень — приглушений сірий. */
+const UNKNOWN_LEVEL_COLOR = "#8fa3b5";
+function zoneColor(level: AlertLevel | null): string {
+  return level ? LEVEL_COLOR[level] : UNKNOWN_LEVEL_COLOR;
+}
+
 /**
- * Шар областей під тривогою — та сама заливка, що на карті бота/консолі.
+ * Шар областей під тривогою — РІВНЕМ, а не однією фарбою.
  *
- * Полігони приходять готовими з того самого джерела, що малює карту в застосунку
- * (`getAlertZones`), тож канал показує РІВНО те, що бачить бот, а не свою окрему
- * правду. Заливка приглушено-червона з тонким контуром: область видно як
- * «під тривогою», але позначки цілей зверху лишаються головними.
+ * Досі всі зони заливались тим самим червоним, тож картинка каналу не могла
+ * сказати головного: червоний рівень (ракетна загроза, часу немає) чи жовтий
+ * (дронова, час дійти є). Людина бачила «десь тривожно» й не знала, що робити.
+ * Колір береться з `LEVEL_COLOR` — того самого, яким фарбує карта консолі.
+ *
+ * Порядок малювання — знизу вгору за гостротою: невідомий, жовтий, червоний.
+ * Там, де області перекриваються, зверху має лишитись найгостріше, а не те,
+ * що трапилось пізнішим у списку.
  */
-function alertLayer(polygons: readonly (readonly [number, number][])[]): string {
-  if (!polygons.length) return "";
-  const d = polygons.map((ring) => ringPath(ring)).join(" ");
-  return (
-    `<path d="${d}" fill="#ff3b3b" fill-opacity="0.12" stroke="#ff5a5a" stroke-width="1.1" ` +
-    `stroke-opacity="0.5" stroke-linejoin="round"/>`
-  );
+function alertLayer(zones: readonly AlertRing[]): string {
+  if (!zones.length) return "";
+  const byLevel = new Map<AlertLevel | "unknown", string[]>();
+  for (const z of zones) {
+    if (!z.ring.length) continue;
+    const key = z.level ?? "unknown";
+    const path = ringPath(z.ring);
+    const bucket = byLevel.get(key);
+    if (bucket) bucket.push(path);
+    else byLevel.set(key, [path]);
+  }
+  const order: (AlertLevel | "unknown")[] = ["unknown", "yellow", "red"];
+  let out = "";
+  for (const key of order) {
+    const paths = byLevel.get(key);
+    if (!paths?.length) continue;
+    const color = zoneColor(key === "unknown" ? null : key);
+    // Жовтий помітно блідіший за червоний: гостріше має й читатись гостріше.
+    const fillOpacity = key === "red" ? 0.2 : key === "yellow" ? 0.15 : 0.1;
+    out +=
+      `<path d="${paths.join(" ")}" fill="${color}" fill-opacity="${fillOpacity}" ` +
+      `stroke="${color}" stroke-width="1.2" stroke-opacity="0.65" stroke-linejoin="round"/>`;
+  }
+  return out;
+}
+
+/**
+ * Підпис до кольорів зон — у шапці, поряд із заголовком.
+ *
+ * Без нього заливка лишається загадкою: колір щось означає, але що саме —
+ * ніде не сказано. Показуємо ЛИШЕ ті рівні, які справді є на картинці.
+ */
+function alertLegend(zones: readonly AlertRing[]): string {
+  if (!zones.length) return "";
+  const present = new Set<AlertLevel | "unknown">();
+  for (const z of zones) if (z.ring.length) present.add(z.level ?? "unknown");
+  const order: (AlertLevel | "unknown")[] = ["red", "yellow", "unknown"];
+  const shown = order.filter((k) => present.has(k));
+  if (!shown.length) return "";
+  let x = PAD + 4;
+  const y = PAD + 48;
+  let out = "";
+  for (const key of shown) {
+    const color = zoneColor(key === "unknown" ? null : key);
+    const label = key === "unknown" ? "рівень невідомий" : LEVEL_LABEL[key];
+    out +=
+      `<rect x="${x}" y="${y - 8}" width="10" height="10" rx="2" fill="${color}" ` +
+      `fill-opacity="0.55" stroke="${color}" stroke-opacity="0.9" stroke-width="1"/>` +
+      `<text x="${x + 15}" y="${y + 1}" fill="#8fa3b5" font-family="sans-serif" ` +
+      `font-size="12">${label}</text>`;
+    // Ширина рядка на око: квадрат + відступ + приблизна довжина підпису.
+    x += 15 + label.length * 6.6 + 16;
+  }
+  return out;
 }
 
 export function situationSvg(
@@ -396,8 +465,8 @@ export function situationSvg(
   tracks: readonly TrackLine[] = [],
   opts: {
     timeLabel?: string | undefined;
-    /** Полігони областей під офіційною тривогою (готові [lat,lon] кільця). */
-    alertPolygons?: readonly (readonly [number, number][])[] | undefined;
+    /** Зони офіційних тривог: кільце + рівень (червоний/жовтий). */
+    alertPolygons?: readonly AlertRing[] | undefined;
     /** Момент малювання — потрібен для кола «де ціль може бути зараз». */
     now?: number;
     /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
@@ -448,6 +517,8 @@ export function situationSvg(
     northMark(W - PAD - 16, PAD + 10) +
     // Заголовок останнім — поверх усього, у власному кутку.
     headerBanner(threats.length, opts.timeLabel) +
+    // Що означає колір заливки — інакше зона на карті лишається загадкою.
+    alertLegend(opts.alertPolygons ?? []) +
     `</svg>`
   );
 }
@@ -476,7 +547,7 @@ function kyivClock(): string | undefined {
 export async function renderSituationPng(
   threats: readonly Threat[],
   tracks: readonly TrackLine[] = [],
-  alertPolygons: readonly (readonly [number, number][])[] = [],
+  alertPolygons: readonly AlertRing[] = [],
   /** Наш вимір курсу, коли він є, — бʼє здогадку джерела. Див. `CourseOf`. */
   courseOf?: CourseOf | undefined,
 ): Promise<Buffer | null> {
