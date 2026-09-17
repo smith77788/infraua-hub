@@ -376,6 +376,87 @@ async function health(request: Request): Promise<Response> {
 }
 
 /**
+ * Живий потік цілей у браузер (SSE).
+ *
+ * Сервер уже має цілі в реальному часі (WebSocket-міст до Нептуна). Лишалася
+ * лише клієнтська затримка: карта опитувала що ~8 с. Тут ми ШТОВХАЄМО той самий
+ * payload, що й `getThreats`, щойно позиції змінюються, — реальна корекція
+ * долітає за ~1–2 с, а не за вісім. Це доповнює клієнтську екстраполяцію:
+ * проєкція веде позначку між оновленнями, а цей потік приносить правду швидше.
+ *
+ * Строго додаткове: карта і без нього працює на опитуванні. Один короткий
+ * спільний кеш (`threatsPayloadCached`) не дає N вкладок множити роботу.
+ */
+async function threatStream(request: Request): Promise<Response> {
+  const { threatsPayloadCached } = await import("./lib/infra.functions");
+  const encoder = new TextEncoder();
+  let closed = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let lastSig = "";
+  let sinceData = 0;
+
+  const stop = () => {
+    closed = true;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  request.signal?.addEventListener("abort", stop);
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enqueue = (s: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(s));
+        } catch {
+          stop();
+        }
+      };
+      const pump = async () => {
+        if (closed) return;
+        try {
+          const payload = await threatsPayloadCached(1_500);
+          const sig = payload.threats
+            .map((t) => `${t.id}:${t.lat.toFixed(4)}:${t.lon.toFixed(4)}`)
+            .join("|");
+          if (sig !== lastSig) {
+            lastSig = sig;
+            sinceData = 0;
+            enqueue(`data: ${JSON.stringify(payload)}\n\n`);
+          } else if (++sinceData >= 7) {
+            // ~14 с тиші — коментар-хартбіт, щоб проксі не рвав зʼєднання.
+            sinceData = 0;
+            enqueue(`: keepalive\n\n`);
+          }
+        } catch {
+          // Збій — не рвемо потік; наступний тик спробує знову.
+        }
+      };
+      void pump();
+      timer = setInterval(() => void pump(), 2_000);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    },
+    cancel() {
+      stop();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      connection: "keep-alive",
+      // Вимикаємо буферизацію на проксі (Railway/nginx), інакше події
+      // накопичуються і «реальний час» перетворюється на пачки.
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+/**
  * Telegram-бот на вебхуку в цьому ж сервісі.
  *
  * Окремий сервіс під бота коштував би грошей і відрізав би його від даних, які
@@ -4951,6 +5032,10 @@ export default {
           headers: { "content-type": "application/json" },
         });
       }
+    }
+
+    if (pathname === "/api/threats/stream") {
+      return threatStream(request);
     }
 
     try {

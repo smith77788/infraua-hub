@@ -461,6 +461,34 @@ function Console() {
     registerServiceWorker();
   }, []);
 
+  /*
+   * Живий потік цілей (SSE) — реальна корекція позиції долітає за ~1–2 с, а не
+   * за цикл опитування (~8 с). Штовхаємо той самий payload у кеш запиту, тож він
+   * тече тим самим шляхом, що й опитування, і рухає екстраполяцію на карті.
+   * Строго додатково: EventSource сам перепідключається, а опитування лишається
+   * фолбеком — розрив потоку не залишає карту сліпою.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof EventSource === "undefined") return;
+    let stopped = false;
+    const es = new EventSource("/api/threats/stream");
+    es.onmessage = (ev) => {
+      if (stopped) return;
+      try {
+        const payload = JSON.parse(ev.data) as NonNullable<typeof threatsQuery.data>;
+        if (payload && Array.isArray(payload.threats)) {
+          queryClient.setQueryData(["threats"], payload);
+        }
+      } catch {
+        // Битий кадр — ігноруємо, наступний прийде цілим.
+      }
+    };
+    return () => {
+      stopped = true;
+      es.close();
+    };
+  }, [queryClient]);
+
   const effectiveAir = airPayload ?? cachedAir?.data;
   const threats = useMemo(() => effectiveAir?.threats ?? [], [effectiveAir]);
   const online = useOnline();
