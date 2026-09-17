@@ -17,7 +17,38 @@ import type { Threat, ThreatType } from "./air";
 import { OBLASTS } from "./alerts";
 import { oblastOf } from "./channel-post";
 import { distanceKm } from "./infra-types";
+import { swarmForecastFor } from "./swarm-forecast";
 import { escapeHtml } from "./telegram";
+
+const OBLAST_CENTERS = Object.values(OBLASTS)
+  .filter((o, i, arr) => arr.findIndex((x) => x.code === o.code) === i)
+  .map((o) => ({ name: o.name, lat: o.lat, lon: o.lon }));
+
+const COURSE_8 = [
+  "на північ",
+  "на північний схід",
+  "на схід",
+  "на південний схід",
+  "на південь",
+  "на південний захід",
+  "на захід",
+  "на північний захід",
+];
+
+/**
+ * Рядок руху рою — «куди й коли», за реально баченим рухом (swarm-forecast:
+ * відсів стрибків, лише спостережений курс). `null`, коли рій розсипаний або
+ * руху ще не видно — тоді про напрямок чесно мовчимо.
+ */
+function movementLine(threats: readonly Threat[], now: number): string | null {
+  const f = swarmForecastFor(threats, now, OBLAST_CENTERS, { horizonMin: 40, cityRadiusKm: 55 });
+  if (!f || f.swarm.coherence < 0.6) return null;
+  const course = COURSE_8[Math.round((((f.swarm.bearingDeg % 360) + 360) % 360) / 45) % 8]!;
+  const lead = f.reach[0];
+  return lead
+    ? `🧭 рух ${course} — на черзі: ${escapeHtml(lead.name)} (~${lead.etaMin} хв)`
+    : `🧭 рух ${course}, ~${f.swarm.speedKmh} км/год`;
+}
 
 export interface InlineQuery {
   id: string;
@@ -84,7 +115,10 @@ function typeSummary(threats: readonly Threat[]): string {
 }
 
 /** Картка по всій країні. */
-export function countryCard(threats: readonly Threat[]): { title: string; text: string } {
+export function countryCard(
+  threats: readonly Threat[],
+  now: number = Date.now(),
+): { title: string; text: string } {
   if (threats.length === 0) {
     return {
       title: "Небо чисте",
@@ -101,11 +135,13 @@ export function countryCard(threats: readonly Threat[]): { title: string; text: 
     byOblast.set(o, (byOblast.get(o) ?? 0) + 1);
   }
   const top = [...byOblast.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const move = movementLine(threats, now);
   return {
     title: `У небі ${threats.length} — ${top[0]?.[0] ?? ""}`,
     text: [
       `🛰 <b>У небі зараз: ${threats.length}</b>`,
       escapeHtml(typeSummary(threats)),
+      ...(move ? ["", move] : []),
       "",
       ...top.map(([name, n]) => `📍 <b>${escapeHtml(name)}</b>: ${n}`),
       "",
@@ -118,6 +154,7 @@ export function countryCard(threats: readonly Threat[]): { title: string; text: 
 export function oblastCard(
   threats: readonly Threat[],
   oblast: { name: string; lat: number; lon: number },
+  now: number = Date.now(),
 ): { title: string; text: string } {
   const near = threats.filter((t) => distanceKm(t, oblast) <= 90);
   if (near.length === 0) {
@@ -130,11 +167,13 @@ export function oblastCard(
       ].join("\n"),
     };
   }
+  const move = movementLine(near, now);
   return {
     title: `${oblast.name} — ${near.length} у небі`,
     text: [
       `🛸 <b>${escapeHtml(oblast.name)}: ${near.length} у небі</b>`,
       escapeHtml(typeSummary(near)),
+      ...(move ? ["", move] : []),
       "",
       "<i>за даними OSINT · не офіційне джерело</i>",
     ].join("\n"),
@@ -191,14 +230,15 @@ export function inlineResults(
   threats: readonly Threat[],
   query: string,
   link: string | null,
+  now: number = Date.now(),
 ): InlineArticle[] {
   const out: InlineArticle[] = [];
   const oblast = matchOblast(query);
   if (oblast) {
     out.push(
-      article(`o:${oblast.name}`, oblastCard(threats, oblast), "обстановка в області", link),
+      article(`o:${oblast.name}`, oblastCard(threats, oblast, now), "обстановка в області", link),
     );
   }
-  out.push(article("country", countryCard(threats), "обстановка по Україні", link));
+  out.push(article("country", countryCard(threats, now), "обстановка по Україні", link));
   return out;
 }

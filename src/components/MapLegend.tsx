@@ -1,4 +1,6 @@
 import { useState } from "react";
+import CollapsiblePanel from "./CollapsiblePanel";
+import { LEVEL_COLOR } from "@/lib/alert-levels";
 import { HelpCircle, X } from "lucide-react";
 
 /*
@@ -41,39 +43,31 @@ function Swatch({ color, shape = "tri" }: { color: string; shape?: "tri" | "dot"
  * це опис іншої карти.
  */
 export default function MapLegend({ showInfra = true }: { showInfra?: boolean }) {
-  const [open, setOpen] = useState(false);
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
-      >
-        <HelpCircle className="size-3.5" /> Легенда
-      </button>
-    );
-  }
-
   /*
-   * `max-w-full`, а не частка від екрана: на 320 px під легенду лишалось
+   * `w-60 max-w-full`, а не частка від екрана: на 320 px під легенду лишалось
    * 202 px (решту зʼїдають кути з кнопками Leaflet), а «80vw» дозволяло 256 —
    * і панель заходила просто на перемикач підкладки. Межу задає те місце, куди
    * панель кладуть, а не здогад про ширину телефона.
    */
   return (
-    <div className="pointer-events-auto max-h-full w-60 max-w-full overflow-y-auto rounded border border-border bg-background/95 p-3 backdrop-blur">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+    <CollapsiblePanel
+      storageKey="legend"
+      /*
+       * Довідкова панель — згорнута завжди, поки людина не вирішить інакше.
+       * Її відкривають, коли щось незрозуміло, а не тримають розгорнутою:
+       * на відміну від хвиль і прогнозу, вона нічого не повідомляє про
+       * ЗАРАЗ, тож місця на карті не варта навіть на широкому екрані.
+       */
+      defaultOpen={false}
+      borderClass="border-border"
+      textClass="text-muted-foreground"
+      title={
+        <>
+          <HelpCircle className="size-3 shrink-0" />
           Легенда карти
-        </span>
-        <button
-          onClick={() => setOpen(false)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      </div>
-
+        </>
+      }
+    >
       <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
         Повітряні цілі (за типом)
       </p>
@@ -126,9 +120,22 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         <div className="flex items-center gap-2">
           <Swatch color="#ff3b30" shape="dot" /> Пожежі (FIRMS, за FRP)
         </div>
+        {/*
+          Два рівні тривоги — не «слабше/сильніше», а різний ЗАПАС ЧАСУ, і саме
+          так вони й підписані. Колір сам по собі цього не каже, а людині під
+          тривогою треба знати не колір, а чи встигне вона дійти.
+        */}
         <div className="flex items-center gap-2">
-          <Swatch color="#ff4d4d" shape="line" /> Зони повітряної тривоги (пунктир)
+          <Swatch color={LEVEL_COLOR.red} shape="line" /> Тривога, червоний рівень — ракетна
+          загроза: часу дійти може не бути
         </div>
+        <div className="flex items-center gap-2">
+          <Swatch color={LEVEL_COLOR.yellow} shape="line" /> Тривога, жовтий рівень — переважно
+          дронова: час дійти до укриття є
+        </div>
+        <p className="pl-1 text-[10px] leading-snug opacity-60">
+          Рівень і причину дає джерело тривог; де воно рівня не дало, зона лишається одного кольору.
+        </p>
         {showInfra ? (
           <>
             <div className="flex items-center gap-2">
@@ -141,6 +148,6 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
           </>
         ) : null}
       </div>
-    </div>
+    </CollapsiblePanel>
   );
 }

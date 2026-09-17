@@ -50,8 +50,8 @@ import StaleShellNotice from "@/components/StaleShellNotice";
 import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import MapOverlays from "@/components/MapOverlays";
-import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
-import RaidReplay from "@/components/RaidReplay";
+import { TRAIL_MS } from "@/components/TimelinePlayer";
+import TimeScrubbers from "@/components/TimeScrubbers";
 import WaveForecast from "@/components/WaveForecast";
 import ActiveWaves from "@/components/ActiveWaves";
 import OfflineBanner from "@/components/OfflineBanner";
@@ -65,6 +65,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getAlerts,
+  getAlertLevels,
   getAlertZones,
   getEvents,
   getFacilities,
@@ -302,10 +303,13 @@ function Console() {
   const threatsQuery = useQuery({
     queryKey: ["threats"],
     queryFn: () => threatsFn(),
-    // Повітряна обстановка змінюється щохвилини під час нальотів — тримаємо
-    // короткий інтервал, щоб позначки зʼявлялись майже наживо.
-    staleTime: 12 * 1000,
-    refetchInterval: 15 * 1000,
+    // Повітряна обстановка змінюється щосекунди під час нальотів. Нептун —
+    // еталон реального часу; тримаємо короткий інтервал, а серверний спільний
+    // кеш (neptunThreatsCached, 10с) обʼєднує всіх користувачів в один запит до
+    // джерела, тож частий полінг не бʼє по ньому.
+    staleTime: 6 * 1000,
+    refetchInterval: 8 * 1000,
+    refetchIntervalInBackground: false,
   });
   // Ситуаційні фонові фіди (фронт, пожежі, Kp, інтернет-збої, погода) — в одному
   // місці, окремим хуком data-plane.
@@ -325,6 +329,19 @@ function Console() {
   const [pushState, setPushState] = useState<
     { status: "idle" | "sending" } | { status: "done"; text: string; ok: boolean }
   >({ status: "idle" });
+
+  /*
+   * Рівні тривог — окремим запитом від зон: зони дають геометрію, рівні —
+   * зміст. Темп той самий, бо разом вони й малюють одну картину.
+   */
+  const levelsFn = useServerFn(getAlertLevels);
+  const levelsQuery = useQuery({
+    queryKey: ["alert-levels"],
+    queryFn: () => levelsFn(),
+    staleTime: 45 * 1000,
+    refetchInterval: 45 * 1000,
+  });
+  const alertLevels = levelsQuery.data?.levels ?? null;
 
   const zonesFn = useServerFn(getAlertZones);
   const zonesQuery = useQuery({
@@ -443,6 +460,34 @@ function Console() {
   useEffect(() => {
     registerServiceWorker();
   }, []);
+
+  /*
+   * Живий потік цілей (SSE) — реальна корекція позиції долітає за ~1–2 с, а не
+   * за цикл опитування (~8 с). Штовхаємо той самий payload у кеш запиту, тож він
+   * тече тим самим шляхом, що й опитування, і рухає екстраполяцію на карті.
+   * Строго додатково: EventSource сам перепідключається, а опитування лишається
+   * фолбеком — розрив потоку не залишає карту сліпою.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof EventSource === "undefined") return;
+    let stopped = false;
+    const es = new EventSource("/api/threats/stream");
+    es.onmessage = (ev) => {
+      if (stopped) return;
+      try {
+        const payload = JSON.parse(ev.data) as NonNullable<typeof threatsQuery.data>;
+        if (payload && Array.isArray(payload.threats)) {
+          queryClient.setQueryData(["threats"], payload);
+        }
+      } catch {
+        // Битий кадр — ігноруємо, наступний прийде цілим.
+      }
+    };
+    return () => {
+      stopped = true;
+      es.close();
+    };
+  }, [queryClient]);
 
   const effectiveAir = airPayload ?? cachedAir?.data;
   const threats = useMemo(() => effectiveAir?.threats ?? [], [effectiveAir]);
@@ -1431,6 +1476,7 @@ function Console() {
                     edges={edges}
                     alerts={regions}
                     zones={zones}
+                    alertLevels={alertLevels}
                     threats={mapThreats}
                     frontline={frontline}
                     showFrontline={showFrontline}
@@ -1517,15 +1563,6 @@ function Console() {
                         else if (key === "graph") setShowGraph((v) => !v);
                       }}
                     />
-                    {/*
-                      Прогноз руху ховаємо на застиглих/офлайн даних:
-                      проєктувати траєкторію зі старих трейлів і подавати як
-                      поточну — оманливо. Банер зверху вже каже про застій.
-                    */}
-                    {(airConn.link === "live" || airConn.link === "delayed") &&
-                    raidCursor === null ? (
-                      <WaveForecast threats={threats} />
-                    ) : null}
                   </>
                 }
                 topCenter={
@@ -1566,24 +1603,13 @@ function Console() {
                     ) : null}
                   </>
                 }
-                topRight={
-                  /*
-                   * Під час перемотки ховаємо з тієї самої причини, що й на
-                   * застиглих даних: хвилі й прогноз рахуються з ЖИВОГО фіду, а
-                   * карта показує минуле. Подати живий прогноз поверх
-                   * історичного кадру — це не незручність, це хибне твердження.
-                   */
-                  (airConn.link === "live" || airConn.link === "delayed") && raidCursor === null ? (
-                    <ActiveWaves waves={waves} threats={threats} />
-                  ) : null
-                }
                 bottomLeft={<MapLegend showInfra={!infraDisabled} />}
-                bottomCenter={raidCursor === null ? <HotOblasts threats={threats} /> : null}
                 bars={
-                  <>
-                    <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
-                    <TimelinePlayer onCursor={setPlayCursor} />
-                  </>
+                  <TimeScrubbers
+                    frames={raidFrames}
+                    onRaidCursor={setRaidCursor}
+                    onHistoryCursor={setPlayCursor}
+                  />
                 }
               />
 
@@ -1682,6 +1708,23 @@ function Console() {
                 </Suspense>
               ) : null}
             </main>
+
+            {/*
+              Інформаційні панелі (прогноз руху, окремі хвилі, гарячі області)
+              живуть ПІД картою, а не поверх неї. На мапі лишається керування
+              (масштаб, «Я тут», шари, легенда) — а картинку неба ніщо не
+              затуляє. Панелі згорнуті за замовчуванням, тож смуга компактна;
+              `empty:hidden` прибирає її зовсім, коли показувати нічого.
+            */}
+            <div className="flex flex-wrap gap-2 px-2 pt-1.5 empty:hidden">
+              {(airConn.link === "live" || airConn.link === "delayed") && raidCursor === null ? (
+                <>
+                  <WaveForecast threats={threats} />
+                  <ActiveWaves waves={waves} threats={threats} />
+                </>
+              ) : null}
+              {raidCursor === null ? <HotOblasts threats={threats} /> : null}
+            </div>
 
             {/*
             Таблиця показує рівно те, що зараз на карті — ті самі фільтри й

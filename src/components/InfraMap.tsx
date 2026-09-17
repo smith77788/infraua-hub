@@ -3,6 +3,7 @@ import {
   MapContainer,
   TileLayer,
   LayersControl,
+  LayerGroup,
   CircleMarker,
   Circle,
   Marker,
@@ -22,6 +23,14 @@ import {
   type Threat,
   type ThreatType,
 } from "@/lib/air";
+import {
+  LEVEL_COLOR,
+  LEVEL_LABEL,
+  levelForOblast,
+  raionsOf,
+  reasonsFor,
+  type AlertLevels,
+} from "@/lib/alert-levels";
 import { linkStyle, selectVisibleLinks } from "@/lib/map-links";
 import { UA_OUTLINE } from "@/lib/ua-outline";
 import { UA_OBLASTS } from "@/lib/ua-oblasts";
@@ -49,6 +58,7 @@ import {
   LIFECYCLE_LABEL,
   radiusIsStated,
 } from "@/lib/threat-quality";
+import { useThreatMotion } from "./use-threat-motion";
 
 interface Props {
   facilities: Facility[];
@@ -56,6 +66,14 @@ interface Props {
   edges: GraphEdge[];
   alerts: AlertRegion[];
   zones: AlertZone[];
+  /**
+   * Рівні тривог по областях і районах. `null` — джерело не відповіло.
+   *
+   * Саме `null`, а не порожній обʼєкт: без рівнів зони малюються як досі,
+   * одним кольором. Пофарбувати їх «спокійними» через мовчання джерела було б
+   * твердженням, якого ми не маємо права робити.
+   */
+  alertLevels?: AlertLevels | null;
   threats: Threat[];
   frontline: FrontlineArea[];
   showFrontline: boolean;
@@ -300,47 +318,93 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
 }
 
 /**
- * Прибирає рекламний префікс «Leaflet» з атрибуції — лишається лише кредит
- * даних (Esri/OSM), якого вимагає ліцензія. Саме посилання «Leaflet» на карті
- * зайве й ще й налазило на стрічку внизу.
+ * Куди можна доїхати зумом.
+ *
+ * `MAX_ZOOM` — межа САМОЇ карти, `maxNativeZoom` — до якого зуму в підкладки
+ * взагалі є плитки. Різниця між ними і є те, чого бракувало: темна підкладка
+ * має плитки лише до 16, і без `maxNativeZoom` Leaflet просто зупиняв зум на
+ * цьому числі. Тобто наблизитись до будинку було неможливо не через дані про
+ * цілі, а через підкладку.
+ *
+ * З `maxNativeZoom` карта наближається далі, розтягуючи останню наявну плитку:
+ * підкладка стає розмитою, а позначка цілі лишається на своєму місці з повною
+ * точністю. Розмита підкладка чесно показує, що детальнішої картинки НЕМАЄ, —
+ * і це краще, ніж упертись у стелю й не побачити нічого.
  */
-function AttributionPrefixOff() {
-  const map = useMap();
-  useEffect(() => {
-    map.attributionControl?.setPrefix(false);
-  }, [map]);
-  return null;
-}
+const MAX_ZOOM = 19;
+
+/**
+ * З якого зуму усталений шар переходить на супутник.
+ *
+ * Чотирнадцять — там, де схема вже перестає додавати (окремі вулиці видно) і
+ * починає бракувати знімка: саме з цього масштабу питання стає «над яким
+ * будинком», а не «над яким містом».
+ */
+const SAT_FROM_ZOOM = 14;
 
 function BaseLayers() {
   return (
     <LayersControl position="topright">
-      <LayersControl.BaseLayer checked name="Темна">
+      {/*
+        Усталений шар передає естафету сам: темна схема на огляді країни,
+        супутник — щойно наближаєшся.
+        
+        Підняти стелю зуму було мало. Темний канвас — це СХЕМА, знімків у ньому
+        немає взагалі: розтягнута плитка на глибокому зумі дає просто темряву,
+        і питання «над яким будинком летить» лишалось без відповіді. Тому з
+        чотирнадцятого зуму під позначками зʼявляється супутниковий знімок —
+        той самий, що й у шарі «Супутник», лише без потреби його шукати.
+        
+        Окремі шари «Темна» і «Супутник» лишились: хто хоче тримати одне й те
+        саме на всіх зумах, обере вручну.
+      */}
+      <LayersControl.BaseLayer checked name="Авто: схема + супутник">
+        <LayerGroup>
+          <TileLayer
+            attribution="&copy; Esri"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+            maxNativeZoom={16}
+            maxZoom={SAT_FROM_ZOOM - 1}
+          />
+          <TileLayer
+            attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            minZoom={SAT_FROM_ZOOM}
+            maxNativeZoom={18}
+            maxZoom={MAX_ZOOM}
+          />
+        </LayerGroup>
+      </LayersControl.BaseLayer>
+      <LayersControl.BaseLayer name="Темна">
         <TileLayer
           attribution="&copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={16}
+          maxNativeZoom={16}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       <LayersControl.BaseLayer name="Супутник">
         <TileLayer
           attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={18}
+          maxNativeZoom={18}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       <LayersControl.BaseLayer name="Гібрид (мітки)">
         <TileLayer
           attribution="Labels &copy; Esri"
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={18}
+          maxNativeZoom={18}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       <LayersControl.BaseLayer name="Схема (OSM)">
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
+          maxNativeZoom={19}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.BaseLayer>
       {/*
@@ -354,7 +418,8 @@ function BaseLayers() {
       <LayersControl.Overlay checked name="Межі областей і міста">
         <TileLayer
           url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={18}
+          maxNativeZoom={18}
+          maxZoom={MAX_ZOOM}
         />
       </LayersControl.Overlay>
     </LayersControl>
@@ -609,6 +674,11 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     );
   }, [threats]);
 
+  // Плавний рух між реальними оновленнями: історію (де ціль БУЛА) ведемо за
+  // сирими спостереженнями вище, а протягнуту позицію (де ціль ЗАРАЗ, оцінково)
+  // рахує motion — тож трек лишається фактом, а маркер їде.
+  const animated = useThreatMotion(threats);
+
   if (zoom < 7) {
     const clusters = gridClusters(threats, zoom);
     return (
@@ -628,7 +698,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     );
   }
 
-  const inView = threats.filter((t) => bounds.contains([t.lat, t.lon]));
+  const inView = animated.filter((t) => bounds.contains([t.lat, t.lon]));
   return (
     <>
       {inView.map((t) => {
@@ -663,7 +733,12 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
          * колі, і рішення людини має спиратися на коло, а не на його центр.
          */
         const q = t.quality ?? EMPTY_QUALITY;
-        const radiusKm = displayRadiusKm(q);
+        // Протягнута позиція росте невизначеність: до заявленого радіуса додаємо
+        // пройдений за проєкцією шлях — ціль десь у цьому (більшому) колі. Коли
+        // тягнемо (projKm>0), контур завжди пунктирний: це оцінка, не факт.
+        const projKm = t.projKm ?? 0;
+        const projected = projKm > 0;
+        const radiusKm = displayRadiusKm(q) + projKm;
         const courseObserved = courseIsObserved(q);
         return (
           <Fragment key={t.id}>
@@ -678,8 +753,9 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 fillOpacity: fresh === "stale" ? 0.03 : 0.07,
                 // Заявлений джерелом радіус — суцільний контур; наше
                 // консервативне припущення, коли джерело промовчало, —
-                // пунктир. Різницю видно, не читаючи попап.
-                ...(radiusIsStated(q) ? {} : { dashArray: "3 6" }),
+                // пунктир. Різницю видно, не читаючи попап. Протягнута позиція
+                // — теж пунктир: центр кола сам є оцінкою.
+                ...(radiusIsStated(q) && !projected ? {} : { dashArray: "3 6" }),
               }}
             />
             {observed.length >= 2 ? (
@@ -712,8 +788,10 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
             >
-              <Popup>
-                <div className="space-y-1 font-sans text-xs">
+              <Popup maxWidth={240} autoPanPadding={[12, 12]}>
+                {/* Обмежуємо картку, щоб вона не перекривала всю карту на
+                    невисокому мобільному вьюпорті: вузька ширина + прокрутка. */}
+                <div className="max-h-[45vh] space-y-1 overflow-y-auto pr-1 font-sans text-xs">
                   <p className="font-semibold" style={{ color: style.color }}>
                     {style.label}
                     {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
@@ -738,11 +816,17 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   ) : null}
                   <p className="opacity-70">
                     Позиція:{" "}
-                    {radiusIsStated(q)
+                    {radiusIsStated(q) && !projected
                       ? `±${Math.round(radiusKm)} км`
-                      : `±~${radiusKm} км (джерело не вказало)`}
+                      : `±~${Math.round(radiusKm)} км${projected ? " (протягнуто за курсом)" : " (джерело не вказало)"}`}
                     {q.lifecycle ? ` · ${LIFECYCLE_LABEL[q.lifecycle]}` : ""}
                   </p>
+                  {projected ? (
+                    <p className="opacity-60 text-[11px] leading-snug">
+                      ◇ позицію протягнуто за курсом на ~{projKm.toFixed(1)} км від останнього
+                      сигналу — оцінка, не факт
+                    </p>
+                  ) : null}
                   {q.speedKmh !== null ? (
                     <p className="opacity-70">
                       Швидкість: {Math.round(q.speedKmh)} км/год (заміряна)
@@ -835,6 +919,7 @@ export default function InfraMap({
   edges,
   alerts,
   zones,
+  alertLevels = null,
   threats,
   frontline,
   showFrontline,
@@ -873,11 +958,15 @@ export default function InfraMap({
       center={[48.6, 31.2]}
       zoom={6}
       minZoom={5}
+      maxZoom={MAX_ZOOM}
       scrollWheelZoom
       className="size-full"
       style={{ background: "#0a0e14" }}
+      // Стрічка атрибуції («Esri…») налазила на карту й закривала цілі внизу
+      // екрана. Прибираємо контрол цілком — кредит даних лишається в «Легенді
+      // карти», а сама мапа не має бути затулена.
+      attributionControl={false}
     >
-      <AttributionPrefixOff />
       <BaseLayers />
 
       {/*
@@ -985,15 +1074,25 @@ export default function InfraMap({
 
       {/* Зони тривог: реальні полігони регіонів, або кола-фолбек */}
       {zones.length > 0
-        ? zones.flatMap((z) =>
-            z.polygons.map((ring, i) => (
+        ? zones.flatMap((z) => {
+            /*
+             * Колір за РІВНЕМ, а не один на всі тривоги. Жовтий і червоний —
+             * це не «слабше/сильніше», а різний запас часу: дрон лишає час
+             * дійти до укриття, ракета — ні. Коли рівня не знаємо, лишається
+             * попередній єдиний колір: вигаданий рівень гірший за його брак.
+             */
+            const level = alertLevels ? levelForOblast(alertLevels, z.region) : null;
+            const color = level ? LEVEL_COLOR[level] : ALERT_EDGE;
+            const reasons = alertLevels ? reasonsFor(alertLevels, z.region) : [];
+            const raions = alertLevels ? raionsOf(alertLevels, z.region) : [];
+            return z.polygons.map((ring, i) => (
               <Polygon
                 key={`zone-${z.region}-${i}`}
                 positions={ring}
                 pathOptions={{
-                  color: ALERT_EDGE,
-                  fillColor: ALERT_EDGE,
-                  fillOpacity: 0.05,
+                  color,
+                  fillColor: color,
+                  fillOpacity: level === "red" ? 0.1 : 0.05,
                   weight: 1.2,
                   // Пунктир — стан, що минає. Суцільна лінія нижче належить
                   // території, яку тримають місяцями.
@@ -1002,14 +1101,26 @@ export default function InfraMap({
               >
                 <Popup>
                   <div className="space-y-1 font-sans text-xs">
-                    <p className="font-semibold text-red-600">Повітряна тривога</p>
+                    <p className="font-semibold" style={{ color }}>
+                      Повітряна тривога
+                      {level ? ` · ${LEVEL_LABEL[level]}` : ""}
+                    </p>
                     <p className="opacity-80">{z.region}</p>
-                    {z.type ? <p className="opacity-60">{z.type}</p> : null}
+                    {/* Причина головніша за колір: вона й каже, що робити. */}
+                    {reasons.map((r) => (
+                      <p key={r} className="opacity-70">
+                        {r}
+                      </p>
+                    ))}
+                    {raions.length > 0 ? (
+                      <p className="opacity-60">Райони: {raions.map((a) => a.name).join(", ")}</p>
+                    ) : null}
+                    {z.type && reasons.length === 0 ? <p className="opacity-60">{z.type}</p> : null}
                   </div>
                 </Popup>
               </Polygon>
-            )),
-          )
+            ));
+          })
         : alerts
             .filter((r) => r.active)
             .map((r) => (

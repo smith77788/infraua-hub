@@ -1,4 +1,5 @@
 import { useState } from "react";
+import CollapsiblePanel from "./CollapsiblePanel";
 import { Layers, X } from "lucide-react";
 
 /*
@@ -22,43 +23,26 @@ export default function MapLayers({
   layers: LayerToggle[];
   onToggle: (key: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        title="Шари карти"
-        aria-label="Шари карти"
-        className="pointer-events-auto flex items-center gap-1.5 rounded border border-border bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
-      >
-        <Layers className="size-3.5" /> <span className="hidden sm:inline">Шари</span>
-      </button>
-    );
-  }
-
   return (
-    // max-h-full + власна прокрутка: на невисокій карті мініапу відкритий список
-    // шарів інакше вивалювався вниз і накривав легенду та смугу гарячих
-    // областей. Тепер він обмежений своєю смугою і гортається всередині.
-    <div className="pointer-events-auto flex max-h-full w-52 max-w-[80vw] flex-col overflow-hidden rounded border border-border bg-background/95 backdrop-blur">
-      {/*
-        Шапка липка: коли список довший за смугу й гортається, хрестик «закрити»
-        має лишатися на видноті, а не їхати вгору під кнопки зуму.
-      */}
-      <div className="sticky top-0 flex items-center justify-between border-b border-border/60 bg-background/95 px-2 py-1.5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+    <CollapsiblePanel
+      storageKey="layers"
+      /*
+       * Довідкова панель — згорнута завжди, поки людина не вирішить інакше.
+       * Її відкривають, коли щось незрозуміло, а не тримають розгорнутою:
+       * на відміну від хвиль і прогнозу, вона нічого не повідомляє про
+       * ЗАРАЗ, тож місця на карті не варта навіть на широкому екрані.
+       */
+      defaultOpen={false}
+      borderClass="border-border"
+      textClass="text-muted-foreground"
+      title={
+        <>
+          <Layers className="size-3 shrink-0" />
           Шари карти
-        </span>
-        <button
-          onClick={() => setOpen(false)}
-          aria-label="Закрити"
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      </div>
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+        </>
+      }
+    >
+      <div className="space-y-1">
         {layers.map((l) => (
           <button
             key={l.key}
@@ -84,6 +68,6 @@ export default function MapLayers({
           </button>
         ))}
       </div>
-    </div>
+    </CollapsiblePanel>
   );
 }

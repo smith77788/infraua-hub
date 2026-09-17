@@ -1,6 +1,7 @@
 import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
+import { mainMenuKeyboard, parseMenuAction } from "./lib/bot-menu";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import { courseIsObserved, EMPTY_QUALITY } from "./lib/threat-quality";
 import {
@@ -360,13 +361,98 @@ async function webhookStatus(): Promise<Record<string, unknown>> {
 async function health(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const report = baseReport();
-  let body: Record<string, unknown> = { ...report };
+  // Стан живого мосту до Нептуна — щоб мовчазне падіння на REST було видно, а не
+  // здогадувалось. `connected:false` при спокійному небі — норма (ще не кликали);
+  // `connected:false` під час активної хвилі — сигнал, що трансляція йде з REST.
+  const { neptunStreamStatus } = await import("./lib/neptun-stream");
+  let body: Record<string, unknown> = { ...report, neptunStream: neptunStreamStatus() };
   if (url.searchParams.get("probe") === "1") body = { ...body, probes: await runProbes() };
   // ?telegram=1 питає Telegram про стан вебхука — діагностика «бот мовчить».
   if (url.searchParams.get("telegram") === "1") body = { ...body, webhook: await webhookStatus() };
   return new Response(JSON.stringify(body, null, 2), {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+/**
+ * Живий потік цілей у браузер (SSE).
+ *
+ * Сервер уже має цілі в реальному часі (WebSocket-міст до Нептуна). Лишалася
+ * лише клієнтська затримка: карта опитувала що ~8 с. Тут ми ШТОВХАЄМО той самий
+ * payload, що й `getThreats`, щойно позиції змінюються, — реальна корекція
+ * долітає за ~1–2 с, а не за вісім. Це доповнює клієнтську екстраполяцію:
+ * проєкція веде позначку між оновленнями, а цей потік приносить правду швидше.
+ *
+ * Строго додаткове: карта і без нього працює на опитуванні. Один короткий
+ * спільний кеш (`threatsPayloadCached`) не дає N вкладок множити роботу.
+ */
+async function threatStream(request: Request): Promise<Response> {
+  const { threatsPayloadCached } = await import("./lib/infra.functions");
+  const encoder = new TextEncoder();
+  let closed = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let lastSig = "";
+  let sinceData = 0;
+
+  const stop = () => {
+    closed = true;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  request.signal?.addEventListener("abort", stop);
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enqueue = (s: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(s));
+        } catch {
+          stop();
+        }
+      };
+      const pump = async () => {
+        if (closed) return;
+        try {
+          const payload = await threatsPayloadCached(1_500);
+          const sig = payload.threats
+            .map((t) => `${t.id}:${t.lat.toFixed(4)}:${t.lon.toFixed(4)}`)
+            .join("|");
+          if (sig !== lastSig) {
+            lastSig = sig;
+            sinceData = 0;
+            enqueue(`data: ${JSON.stringify(payload)}\n\n`);
+          } else if (++sinceData >= 7) {
+            // ~14 с тиші — коментар-хартбіт, щоб проксі не рвав зʼєднання.
+            sinceData = 0;
+            enqueue(`: keepalive\n\n`);
+          }
+        } catch {
+          // Збій — не рвемо потік; наступний тик спробує знову.
+        }
+      };
+      void pump();
+      timer = setInterval(() => void pump(), 2_000);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    },
+    cancel() {
+      stop();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      connection: "keep-alive",
+      // Вимикаємо буферизацію на проксі (Railway/nginx), інакше події
+      // накопичуються і «реальний час» перетворюється на пачки.
+      "x-accel-buffering": "no",
+    },
   });
 }
 
@@ -1883,6 +1969,11 @@ async function personalCommand(
     return dutyCommand(parsed, userId);
   }
 
+  // Меню кнопок — поза гейтом: воно й є вхід до всього, зокрема до підписки.
+  if (command === "menu" || command === "меню") {
+    return { text: "Оберіть дію 👇", keyboard: mainMenuKeyboard() };
+  }
+
   // Гейт підписки. `/stop` навмисно поза ним: можливість вимкнути сповіщення
   // не може залежати ні від чого — людина має право замовкнути бота будь-коли.
   if (GATED_COMMANDS.has(command)) {
@@ -2361,6 +2452,46 @@ async function sendShelters(
   } catch {
     await telegramSend(token, chatId, renderShelters([], COVERAGE_CAVEAT, true));
   }
+}
+
+/**
+ * Натискання кнопки головного меню (`cmd:<назва>`).
+ *
+ * Кнопка робить те саме, що й набрана команда: збираємо синтетичну BotCommand і
+ * женемо ЧЕРЕЗ ТОЙ САМИЙ диспетчер (personalCommand), а start/help/status — через
+ * ті самі рендери, що й текстовий шлях. Жодної другої логіки: кнопка й команда
+ * не можуть розійтися. Відповідь несе меню знову — щоб дії ланцюжком не
+ * впиралися в потребу друкувати.
+ */
+async function handleMenuPress(
+  token: string,
+  press: NonNullable<ReturnType<typeof parseCallback>>,
+  request: Request,
+): Promise<boolean> {
+  const cmd = parseMenuAction(press.data);
+  if (!cmd) return false;
+  await telegramAnswerCallback(token, press.callbackId, "");
+  if (press.chatId < 0) {
+    await telegramSend(token, press.chatId, "Меню працює в особистому чаті з ботом.");
+    return true;
+  }
+  const parsed: BotCommand = { chatId: press.chatId, command: cmd, args: "", chatType: "private" };
+  const personal = await personalCommand(token, parsed, press.userId);
+  if (personal === "handled") return true;
+  if (personal) {
+    await telegramSend(token, press.chatId, personal.text, personal.keyboard ?? mainMenuKeyboard());
+    return true;
+  }
+  // Команди, що живуть поза personalCommand (start/help/status) — ті самі рендери.
+  const url = consoleUrl(request);
+  const text =
+    cmd === "status"
+      ? renderStatus(await situationBrief(request))
+      : cmd === "help"
+        ? renderHelp(url)
+        : renderStart(url);
+  await telegramSend(token, press.chatId, text, mainMenuKeyboard());
+  return true;
 }
 
 /** Натискання кнопок персонального радара. `false` — кнопка не наша. */
@@ -4423,9 +4554,11 @@ async function telegramWebhook(request: Request): Promise<Response> {
   if (press) {
     // Наборів кнопок тепер три. Персональні й вибір області перевіряються
     // першими, бо їх тиснуть усі, а адмінські — одна людина.
-    if (!(await handleGatePress(token, press))) {
-      if (!(await handlePickerPress(token, press))) {
-        if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+    if (!(await handleMenuPress(token, press, request))) {
+      if (!(await handleGatePress(token, press))) {
+        if (!(await handlePickerPress(token, press))) {
+          if (!(await handlePersonalPress(token, press))) await handleAdminPress(token, press);
+        }
       }
     }
     return new Response("ok", { status: 200 });
@@ -4514,7 +4647,14 @@ async function telegramWebhook(request: Request): Promise<Response> {
       text = renderUnknown(parsed.command);
   }
 
-  await telegramSend(token, parsed.chatId, text, miniAppKeyboard(url, parsed.chatType));
+  // На /start — під кнопкою консолі ще й повне меню дій: новачок бачить усе, що
+  // вміє бот, одразу, не знаючи жодної команди.
+  const baseKb = miniAppKeyboard(url, parsed.chatType);
+  const keyboard =
+    parsed.command === "start" && baseKb
+      ? { inline_keyboard: [...baseKb.inline_keyboard, ...mainMenuKeyboard().inline_keyboard] }
+      : baseKb;
+  await telegramSend(token, parsed.chatId, text, keyboard);
   return new Response("ok", { status: 200 });
 }
 
@@ -4892,6 +5032,10 @@ export default {
           headers: { "content-type": "application/json" },
         });
       }
+    }
+
+    if (pathname === "/api/threats/stream") {
+      return threatStream(request);
     }
 
     try {

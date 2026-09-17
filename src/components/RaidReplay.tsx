@@ -8,6 +8,8 @@ interface Props {
   frames: readonly RaidFrame[];
   /** Права межа курсора (ms) під час перемотки, або null у «живому» режимі. */
   onCursor: (cursorMs: number | null) => void;
+  /** Вбудований у спільний скрабер: без власної рамки/фону й підпису. */
+  hideLabel?: boolean;
 }
 
 // Увесь буфер стискаємо приблизно в 15 с відтворення, незалежно від його
@@ -24,7 +26,7 @@ const TICK = 250;
  * Курсор віддаємо назовні; сторінка підміняє масив цілей на кадр цього моменту,
  * а сама карта вже вміє малювати з нього спостережений трек.
  */
-export default function RaidReplay({ frames, onCursor }: Props) {
+export default function RaidReplay({ frames, onCursor, hideLabel = false }: Props) {
   const span = replaySpan(frames);
   const [cursor, setCursor] = useState<number | null>(null); // null = наживо
   const [playing, setPlaying] = useState(false);
@@ -74,22 +76,18 @@ export default function RaidReplay({ frames, onCursor }: Props) {
       });
 
   return (
-    <div className="pointer-events-auto flex items-center gap-2 border-t border-border/70 bg-background/88 px-3 py-1.5 backdrop-blur">
-      {/*
-        Підпис видно ЗАВЖДИ, і це не косметика.
-        
-        Було `hidden sm:inline` — на телефоні назва зникала, і два різні
-        програвачі часу, що стоять один під одним, ставали нерозрізненними:
-        обидва — кнопка, радіо й повзунок. Зі знімка користувача їх і не можна
-        було розрізнити. Вони керують РІЗНИМИ речами: цей перемотує повітряну
-        картину за хвилини, сусідній — історію ударів за тридцять днів.
-        
-        Тому коротке слово замість довгого: воно має вміститись на 320 px, а не
-        сховатись.
-      */}
-      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-primary/80">
-        Наліт
-      </span>
+    <div
+      className={
+        hideLabel
+          ? "pointer-events-auto flex items-center gap-2 px-3 pb-1.5 pt-1"
+          : "pointer-events-auto flex items-center gap-2 border-t border-border/70 bg-background/88 px-3 py-1.5 backdrop-blur"
+      }
+    >
+      {hideLabel ? null : (
+        <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-primary/80">
+          Наліт
+        </span>
+      )}
       <button
         onClick={() => {
           if (live) setCursor(span.from);

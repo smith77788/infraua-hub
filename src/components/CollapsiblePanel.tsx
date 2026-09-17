@@ -13,14 +13,27 @@ import { ChevronDown } from "lucide-react";
  *
  * Заголовок (`title`) показується ЗАВЖДИ й тому має нести суть уже згорнутим:
  * «Хвиль: 5», «Рій → ПнЗх». Тіло (`children`) — лише коли розгорнуто.
+ *
+ * ## Усталене залежить від ширини екрана
+ *
+ * На телефоні дві розгорнуті панелі не лишають від карти нічого — там місце
+ * найдорожче, тож усталене «згорнуто». На широкому екрані місця вистачає, і
+ * панель, згорнута без потреби, лише ховає те, заради чого її писали. Одне
+ * стале значення на обидва випадки буде неправильним в одному з них.
+ *
+ * Збережений вибір людини важливіший за будь-яке усталене: щойно вона сама
+ * згорнула чи розгорнула панель, ширина екрана більше нічого не вирішує.
  */
+/** Ширина, з якої панелі відкриті одразу. Нижче — карта дорожча за довідку. */
+const WIDE_PX = 640;
+
 export default function CollapsiblePanel({
   title,
   children,
   storageKey,
   borderClass,
   textClass,
-  defaultOpen = false,
+  defaultOpen,
 }: {
   title: ReactNode;
   children: ReactNode;
@@ -30,21 +43,30 @@ export default function CollapsiblePanel({
   borderClass: string;
   /** Клас кольору заголовка, напр. "text-orange-300". */
   textClass: string;
+  /** Перевизначити усталене. Без нього вирішує ширина екрана. */
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(defaultOpen ?? false);
 
   // Читаємо збережений вибір після монтування (не під час рендера — SSR і
   // приватний режим не мають валити компонент). Будь-яка похибка сховища —
   // просто лишаємось на значенні за замовчуванням.
   useEffect(() => {
+    let saved: string | null = null;
     try {
-      const saved = localStorage.getItem(`overlay:${storageKey}`);
-      if (saved === "1" || saved === "0") setOpen(saved === "1");
+      saved = localStorage.getItem(`overlay:${storageKey}`);
     } catch {
-      /* сховище недоступне — байдуже */
+      /* сховище недоступне — лишаємось на усталеному */
     }
-  }, [storageKey]);
+    if (saved === "1" || saved === "0") {
+      setOpen(saved === "1");
+      return;
+    }
+    // Вибору ще не було — вирішує ширина. Саме тут, а не під час рендера:
+    // на сервері вікна немає, і розмітка розійшлася б із клієнтською.
+    if (defaultOpen !== undefined) return;
+    setOpen(typeof window !== "undefined" && window.innerWidth >= WIDE_PX);
+  }, [storageKey, defaultOpen]);
 
   const toggle = () => {
     setOpen((prev) => {
