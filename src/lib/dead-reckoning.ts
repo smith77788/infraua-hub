@@ -81,6 +81,14 @@ export function advance(
   bearingDeg: number,
   km: number,
 ): { lat: number; lon: number } {
+  /*
+   * Функція ТОТАЛЬНА: що прийшло поза числами — те й повертаємо, не множачи
+   * NaN далі. Позиція звідси йде прямо на карту, а NaN там не падає й не
+   * помітний — Leaflet просто не малює позначку. Мовчазне зникнення цілі
+   * коштує стільки ж, як ненадіслане сповіщення. Знайдено фазингом.
+   */
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { lat, lon };
+  if (!Number.isFinite(bearingDeg) || !Number.isFinite(km)) return { lat, lon };
   if (!(km > 0)) return { lat, lon };
   const d = km / R_KM;
   const br = rad(bearingDeg);

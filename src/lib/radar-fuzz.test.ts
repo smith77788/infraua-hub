@@ -28,6 +28,8 @@ import { ALERT_CITIES, cityAlertCaption, cityAlerts } from "./city-alert";
 import { nowRadiusKm } from "./position-age";
 import { citiesOnCourse } from "./threat-eta";
 import { estimateMotion } from "./track-filter";
+import { advance } from "./dead-reckoning";
+import { livePosition } from "./live-position";
 
 const NOW = Date.parse("2026-09-16T21:07:58Z");
 const POINT = { lat: 50.45, lon: 30.52 };
@@ -157,4 +159,74 @@ describe("ядро радара на вироджених даних", () => {
       expect(problems.slice(0, 3)).toEqual([]);
     });
   }
+});
+
+/**
+ * Протягування позначки: коректний вхід мусить давати коректний вихід.
+ *
+ * Контракт саме такий, а не «ніколи не NaN». Ці функції навмисно пропускають
+ * зіпсовану позицію далі незмінною — вигадувати координату замість сміття було
+ * б гірше, а відсіювати сміття мусить межа прийому даних (`neptun-map`,
+ * `infra.functions`), і вона це робить.
+ *
+ * Небезпечне інше: нечислова позиція, народжена з ПРАВИЛЬНОГО входу. Саме так
+ * і було — розкид у `NaN` проходив крізь `?? 0`, а вироджений трек (дві майже
+ * однакові точки) давав нечислову проєкцію. На карті це не падіння: Leaflet
+ * просто не малює позначку, і ціль зникає мовчки.
+ */
+describe("протягування позначки: із правильного входу — правильний вихід", () => {
+  const NOW = Date.parse("2026-09-16T21:07:58Z");
+  const WEIRD_UNCERTAINTY = [0, -5, Number.NaN, Infinity, null, undefined, 12];
+  const WEIRD_TIMES = [
+    "",
+    "не дата",
+    new Date(NOW + 864e5).toISOString(),
+    new Date(0).toISOString(),
+  ];
+
+  it("livePosition на 600 вироджених треках не народжує нечисел", () => {
+    const rnd = makeRandom(4242);
+    const problems: string[] = [];
+    for (let i = 0; i < 600; i++) {
+      const trail = Array.from({ length: Math.floor(rnd() * 6) }, () => ({
+        // Інколи майже однакові точки — вироджена підгонка, саме той випадок.
+        lat: rnd() < 0.3 ? 44 + rnd() * 8 : 50 + (rnd() - 0.5) * 1e-9,
+        lon: rnd() < 0.3 ? 22 + rnd() * 18 : 30 + (rnd() - 0.5) * 1e-9,
+        t:
+          rnd() < 0.5
+            ? new Date(NOW - Math.floor(rnd() * 900_000)).toISOString()
+            : WEIRD_TIMES[Math.floor(rnd() * WEIRD_TIMES.length)]!,
+      }));
+      const u = WEIRD_UNCERTAINTY[Math.floor(rnd() * WEIRD_UNCERTAINTY.length)];
+      const p = livePosition(
+        // `exactOptionalPropertyTypes`: відсутнє поле і поле в `undefined` —
+        // різні речі, і перевіряємо тут обидві.
+        { lat: 50, lon: 30, trail, ...(typeof u === "number" ? { uncertaintyKm: u } : {}) },
+        NOW,
+      );
+      const bad: string[] = [];
+      findBad({ lat: p.lat, lon: p.lon, u: p.uncertaintyKm, a: p.aheadMin }, `#${i}`, bad);
+      if (bad.length) problems.push(bad[0]!);
+    }
+    expect(problems.slice(0, 3)).toEqual([]);
+  });
+
+  it("advance зі скінченних аргументів дає скінченну точку", () => {
+    const rnd = makeRandom(31337);
+    const problems: string[] = [];
+    for (let i = 0; i < 600; i++) {
+      const p = advance(44 + rnd() * 8, 22 + rnd() * 18, rnd() * 720 - 360, rnd() * 500);
+      const bad: string[] = [];
+      findBad(p, `#${i}`, bad);
+      if (bad.length) problems.push(bad[0]!);
+    }
+    expect(problems.slice(0, 3)).toEqual([]);
+  });
+
+  it("зіпсовану позицію пропускає незмінною, а не вигадує координату", () => {
+    // Межа відповідальності: сміття відсіює прийом даних, а не геометрія.
+    const p = livePosition({ lat: Number.NaN, lon: 30 }, NOW);
+    expect(Number.isNaN(p.lat)).toBe(true);
+    expect(advance(Number.NaN, 30, 90, 10).lat).toBeNaN();
+  });
 });

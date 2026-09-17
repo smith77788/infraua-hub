@@ -77,12 +77,14 @@ export interface LivePosition {
 }
 
 function still(target: LiveTarget, reason: Velocity | null): LivePosition {
+  const stated = target.uncertaintyKm;
   return {
     lat: target.lat,
     lon: target.lon,
     basis: "observed",
     aheadMin: 0,
-    uncertaintyKm: target.uncertaintyKm ?? 0,
+    // Розкид поза числами — це відсутність розкиду, а не мінус нескінченність.
+    uncertaintyKm: typeof stated === "number" && Number.isFinite(stated) && stated > 0 ? stated : 0,
     bearingDeg: reason ? reason.bearingDeg : null,
     speedKmh: reason ? reason.speedKmh : null,
     observed: { lat: target.lat, lon: target.lon },
@@ -100,6 +102,12 @@ export function livePosition(
   now: number,
   maxReckonMs: number = MAX_RECKON_MS,
 ): LivePosition {
+  /*
+   * Позиція поза числами — не ціль, а зіпсований запис. Дорахувати від неї
+   * неможливо, і мовчазний NaN на виході гірший за відмову: карта просто не
+   * намалює позначку, і ніхто не дізнається. Знайдено фазингом.
+   */
+  if (!Number.isFinite(target.lat) || !Number.isFinite(target.lon)) return still(target, null);
   const fixes = trailToFixes(target.trail ?? []);
   if (fixes.length < 2) return still(target, null);
 
@@ -120,6 +128,9 @@ export function livePosition(
 
   const aheadMin = aheadMs / 60_000;
   const p = projectForward(target, v, aheadMin);
+  // Підгонка могла дати нечислову проєкцію на вироджених фіксах — тоді чесніше
+  // лишити позначку там, де її бачили, ніж поставити її «ніде».
+  if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) return still(target, v);
   return {
     lat: p.lat,
     lon: p.lon,
@@ -127,7 +138,12 @@ export function livePosition(
     aheadMin,
     // Беремо більше з двох: власний розкид джерела нікуди не дівається від того,
     // що ми дорахували рух.
-    uncertaintyKm: Math.max(p.uncertaintyKm, target.uncertaintyKm ?? 0),
+    uncertaintyKm: Math.max(
+      Number.isFinite(p.uncertaintyKm) ? p.uncertaintyKm : 0,
+      typeof target.uncertaintyKm === "number" && Number.isFinite(target.uncertaintyKm)
+        ? target.uncertaintyKm
+        : 0,
+    ),
     bearingDeg: v.bearingDeg,
     speedKmh: v.speedKmh,
     observed: { lat: target.lat, lon: target.lon },
