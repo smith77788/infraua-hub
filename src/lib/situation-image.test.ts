@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import type { Threat } from "./air";
+import { LEVEL_COLOR } from "./alert-levels";
 import { situationSvg, situationSvgZoom } from "./situation-image";
 
 function threat(p: Partial<Threat>): Threat {
@@ -272,17 +273,52 @@ describe("оглядова карта: орієнтація, заголовок,
     expect(situationSvg([])).not.toContain("·");
   });
 
-  it("області під тривогою заливаються — те саме, що бачить бот", () => {
+  it("області під тривогою заливаються РІВНЕМ, а не однією фарбою", () => {
     const poly: [number, number][] = [
       [50, 30],
       [50, 32],
       [49, 32],
       [49, 30],
     ];
-    const withAlert = situationSvg([], [], { alertPolygons: [poly] });
-    expect(withAlert).toContain("#ff3b3b");
+    const other: [number, number][] = [
+      [48, 30],
+      [48, 32],
+      [47, 32],
+      [47, 30],
+    ];
+    const red = situationSvg([], [], { alertPolygons: [{ ring: poly, level: "red" }] });
+    expect(red).toContain(LEVEL_COLOR.red);
+    expect(red).not.toContain(LEVEL_COLOR.yellow);
+    expect(red).toContain("червоний рівень");
+
+    const yellow = situationSvg([], [], { alertPolygons: [{ ring: poly, level: "yellow" }] });
+    expect(yellow).toContain(LEVEL_COLOR.yellow);
+    expect(yellow).toContain("жовтий рівень");
+
+    // Обидва рівні поряд — обидві фарби й обидва підписи.
+    const both = situationSvg([], [], {
+      alertPolygons: [
+        { ring: poly, level: "red" },
+        { ring: other, level: "yellow" },
+      ],
+    });
+    expect(both).toContain(LEVEL_COLOR.red);
+    expect(both).toContain(LEVEL_COLOR.yellow);
+
     // Без тривог заливки немає — карта не вигадує зон.
-    expect(situationSvg([])).not.toContain("#ff3b3b");
+    expect(situationSvg([])).not.toContain(LEVEL_COLOR.red);
+  });
+
+  it("невідомий рівень НЕ фарбується червоним — вигаданий рівень гірший за його брак", () => {
+    const poly: [number, number][] = [
+      [50, 30],
+      [50, 32],
+      [49, 32],
+      [49, 30],
+    ];
+    const svg = situationSvg([], [], { alertPolygons: [{ ring: poly, level: null }] });
+    expect(svg).not.toContain(LEVEL_COLOR.red);
+    expect(svg).toContain("рівень невідомий");
   });
 });
 

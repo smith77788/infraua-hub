@@ -4,6 +4,8 @@ import { consumeLastCapturedError } from "./lib/error-capture";
 import { mainMenuKeyboard, parseMenuAction } from "./lib/bot-menu";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import { courseIsObserved, EMPTY_QUALITY } from "./lib/threat-quality";
+import { type AlertLevels, levelForOblast, parseAlertLevels } from "./lib/alert-levels";
+import type { AlertRing } from "./lib/situation-image";
 import {
   ADMIN_ACTIONS,
   type AdminAction,
@@ -712,19 +714,50 @@ async function fetchOfficialAlerts(maxAgeMs = 60_000): Promise<string[] | null> 
  * власну правду про тривоги. Плоский кеш на хвилину; збій джерела — порожній
  * список (карта просто без заливки, як і без картинки взагалі).
  */
-let alertZonesCache: { at: number; polygons: [number, number][][] } | null = null;
-async function fetchAlertZones(maxAgeMs = 60_000): Promise<[number, number][][]> {
+let alertZonesCache: { at: number; polygons: AlertRing[] } | null = null;
+/**
+ * Рівні тривог (червоний/жовтий) — окремим джерелом від геометрії.
+ *
+ * Геометрію дає detoyshahed (де саме межа), а рівень — Нептун (що саме
+ * оголошено). Доти картинка каналу брала лише геометрію й заливала ВСІ зони
+ * однією фарбою: читач бачив «десь тривожно» і не міг відрізнити ракетну
+ * загрозу від дронової. Зшиваємо їх за назвою області.
+ *
+ * `null` (збій джерела) — це НЕ «рівнів немає»: тоді зони малюються нейтрально,
+ * а не всі червоним. Вигаданий рівень гірший за його відсутність.
+ */
+let alertLevelsCache: { at: number; levels: AlertLevels | null } | null = null;
+async function fetchAlertLevels(maxAgeMs = 60_000): Promise<AlertLevels | null> {
+  const now = Date.now();
+  if (alertLevelsCache && now - alertLevelsCache.at < maxAgeMs) return alertLevelsCache.levels;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch("https://neptun.in.ua/api/v1/alerts", { signal: controller.signal });
+    if (!res.ok) return alertLevelsCache?.levels ?? null;
+    const levels = parseAlertLevels(await res.json());
+    alertLevelsCache = { at: now, levels };
+    return levels;
+  } catch {
+    return alertLevelsCache?.levels ?? null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchAlertZones(maxAgeMs = 60_000): Promise<AlertRing[]> {
   const now = Date.now();
   if (alertZonesCache && now - alertZonesCache.at < maxAgeMs) return alertZonesCache.polygons;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const res = await fetch("https://detoyshahed.in.ua/api/alerts/active", {
-      signal: controller.signal,
-    });
+    const [res, levels] = await Promise.all([
+      fetch("https://detoyshahed.in.ua/api/alerts/active", { signal: controller.signal }),
+      fetchAlertLevels().catch(() => null),
+    ]);
     if (!res.ok) return alertZonesCache?.polygons ?? [];
     const data = (await res.json()) as {
-      alerts?: { geometry?: { type?: string; coordinates?: unknown } }[];
+      alerts?: { region_name?: string; geometry?: { type?: string; coordinates?: unknown } }[];
     };
     const toLatLon = (ring: number[][]): [number, number][] => {
       const step = Math.max(1, Math.ceil(ring.length / 120));
@@ -737,16 +770,22 @@ async function fetchAlertZones(maxAgeMs = 60_000): Promise<[number, number][][]>
       }
       return out;
     };
-    const polygons: [number, number][][] = [];
+    const polygons: AlertRing[] = [];
     for (const a of data.alerts ?? []) {
       const g = a.geometry;
       if (!g?.coordinates) continue;
+      // Рівень беремо за назвою області з другого джерела. Не зійшлося або
+      // джерело мовчить — `null`: малюємо нейтрально, не вигадуємо червоний.
+      const level = levels && a.region_name ? levelForOblast(levels, a.region_name) : null;
+      const push = (ring: [number, number][]) => {
+        if (ring.length) polygons.push({ ring, level });
+      };
       if (g.type === "Polygon") {
         const poly = g.coordinates as number[][][];
-        if (poly[0]) polygons.push(toLatLon(poly[0]));
+        if (poly[0]) push(toLatLon(poly[0]));
       } else if (g.type === "MultiPolygon") {
         for (const poly of g.coordinates as number[][][][]) {
-          if (poly[0]) polygons.push(toLatLon(poly[0]));
+          if (poly[0]) push(toLatLon(poly[0]));
         }
       }
     }

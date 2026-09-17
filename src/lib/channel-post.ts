@@ -27,7 +27,14 @@ import { angularDiff, bearingDeg, speedRangeFor, SPEED_KMH } from "./threat-eta"
 import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 import { swarmForecast } from "./swarm";
 import { swarmForecastFor } from "./swarm-forecast";
-import { type LangCode, type Lexicon, LEXICONS, pluralUk, UK } from "./channel-lexicon";
+import {
+  type HeadlineKind,
+  type LangCode,
+  type Lexicon,
+  LEXICONS,
+  pluralUk,
+  UK,
+} from "./channel-lexicon";
 import { verifyThreat } from "./advisory";
 import { courseIsObserved } from "./threat-quality";
 import { roleOfSource } from "./osint-sources";
@@ -174,12 +181,28 @@ function seedFrom(s: string): number {
 function isRocketish(types: ReadonlySet<ThreatType>): boolean {
   return types.has("missile") || types.has("ballistic") || types.has("cruise");
 }
+/**
+ * Заголовок поста.
+ *
+ * Ескалація до «Ракетна небезпека!» — ЛИШЕ коли ракетний клас підтверджений
+ * (офіційне джерело, два незалежні, або сам фід дає високу впевненість).
+ *
+ * Це закриває справжню ваду з живого каналу: одне непідтверджене повідомлення
+ * про одну крилату піднімало заголовок усього зведення до максимальної тривоги,
+ * тоді як тіло того ж поста чесно писало «❓ одне джерело». Пост сам собі
+ * суперечив — а заголовок читають першим і часто єдиним.
+ *
+ * Ховати ракету теж не можна: якщо вона є, але не підтверджена, кажемо це
+ * прямо окремим заголовком, а не або-кричимо-або-мовчимо.
+ */
 function headlineKind(
   types: ReadonlySet<ThreatType>,
+  confirmed: ReadonlySet<ThreatType>,
   shaheds: number,
-): "rocket" | "kab" | "swarm" | "few" | "calm" {
-  if (isRocketish(types)) return "rocket";
-  if (types.has("kab")) return "kab";
+): HeadlineKind {
+  if (isRocketish(confirmed)) return "rocket";
+  if (confirmed.has("kab")) return "kab";
+  if (isRocketish(types) || types.has("kab")) return "rocket_unconfirmed";
   if (types.has("shahed") || types.has("reactive")) return shaheds >= 8 ? "swarm" : "few";
   return "calm";
 }
@@ -266,6 +289,7 @@ function describeDelta(
   prev: AirSnapshot | undefined,
   cur: AirSnapshot,
   lex: Lexicon,
+  confirmed: ReadonlySet<ThreatType> = new Set(),
 ): { line: string | null; material: boolean } {
   if (!prev) return { line: null, material: true };
 
@@ -292,7 +316,16 @@ function describeDelta(
 
   const bits: string[] = [];
   if (escalated.length) {
-    bits.push(lex.delta.escalated(escalated.map((t) => lex.typeName(t, 2))));
+    // Поява небезпечного типу — сама по собі ще не факт: якщо жодна така ціль
+    // не підтверджена, так і пишемо. Інакше рядок «Додались: крилаті» звучав
+    // твердженням там, де під ним у тілі стоїть «❓ одне джерело».
+    bits.push(
+      lex.delta.escalated(
+        escalated.map((t) =>
+          confirmed.has(t) ? lex.typeName(t, 2) : `${lex.typeName(t, 2)} ${lex.unverified}`,
+        ),
+      ),
+    );
   }
   if (appeared.length) bits.push(lex.delta.appeared(appeared));
   // «Відбій» тут не вживаємо НІ В ЯКІЙ формі: відбій дає офіційне оголошення,
@@ -379,6 +412,9 @@ export function renderChannelPost(
   const lex = LEXICONS[opts.lang ?? "uk"];
 
   const groups = new Map<string, Group>();
+  // Типи, у яких є хоч ОДНА підтверджена ціль. Заголовок спирається на нього,
+  // а не на сам факт присутності типу в картині.
+  const confirmedTypes = new Set<ThreatType>();
   for (const t of threats) {
     const type: ThreatType = t.type ?? "unknown";
     const oblast = oblastOf(t.lat, t.lon);
@@ -407,6 +443,7 @@ export function renderChannelPost(
     const level = verifyThreat(t, roleOfSource).level;
     g.total += 1;
     if (level === "unverified" || level === "single") g.weak += 1;
+    else confirmedTypes.add(type);
     // Збираємо ВСІ курси типу в групі — спільний напрямок вирахуємо потім, і
     // лише якщо він справді спільний (див. coherentCourse).
     if (typeof t.heading === "number" && Number.isFinite(t.heading)) {
@@ -436,7 +473,7 @@ export function renderChannelPost(
   );
 
   const snapshot = snapshotOf(ordered);
-  const { line: deltaLine, material } = describeDelta(opts.previous, snapshot, lex);
+  const { line: deltaLine, material } = describeDelta(opts.previous, snapshot, lex, confirmedTypes);
 
   const allTypes = new Set<ThreatType>();
   const sigParts: string[] = [];
@@ -553,7 +590,7 @@ export function renderChannelPost(
     allTypes,
     lex,
   );
-  const headline = lex.headline(headlineKind(allTypes, shaheds), seed, hourKyiv);
+  const headline = lex.headline(headlineKind(allTypes, confirmedTypes, shaheds), seed, hourKyiv);
   const footer = lex.footer(targets, lex.tail(isRocketish(allTypes) || allTypes.has("kab"), seed));
 
   const text = assemblePost({

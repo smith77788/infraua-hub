@@ -97,7 +97,15 @@ export interface Lexicon {
   alwaysTag: string;
 }
 
-export type HeadlineKind = "rocket" | "kab" | "swarm" | "few" | "calm";
+export type HeadlineKind =
+  | "rocket"
+  /* Ракетний клас бачимо, але ЖОДНА така ціль не підтверджена другим
+     джерелом. Не кричимо «Ракетна небезпека!» і не ховаємо — кажемо як є. */
+  | "rocket_unconfirmed"
+  | "kab"
+  | "swarm"
+  | "few"
+  | "calm";
 
 function pick<T>(arr: readonly T[], seed: number): T {
   return arr[seed % arr.length]!;
@@ -172,6 +180,10 @@ const UK_COURSE = [
 
 const UK_HEAD: Record<HeadlineKind, HeadOption[]> = {
   rocket: ["🚀 <b>Ракетна небезпека!</b>", "🚀 <b>Увага, ракети!</b>"],
+  rocket_unconfirmed: [
+    "🚀 <b>Повідомляють про ракети</b> — одне джерело",
+    "🚀 <b>Можливі ракети</b> (без підтвердження)",
+  ],
   kab: ["💥 <b>КАБи в повітрі</b>", "💥 <b>Працюють КАБи</b>"],
   swarm: [
     "🛸 <b>Шахеди роєм</b>",
@@ -296,6 +308,10 @@ const EN_COURSE = [
 
 const EN_HEAD: Record<HeadlineKind, HeadOption[]> = {
   rocket: ["🚀 <b>Missile threat</b>", "🚀 <b>Missiles inbound</b>"],
+  rocket_unconfirmed: [
+    "🚀 <b>Missiles reported</b> — single source",
+    "🚀 <b>Possible missiles</b> (unconfirmed)",
+  ],
   kab: ["💥 <b>Glide bombs in the air</b>"],
   swarm: ["🛸 <b>Shahed swarm</b>", "🛸 <b>Mass drone attack</b>"],
   few: ["🛸 <b>Drones in the air</b>", "🛸 <b>Shaheds over Ukraine</b>"],

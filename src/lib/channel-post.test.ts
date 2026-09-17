@@ -630,3 +630,57 @@ describe("текст не стверджує більше за картинку"
     expect(post!.text).not.toContain("ймовірно");
   });
 });
+
+/*
+ * Справжня вада з живого каналу (знімок користувача): 23 шахеди й ОДНА крилата
+ * від одного непідтвердженого джерела дали заголовок «🚀 Ракетна небезпека!» —
+ * тоді як тіло того ж поста писало про ту крилату «❓ одне джерело». Пост сам
+ * собі суперечив у найгучнішому місці.
+ */
+describe("ескалація заголовка спирається на підтвердження, а не на присутність типу", () => {
+  /** Ракета, підтверджена двома незалежними каналами. */
+  const confirmedRocket = () =>
+    threat({
+      lat: 50.45,
+      lon: 30.52,
+      type: "cruise",
+      sources: ["neptun.in.ua", "UkraineAlarmSignal"],
+      reports: 3,
+      confidence: "high",
+    });
+  /** Ракета з одного джерела — рівно те, що було в каналі. */
+  const lonelyRocket = () => threat({ lat: 50.45, lon: 30.52, type: "cruise" });
+  const swarm = () =>
+    Array.from({ length: 9 }, (_, i) =>
+      threat({ lat: 51.4 + i * 0.01, lon: 31.3, type: "shahed" }),
+    );
+
+  it("непідтверджена крилата НЕ дає «Ракетна небезпека!»", () => {
+    const post = renderChannelPost([...swarm(), lonelyRocket()])!;
+    expect(post.text).not.toContain("Ракетна небезпека");
+    expect(post.text).not.toContain("Увага, ракети");
+  });
+
+  it("але й не ховає її — каже, що джерело одне", () => {
+    const post = renderChannelPost([...swarm(), lonelyRocket()])!;
+    expect(post.text).toMatch(/Повідомляють про ракети|Можливі ракети/);
+  });
+
+  it("підтверджена ракета — повна тривога, як і раніше", () => {
+    const post = renderChannelPost([...swarm(), confirmedRocket()])!;
+    expect(post.text).toMatch(/Ракетна небезпека|Увага, ракети/);
+  });
+
+  it("без ракет узагалі — заголовок про рій, а не про ракети", () => {
+    const post = renderChannelPost(swarm())!;
+    expect(post.text).not.toContain("ракет");
+    expect(post.text).toContain("🛸");
+  });
+
+  it("«Додались» про непідтверджений тип позначено як одне джерело", () => {
+    const before = renderChannelPost(swarm())!;
+    const after = renderChannelPost([...swarm(), lonelyRocket()], { previous: before.snapshot })!;
+    const line = after.text.split("\n").find((l) => l.includes("Додались"))!;
+    expect(line).toContain("одне джерело");
+  });
+});
