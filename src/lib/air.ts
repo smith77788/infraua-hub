@@ -225,6 +225,24 @@ export interface Threat {
   region?: string;
 }
 
+/**
+ * Скільки цілей у цій позначці — з чужого JSON у число, якому можна вірити.
+ *
+ * `?? 1` тут не досить, і це не теорія. У JSON немає літерала `NaN`, але
+ * `JSON.parse("1e400")` дає **Infinity** — цілком законне число з погляду
+ * формату. Далі воно тече сумою в знімок неба, звідти в пік хвилі, і в канал
+ * іде рядок «всього в небі: Infinity». Жодного падіння при цьому не буде.
+ *
+ * Верхньої стелі навмисно НЕМАЄ: вигадана межа мовчки обрізала б справжній
+ * масований наліт, а це гірше за велике число. Відсікаємо рівно те, що не є
+ * числом у звичайному сенсі.
+ */
+export function readCount(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 1;
+  const n = Math.floor(raw);
+  return n >= 1 ? n : 1;
+}
+
 function threatDistanceKm(a: Threat, b: Threat): number {
   const R = 6371;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;

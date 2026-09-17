@@ -18,6 +18,7 @@ import {
   type Threat,
   type ThreatType,
   type WeatherNow,
+  readCount,
 } from "./air";
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
@@ -889,7 +890,7 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
         lat,
         lon,
         source: it.channel_name ?? "OSINT",
-        count: it.count ?? 1,
+        count: readCount(it.count),
         since: it.created_at ?? "",
         expires: it.expires_at ?? "",
         ...(it.osm_id != null ? { osmId: it.osm_id } : {}),

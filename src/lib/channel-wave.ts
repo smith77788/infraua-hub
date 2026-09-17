@@ -246,8 +246,30 @@ export function markOfficialAlert(state: WaveState, active: readonly string[]): 
   return seen ? { ...state, officialAlertSeen: true } : state;
 }
 
-/** Вбирає черговий зріз у хвилю. Піки — саме максимуми, а не суми за час. */
+/** Додатне скінченне число або нуль: чужий лічильник не має права стати піком. */
+function safeCount(n: unknown): number {
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * Вбирає черговий зріз у хвилю. Піки — саме максимуми, а не суми за час.
+ *
+ * Функція ТОТАЛЬНА в двох сенсах, і обидва знайдені фазингом послідовностей:
+ *
+ * 1. **Чужі числа чистяться тут.** `JSON.parse("1e400")` дає Infinity —
+ *    законне число з погляду формату, — і воно текло сумою в знімок, звідти в
+ *    `peakTargets`, а звідти в канал рядком «Пік хвилі: Infinity». Прийом даних
+ *    тепер теж це чистить (`readCount`), але стан хвилі ПЕРЕЖИВАЄ рестарти й
+ *    зберігається на диск: одна зіпсована цифра отруїла б його надовго.
+ *
+ * 2. **Час тече лише вперед.** `lastActiveAt` і мітки маршруту бралися з `now`
+ *    беззастережно. Тік із меншим `now` — розсинхрон годинника, підміна кешем,
+ *    переграний запит — зсував їх НАЗАД, і `waveEnded` починав рахувати тишу
+ *    від майбутнього: «цілей не бачимо» могло вийти в ефір посеред нальоту.
+ */
 export function updateWave(state: WaveState, snapshot: AirSnapshot, now: number): WaveState {
+  // Час хвилі монотонний: назад його не пускаємо навіть на один тік.
+  const at = Number.isFinite(now) ? Math.max(now, state.lastActiveAt) : state.lastActiveAt;
   const oblasts = { ...state.oblasts };
   const route = [...state.route];
   const known = new Set(route.map((r) => r.oblast));
@@ -255,22 +277,23 @@ export function updateWave(state: WaveState, snapshot: AirSnapshot, now: number)
   // одразу в кілька областей, першою в маршруті стоїть та, де її більше.
   const fresh = Object.entries(snapshot.oblasts)
     .filter(([o]) => !known.has(o))
-    .map(([o, m]) => ({ o, n: Object.values(m).reduce((a: number, b) => a + (b ?? 0), 0) }))
+    .map(([o, m]) => ({ o, n: Object.values(m).reduce((a: number, b) => a + safeCount(b), 0) }))
     .sort((a, b) => b.n - a.n);
-  for (const { o } of fresh) route.push({ oblast: o, at: now });
+  for (const { o } of fresh) route.push({ oblast: o, at });
   const types: Partial<Record<ThreatType, number>> = { ...state.types };
   for (const [oblast, byType] of Object.entries(snapshot.oblasts)) {
     let sum = 0;
-    for (const [type, n] of Object.entries(byType) as [ThreatType, number][]) {
+    for (const [type, raw] of Object.entries(byType) as [ThreatType, number][]) {
+      const n = safeCount(raw);
       sum += n;
-      types[type] = Math.max(types[type] ?? 0, n);
+      types[type] = Math.max(safeCount(types[type]), n);
     }
-    oblasts[oblast] = Math.max(oblasts[oblast] ?? 0, sum);
+    oblasts[oblast] = Math.max(safeCount(oblasts[oblast]), sum);
   }
   return {
     ...state,
-    lastActiveAt: now,
-    peakTargets: Math.max(state.peakTargets, snapshot.targets),
+    lastActiveAt: at,
+    peakTargets: Math.max(safeCount(state.peakTargets), safeCount(snapshot.targets)),
     oblasts,
     types,
     route,

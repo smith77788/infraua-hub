@@ -1,4 +1,4 @@
-import { classifyThreatType, type Threat, type ThreatType } from "./air";
+import { classifyThreatType, readCount, type Threat, type ThreatType } from "./air";
 import { readQuality } from "./threat-quality";
 import { UA_BBOX } from "./infra-types";
 
@@ -111,7 +111,7 @@ export function mapNeptunThreat(t: NeptunThreat): Threat | null {
     lon: t.lon,
     source: "neptun.in.ua",
     type: mapNeptunType(t.type, text),
-    count: t.count ?? 1,
+    count: readCount(t.count),
     since: t.confirmedAt ?? t.updatedAt ?? "",
     expires: "",
     reports: t.sourceCount ?? 1,

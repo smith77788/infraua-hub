@@ -104,14 +104,26 @@ export function orderQueue<P>(queue: readonly Envelope<P>[]): Envelope<P>[] {
  * виявити з мовчання людей.
  */
 export function budgetFor(windowMs: number, perSec = TELEGRAM_BROADCAST_PER_SEC): number {
-  return Math.max(0, Math.floor((windowMs / 1000) * perSec));
+  /*
+   * Функція ТОТАЛЬНА, і саме тут це не педантизм. Це число вирішує, скільки
+   * попереджень узагалі піде. Бюджет у NaN не падає й не пишеться в лог — він
+   * робить кожне порівняння `надіслано < бюджет` хибним, тобто мовчки не
+   * надсилає НІЧОГО. Мовчазна відмова доставки коштує рівно стільки ж, як
+   * ненадіслане сповіщення, і помітити її ніяк. Знайдено фазингом.
+   */
+  if (!Number.isFinite(windowMs) || !Number.isFinite(perSec)) return 0;
+  return Math.max(0, Math.floor((Math.max(0, windowMs) / 1000) * Math.max(0, perSec)));
 }
 
 /**
  * Скільки часу потрібно, щоб дійти до кожного. Головне число для власника.
  */
 export function timeToReachMs(count: number, perSec = TELEGRAM_BROADCAST_PER_SEC): number {
-  if (perSec <= 0) return Infinity;
+  // Нескінченність тут ЗАКОННА і означає «не дійдемо ніколи» — саме те, що має
+  // побачити власник при нульовій швидкості. А от NaN чи відʼємний час не
+  // означають нічого: порожня черга — це нуль, а не «мінус тридцять три».
+  if (!Number.isFinite(count) || count <= 0) return 0;
+  if (!Number.isFinite(perSec) || perSec <= 0) return Infinity;
   return Math.ceil((count / perSec) * 1000);
 }
 

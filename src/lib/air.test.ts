@@ -6,6 +6,7 @@ import {
   observationsTooOldForAlerts,
   observedAt,
   type Threat,
+  readCount,
 } from "./air";
 import { renderChannelPost } from "./channel-post";
 
@@ -195,5 +196,42 @@ describe("observationsTooOldForAlerts — кого можна будити", () 
   it("межа рахується за НАЙСВІЖІШОЮ ціллю, а не за найстарішою", () => {
     // Одна стара позначка поруч зі свіжими не має глушити весь радар.
     expect(observationsTooOldForAlerts([at(90), at(1)], NOW)).toBe(false);
+  });
+});
+
+describe("readCount — чужий лічильник у число, якому можна вірити", () => {
+  it("Infinity із JSON не стає кількістю цілей", () => {
+    // У JSON немає літерала NaN, але JSON.parse("1e400") дає Infinity — цілком
+    // законне число з погляду формату. Далі воно текло сумою в знімок, звідти в
+    // пік хвилі, і в канал ішов рядок «всього в небі: Infinity».
+    expect(readCount(JSON.parse("1e400") as number)).toBe(1);
+    expect(readCount(Infinity)).toBe(1);
+    expect(readCount(-Infinity)).toBe(1);
+    expect(readCount(Number.NaN)).toBe(1);
+  });
+
+  it("відсутнє або чуже за типом — одна ціль", () => {
+    expect(readCount(undefined)).toBe(1);
+    expect(readCount(null)).toBe(1);
+    expect(readCount("5")).toBe(1);
+  });
+
+  it("нуль і відʼємне — одна ціль, а не нуль цілей", () => {
+    // Позначка існує, отже ціль щонайменше одна: нуль тут означав би, що
+    // джерело повідомило про ніщо.
+    expect(readCount(0)).toBe(1);
+    expect(readCount(-7)).toBe(1);
+  });
+
+  it("дробове округлюється донизу, справжні числа проходять", () => {
+    expect(readCount(3)).toBe(3);
+    expect(readCount(3.9)).toBe(3);
+  });
+
+  it("верхньої стелі немає навмисно", () => {
+    // Вигадана межа мовчки обрізала б справжній масований наліт, а це гірше за
+    // велике число.
+    expect(readCount(500)).toBe(500);
+    expect(readCount(100_000)).toBe(100_000);
   });
 });
