@@ -373,3 +373,63 @@ describe("«на вас» більше не означає «в секторі»
     expect(withMotion(0, 14, true)).toContain("іде на вас");
   });
 });
+
+describe("сповіщення каже, наскільки стара сама позиція", () => {
+  const NOW = Date.parse("2026-09-16T21:07:58Z");
+  const KYIV = { lat: 50.45, lon: 30.52 };
+
+  function inbound(agoSec: number): Threat {
+    return {
+      id: "a",
+      name: "Ціль",
+      lat: KYIV.lat - 0.25,
+      lon: KYIV.lon,
+      source: "neptun.in.ua",
+      count: 1,
+      since: "",
+      expires: "",
+      lastSeen: new Date(NOW - agoSec * 1000).toISOString(),
+      type: "shahed",
+      heading: 0,
+      quality: {
+        uncertaintyKm: 4,
+        position: "confirmed",
+        lifecycle: "confirmed",
+        presumptiveCourse: false,
+        speedKmh: null,
+      },
+    };
+  }
+
+  const render = (agoSec: number): string => {
+    const assess = personalAssessment([inbound(agoSec)], KYIV, { radiusKm: 100, now: NOW });
+    return renderAlert(assess, dangerIndex(assess), "моя точка", { now: NOW });
+  };
+
+  it("застаріла позиція названа вголос", () => {
+    /*
+     * Час підльоту вже враховує застій, а ВІДСТАНЬ — ні: у тексті стоїть число
+     * джерела. Людина читає «27 км» як «зараз двадцять сім», хоча заміряна
+     * медіана застою — 205 секунд, тобто ще 10 км польоту шахеда.
+     */
+    expect(render(205)).toContain("позиція 3 хв тому");
+  });
+
+  it("свіжу позицію не згадуємо — це був би шум у кожному сповіщенні", () => {
+    const text = render(20);
+    expect(text).not.toContain("позиція");
+  });
+
+  it("межа названа явно: півтори хвилини", () => {
+    expect(render(80)).not.toContain("позиція");
+    expect(render(100)).toContain("позиція");
+  });
+
+  it("без часу від джерела вік не вигадується", () => {
+    const t = { ...inbound(205), lastSeen: "", since: "" };
+    const assess = personalAssessment([t], KYIV, { radiusKm: 100, now: NOW });
+    expect(renderAlert(assess, dangerIndex(assess), "моя точка", { now: NOW })).not.toContain(
+      "позиція",
+    );
+  });
+});

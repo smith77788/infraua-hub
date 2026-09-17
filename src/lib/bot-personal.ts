@@ -24,6 +24,7 @@ import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } fr
 import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
 import { KIND_EMOJI, KIND_NOTE, type NearbyShelter } from "./shelters";
 import { clampLead } from "./lead-threshold";
+import { fixAgeLabel, fixAgeMs } from "./position-age";
 
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
@@ -210,6 +211,16 @@ export function renderAlert(
     pre?: boolean;
     /** Наскільки цій цілі можна вірити (рядок готує advisory/verifyThreat). */
     trust?: string | null;
+    /**
+     * Момент складання — щоб сказати, наскільки стара сама позиція.
+     *
+     * Час підльоту вже враховує застій (див. `position-age`), а ВІДСТАНЬ — ні:
+     * у тексті стоїть те число, яке дало джерело. Людина читає «27 км» як
+     * «зараз двадцять сім», хоча заміряна медіана застою — 205 секунд, тобто
+     * ще 10 км польоту шахеда. Мовчати про це означає видавати позицію
+     * трихвилинної давнини за теперішню.
+     */
+    now?: number;
   } = {},
 ): string {
   const lead = assess.nearest.find((n) => n.inbound);
@@ -253,7 +264,17 @@ export function renderAlert(
      */
     const quality = qualityLine(lead.threat.quality ?? EMPTY_QUALITY);
     const speed = lead.speedMeasured ? "швидкість заміряна" : "";
-    const detail = [quality, speed].filter(Boolean).join(" · ");
+    /*
+     * Вік позиції — лише коли він справді щось міняє. «Щойно» у кожному
+     * сповіщенні було б шумом, а от «позиція 4 хв тому» поряд із «27 км» —
+     * це те, чого людині бракувало, щоб прочитати число правильно.
+     */
+    const ageSec = fixAgeMs(lead.threat, opts.now ?? Date.now());
+    const age =
+      ageSec !== null && ageSec >= AGE_WORTH_SAYING_MS
+        ? fixAgeLabel(Math.round(ageSec / 1000))
+        : null;
+    const detail = [quality, speed, age ? `позиція ${age}` : ""].filter(Boolean).join(" · ");
     if (detail) lines.push(`<i>${escapeHtml(detail)}</i>`);
   }
   if (assess.inboundCount > 1) lines.push(`Усього на вашу точку: ${assess.inboundCount}`);
@@ -336,6 +357,15 @@ export function locationKeyboard(chatType: string):
     one_time_keyboard: true,
   };
 }
+
+/**
+ * Від якого віку позицію варто називати вголос.
+ *
+ * Півтори хвилини — приблизно та межа, за якою шахед устигає пройти помітну
+ * частку показаної відстані. Нижче за неї рядок лише додавав би шуму в текст,
+ * який читають одним поглядом.
+ */
+const AGE_WORTH_SAYING_MS = 90_000;
 
 /* ─── Налаштування ──────────────────────────────────────────────────────── */
 
