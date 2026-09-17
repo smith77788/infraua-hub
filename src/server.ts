@@ -361,7 +361,11 @@ async function webhookStatus(): Promise<Record<string, unknown>> {
 async function health(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const report = baseReport();
-  let body: Record<string, unknown> = { ...report };
+  // Стан живого мосту до Нептуна — щоб мовчазне падіння на REST було видно, а не
+  // здогадувалось. `connected:false` при спокійному небі — норма (ще не кликали);
+  // `connected:false` під час активної хвилі — сигнал, що трансляція йде з REST.
+  const { neptunStreamStatus } = await import("./lib/neptun-stream");
+  let body: Record<string, unknown> = { ...report, neptunStream: neptunStreamStatus() };
   if (url.searchParams.get("probe") === "1") body = { ...body, probes: await runProbes() };
   // ?telegram=1 питає Telegram про стан вебхука — діагностика «бот мовчить».
   if (url.searchParams.get("telegram") === "1") body = { ...body, webhook: await webhookStatus() };
