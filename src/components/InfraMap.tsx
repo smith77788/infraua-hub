@@ -58,6 +58,7 @@ import {
   LIFECYCLE_LABEL,
   radiusIsStated,
 } from "@/lib/threat-quality";
+import { useThreatMotion } from "./use-threat-motion";
 
 interface Props {
   facilities: Facility[];
@@ -686,6 +687,11 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     );
   }, [threats]);
 
+  // Плавний рух між реальними оновленнями: історію (де ціль БУЛА) ведемо за
+  // сирими спостереженнями вище, а протягнуту позицію (де ціль ЗАРАЗ, оцінково)
+  // рахує motion — тож трек лишається фактом, а маркер їде.
+  const animated = useThreatMotion(threats);
+
   if (zoom < 7) {
     const clusters = gridClusters(threats, zoom);
     return (
@@ -705,7 +711,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     );
   }
 
-  const inView = threats.filter((t) => bounds.contains([t.lat, t.lon]));
+  const inView = animated.filter((t) => bounds.contains([t.lat, t.lon]));
   return (
     <>
       {inView.map((t) => {
@@ -740,7 +746,12 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
          * колі, і рішення людини має спиратися на коло, а не на його центр.
          */
         const q = t.quality ?? EMPTY_QUALITY;
-        const radiusKm = displayRadiusKm(q);
+        // Протягнута позиція росте невизначеність: до заявленого радіуса додаємо
+        // пройдений за проєкцією шлях — ціль десь у цьому (більшому) колі. Коли
+        // тягнемо (projKm>0), контур завжди пунктирний: це оцінка, не факт.
+        const projKm = t.projKm ?? 0;
+        const projected = projKm > 0;
+        const radiusKm = displayRadiusKm(q) + projKm;
         const courseObserved = courseIsObserved(q);
         return (
           <Fragment key={t.id}>
@@ -755,8 +766,9 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 fillOpacity: fresh === "stale" ? 0.03 : 0.07,
                 // Заявлений джерелом радіус — суцільний контур; наше
                 // консервативне припущення, коли джерело промовчало, —
-                // пунктир. Різницю видно, не читаючи попап.
-                ...(radiusIsStated(q) ? {} : { dashArray: "3 6" }),
+                // пунктир. Різницю видно, не читаючи попап. Протягнута позиція
+                // — теж пунктир: центр кола сам є оцінкою.
+                ...(radiusIsStated(q) && !projected ? {} : { dashArray: "3 6" }),
               }}
             />
             {observed.length >= 2 ? (
@@ -815,11 +827,17 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   ) : null}
                   <p className="opacity-70">
                     Позиція:{" "}
-                    {radiusIsStated(q)
+                    {radiusIsStated(q) && !projected
                       ? `±${Math.round(radiusKm)} км`
-                      : `±~${radiusKm} км (джерело не вказало)`}
+                      : `±~${Math.round(radiusKm)} км${projected ? " (протягнуто за курсом)" : " (джерело не вказало)"}`}
                     {q.lifecycle ? ` · ${LIFECYCLE_LABEL[q.lifecycle]}` : ""}
                   </p>
+                  {projected ? (
+                    <p className="opacity-60 text-[11px] leading-snug">
+                      ◇ позицію протягнуто за курсом на ~{projKm.toFixed(1)} км від останнього
+                      сигналу — оцінка, не факт
+                    </p>
+                  ) : null}
                   {q.speedKmh !== null ? (
                     <p className="opacity-70">
                       Швидкість: {Math.round(q.speedKmh)} км/год (заміряна)

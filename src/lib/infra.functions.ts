@@ -824,9 +824,12 @@ export async function fetchChannelReports(signal?: AbortSignal): Promise<Channel
   }
 }
 
-export const getThreats = createServerFn({ method: "GET" }).handler(async () => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
+/**
+ * Ядро картини цілей — ЄДИНИЙ конвеєр для карти (getThreats) і живого потоку
+ * (SSE). Виносимо його, щоб браузерний пуш і запит-опитування давали той самий
+ * payload; інакше «наживо» й «перезавантажив» знову були б дві правди.
+ */
+export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsPayload> {
   try {
     // 1) Основне джерело — neptun через СПІЛЬНИЙ кеш: та сама пам'ять, з якої
     // читає канал і публічний віджет, тож карта застосунку й пост показують
@@ -841,7 +844,7 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
          * довіри поряд із першою не заводимо: два різні числа про те саме в
          * цьому проєкті вже проходили.
          */
-        const reports = await fetchChannelReports(controller.signal);
+        const reports = await fetchChannelReports(signal);
         const now = Date.now();
         const threats = reports.length
           ? withCorroboration(neptun, corroborate(neptun, reports, now))
@@ -858,7 +861,7 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
     }
 
     // 2) Фолбек — detoyshahed (позиції) + тип із тексту Telegram.
-    const res = await fetch(THREATS_ENDPOINT, { signal: controller.signal });
+    const res = await fetch(THREATS_ENDPOINT, { signal });
     if (!res.ok) throw new Error(`threats ${res.status}`);
     const data = (await res.json()) as {
       incidents?: {
@@ -914,10 +917,47 @@ export const getThreats = createServerFn({ method: "GET" }).handler(async () => 
       fetchedAt: new Date().toISOString(),
       degraded: true,
     } satisfies ThreatsPayload;
+  }
+}
+
+export const getThreats = createServerFn({ method: "GET" }).handler(async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    return await buildThreatsPayload(controller.signal);
   } finally {
     clearTimeout(timer);
   }
 });
+
+/**
+ * Короткий спільний кеш поверх `buildThreatsPayload` для живого потоку (SSE).
+ *
+ * Кожне зʼєднання опитує цей знімок часто (щоб браузер рухав ціль майже за
+ * пушем Нептуна), але N глядачів НЕ множать роботу: у межах вікна всі читають
+ * ті самі байти — рівно як модульний кеш робить для решти споживачів. Дорога
+ * частина (перехресні свідки) і так має свій довший кеш; тут лише страхуємось
+ * від зайвого CPU, коли підключено багато вкладок.
+ */
+let payloadCache: { at: number; payload: ThreatsPayload } | null = null;
+let payloadInflight: Promise<ThreatsPayload> | null = null;
+export async function threatsPayloadCached(maxAgeMs = 1_500): Promise<ThreatsPayload> {
+  const now = Date.now();
+  if (payloadCache && now - payloadCache.at < maxAgeMs) return payloadCache.payload;
+  if (payloadInflight) return payloadInflight;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  payloadInflight = buildThreatsPayload(controller.signal)
+    .then((payload) => {
+      payloadCache = { at: Date.now(), payload };
+      return payload;
+    })
+    .finally(() => {
+      clearTimeout(timer);
+      payloadInflight = null;
+    });
+  return payloadInflight;
+}
 
 // Лінія фронту — відкрите джерело DeepState Map (GeoJSON, keyless). Порт модуля
 // osiris/Palanter: ключовий шар ситуативної картини України, поруч із обʼєктами
