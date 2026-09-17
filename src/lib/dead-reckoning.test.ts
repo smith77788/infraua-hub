@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 
-import { advance, PROJECTION_CAP_MS, projectedKm, projectionSpeedKmh } from "./dead-reckoning";
+import {
+  advance,
+  maxProjectionSpeedKmh,
+  PROJECTION_CAP_MS,
+  projectedKm,
+  projectionSpeedKmh,
+  resolveProjectionSpeedKmh,
+} from "./dead-reckoning";
 
 describe("projectionSpeedKmh", () => {
   it("повільні дрони протягуємо за нижньою межею швидкості", () => {
@@ -17,6 +24,28 @@ describe("projectionSpeedKmh", () => {
     expect(projectionSpeedKmh("kab")).toBe(0);
     expect(projectionSpeedKmh("aircraft")).toBe(0);
     expect(projectionSpeedKmh(undefined)).toBe(0);
+  });
+});
+
+describe("resolveProjectionSpeedKmh", () => {
+  it("без заміру — консервативна нижня межа типу", () => {
+    expect(resolveProjectionSpeedKmh("shahed", null)).toBe(185);
+    expect(resolveProjectionSpeedKmh("shahed", undefined)).toBe(185);
+  });
+
+  it("із заміром — бере заміряну (точніше за припущення)", () => {
+    expect(resolveProjectionSpeedKmh("shahed", 240)).toBe(240);
+  });
+
+  it("замір обрізається стелею типу (викид не жбурляє дрон)", () => {
+    expect(resolveProjectionSpeedKmh("shahed", 5000)).toBe(maxProjectionSpeedKmh("shahed"));
+    expect(maxProjectionSpeedKmh("shahed")).toBe(600);
+  });
+
+  it("швидкі типи не тягнемо навіть із заміряною швидкістю", () => {
+    expect(resolveProjectionSpeedKmh("cruise", 800)).toBe(0);
+    expect(resolveProjectionSpeedKmh("ballistic", 6000)).toBe(0);
+    expect(maxProjectionSpeedKmh("cruise")).toBe(0);
   });
 });
 

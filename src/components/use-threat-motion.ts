@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Threat } from "@/lib/air";
-import { advance, PROJECTION_CAP_MS, projectedKm, projectionSpeedKmh } from "@/lib/dead-reckoning";
+import { advance, projectedKm, resolveProjectionSpeedKmh } from "@/lib/dead-reckoning";
 
 /**
  * Ціль із протягнутою (анімованою) позицією для карти.
@@ -26,8 +26,9 @@ interface Track {
 }
 
 const BLEND_MS = 1000; // плавна корекція від показаного до нової правди
-const FRAME_MS = 200; // ~5 кадрів/с — досить для повільних дронів, дешево для React
+const FRAME_MS = 120; // ~8 кадрів/с — плавніша корекція, все ще дешево для React
 const PROJECTED_MIN_KM = 0.2; // менше — вважаємо, що стоїмо на факті (без позначки «оцінка»)
+const MOVE_EPS = 1e-5; // ~1.1 м широти: поріг «зрушила», нижче якого не перемальовуємо
 
 const easeOut = (x: number) => 1 - (1 - x) * (1 - x);
 const lerp = (a: number, b: number, f: number) => a + (b - a) * f;
@@ -62,7 +63,9 @@ export function useThreatMotion(threats: Threat[]): DisplayThreat[] {
       const posKey = `${t.lat.toFixed(5)},${t.lon.toFixed(5)}`;
       const heading =
         typeof t.heading === "number" && Number.isFinite(t.heading) ? t.heading : null;
-      const speedKmh = heading !== null ? projectionSpeedKmh(t.type) : 0;
+      // Заміряна джерелом швидкість точніша за припущену — беремо її, коли є.
+      const speedKmh =
+        heading !== null ? resolveProjectionSpeedKmh(t.type, t.quality?.speedKmh) : 0;
       const prev = map.get(t.id);
       if (!prev) {
         map.set(t.id, {
@@ -114,10 +117,15 @@ export function useThreatMotion(threats: Threat[]): DisplayThreat[] {
             lon: lerp(tr.blendFrom.lon, target.lon, easeOut(f)),
           };
           if (f >= 1) tr.blendFrom = null;
-          else moving = true;
         }
-        // Ще росте проєкція (не вперлись у стелю) — треба перемальовувати.
-        if (km > 0 && now - tr.anchorAt < PROJECTION_CAP_MS) moving = true;
+        // Перемальовуємо ЛИШЕ коли позначка справді зрушила (>~1 м). Так карта
+        // не репейнтиться на субпіксельний рух і не смикається у великий наліт,
+        // а завмерла на стелі ціль перестає коштувати кадрів.
+        if (
+          Math.abs(disp.lat - tr.dispLat) > MOVE_EPS ||
+          Math.abs(disp.lon - tr.dispLon) > MOVE_EPS
+        )
+          moving = true;
         tr.dispLat = disp.lat;
         tr.dispLon = disp.lon;
       }

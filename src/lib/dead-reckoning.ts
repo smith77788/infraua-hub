@@ -32,6 +32,33 @@ export function projectionSpeedKmh(type: ThreatType | undefined): number {
   return SPEED_RANGE_KMH[type][0];
 }
 
+/**
+ * Стеля швидкості протягування для типу (верхня межа діапазону). 0 — не тягнемо.
+ * Використовуємо, щоб обрізати ЗАМІРЯНУ джерелом швидкість: заміряна точніша за
+ * припущену нижню межу, але викид у даних не має жбурляти дрон за горизонт.
+ */
+export function maxProjectionSpeedKmh(type: ThreatType | undefined): number {
+  if (!type || !PROJECTABLE.has(type)) return 0;
+  return SPEED_RANGE_KMH[type][1];
+}
+
+/**
+ * Швидкість для протягування цілі: ЗАМІРЯНА джерелом, якщо вона є (точніше за
+ * припущення), інакше — консервативна нижня межа типу. Заміряну обрізаємо
+ * стелею типу. Для швидких типів завжди 0 — їх не тягнемо.
+ */
+export function resolveProjectionSpeedKmh(
+  type: ThreatType | undefined,
+  measuredKmh: number | null | undefined,
+): number {
+  const floor = projectionSpeedKmh(type);
+  if (floor <= 0) return 0; // непроєктований тип
+  if (typeof measuredKmh === "number" && measuredKmh > 0) {
+    return Math.min(measuredKmh, maxProjectionSpeedKmh(type));
+  }
+  return floor;
+}
+
 /** Скільки км протягуємо ціль за час ageMs (обрізаний стелею). */
 export function projectedKm(speedKmh: number, ageMs: number): number {
   if (!(speedKmh > 0) || !(ageMs > 0)) return 0;
