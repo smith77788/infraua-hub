@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Threat } from "@/lib/air";
 import { advance, projectedKm, resolveProjectionSpeedKmh } from "@/lib/dead-reckoning";
+import { livePosition } from "@/lib/live-position";
+import { courseIsObserved, EMPTY_QUALITY } from "@/lib/threat-quality";
 
 /**
  * Ціль із протягнутою (анімованою) позицією для карти.
@@ -50,6 +52,66 @@ function currentKm(tr: Track, now: number): number {
  * Якір позиції перекочуємо ЛИШЕ коли позиція реально змінилась. Інакше кожен
  * полінг (та сама точка) скидав би проєкцію в нуль і ціль не рушала б.
  */
+/**
+ * Куди і як швидко тягнути позначку — і чи тягнути взагалі.
+ *
+ * ## Чому не можна брати `t.heading`
+ *
+ * Доти курс брався сирим із джерела. Заміряно за 40 хвилин спостережень живого
+ * фіду, зіставляючи курс джерела з нашим власним треком тієї самої цілі:
+ *
+ * | позначка джерела | випадків | медіана розходження |
+ * | ---------------- | -------- | ------------------- |
+ * | спостережений    | 2        | 0°                  |
+ * | припущений       | 9        | **72°**, 5 із 9 понад 60° |
+ *
+ * Припущених у видачі — 89%.
+ *
+ * ## Чому 60° — не довільне число
+ *
+ * Питання «тягнути чи лишити на місці» вирішується арифметикою, а не смаком.
+ * Якщо ціль справді змістилась на d, то помилка «стояти» дорівнює d, а помилка
+ * «тягнути під кутом θ до правди» — 2·d·sin(θ/2). Друге менше за перше рівно
+ * при θ < 60°.
+ *
+ * θ = 30° → 0,52d (тягнути вдвічі точніше)
+ * θ = 60° → 1,00d (однаково)
+ * θ = 72° → 1,18d (**гірше, ніж стояти**)
+ *
+ * Тобто на заміряному розподілі протягування за ПРИПУЩЕНИМ курсом у медіані
+ * гірше, ніж не рухати позначку зовсім. Аргумент «нерухома позначка теж бреше»
+ * правильний — але діє лише всередині цих 60°, а припущені курси лежать поза
+ * ними.
+ *
+ * ## Порядок довіри
+ *
+ * 1. Курс, ВИМІРЯНИЙ із треку джерела (`livePosition` — найменші квадрати,
+ *    поріг упевненості, перевірка на правдоподібну швидкість). Це вимір.
+ * 2. Курс, який джерело саме називає спостереженим.
+ * 3. Інакше не тягнемо — позначка стоїть, а коло невизначеності росте.
+ */
+function projectionCourse(t: Threat, now: number): { heading: number | null; speedKmh: number } {
+  const live = livePosition(
+    {
+      lat: t.lat,
+      lon: t.lon,
+      ...(t.trail ? { trail: t.trail } : {}),
+      ...(t.quality?.uncertaintyKm != null ? { uncertaintyKm: t.quality.uncertaintyKm } : {}),
+    },
+    now,
+  );
+  // `reckoned` означає, що всі перевірки всередині пройдено: трек із двох і
+  // більше фіксів, упевненість підгонки, правдоподібна швидкість, свіжий фікс.
+  if (live.basis === "reckoned" && live.bearingDeg !== null && live.speedKmh !== null) {
+    return { heading: live.bearingDeg, speedKmh: live.speedKmh };
+  }
+  const stated = typeof t.heading === "number" && Number.isFinite(t.heading) ? t.heading : null;
+  if (stated !== null && courseIsObserved(t.quality ?? EMPTY_QUALITY)) {
+    return { heading: stated, speedKmh: resolveProjectionSpeedKmh(t.type, t.quality?.speedKmh) };
+  }
+  return { heading: null, speedKmh: 0 };
+}
+
 export function useThreatMotion(threats: Threat[]): DisplayThreat[] {
   const tracks = useRef<Map<string, Track>>(new Map());
   const [, forceTick] = useState(0);
@@ -61,11 +123,7 @@ export function useThreatMotion(threats: Threat[]): DisplayThreat[] {
     for (const t of threats) {
       seen.add(t.id);
       const posKey = `${t.lat.toFixed(5)},${t.lon.toFixed(5)}`;
-      const heading =
-        typeof t.heading === "number" && Number.isFinite(t.heading) ? t.heading : null;
-      // Заміряна джерелом швидкість точніша за припущену — беремо її, коли є.
-      const speedKmh =
-        heading !== null ? resolveProjectionSpeedKmh(t.type, t.quality?.speedKmh) : 0;
+      const { heading, speedKmh } = projectionCourse(t, now);
       const prev = map.get(t.id);
       if (!prev) {
         map.set(t.id, {
