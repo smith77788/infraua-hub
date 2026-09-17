@@ -20,7 +20,8 @@ import {
   type WeatherNow,
 } from "./air";
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
-import { readQuality } from "./threat-quality";
+import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
+import { ensureNeptunStream, liveThreats } from "./neptun-stream";
 import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
@@ -639,76 +640,6 @@ interface ThreatsPayload {
   source?: "neptun" | "detoyshahed";
 }
 
-/** Тип цілі neptun → наш ThreatType. Спираємось на текст (title+пояснення). */
-function mapNeptunType(type: string | undefined, text: string): ThreatType {
-  const byText = classifyThreatType(text);
-  if (byText !== "unknown") return byText;
-  const t = (type ?? "").toLowerCase();
-  if (/ballist/.test(t)) return "ballistic";
-  if (/cruise|krylat/.test(t)) return "cruise";
-  if (/missile|rocket|raket/.test(t)) return "missile";
-  if (/kab/.test(t)) return "kab";
-  if (/recon|rozvid/.test(t)) return "recon";
-  if (/aircraft|jet|avia/.test(t)) return "aircraft";
-  if (/fpv|uav|drone|bpla|shahed/.test(t)) return "shahed";
-  return "unknown";
-}
-
-interface NeptunThreat {
-  id: string;
-  type?: string;
-  title?: string;
-  region?: string;
-  district?: string;
-  locality?: string;
-  lat?: number;
-  lon?: number;
-  heading?: number | null;
-  confidenceLevel?: string;
-  sourceCount?: number;
-  count?: number;
-  updatedAt?: string;
-  confirmedAt?: string;
-  explanationShort?: string;
-  status?: string;
-  /* Заяви джерела про власну точність — розбираються в readQuality. */
-  uncertaintyKm?: unknown;
-  positionQuality?: unknown;
-  lifecycle?: unknown;
-  presumptiveCourse?: unknown;
-  velocity?: unknown;
-  sea?: unknown;
-  trail?: unknown;
-}
-
-/**
- * Трек із джерела — лише коректні точки.
- *
- * Джерело віддає його не завжди й не для всіх цілей, тож усе, що не є парою
- * скінченних координат із часом, відкидається мовчки: половина треку гірша за
- * його відсутність лише тоді, коли з неї малюють суцільну лінію, а тут вона до
- * лінії просто не доходить.
- */
-function readTrail(raw: unknown): { lat: number; lon: number; t: string }[] | null {
-  if (!Array.isArray(raw)) return null;
-  const out: { lat: number; lon: number; t: string }[] = [];
-  for (const p of raw) {
-    if (!p || typeof p !== "object") continue;
-    const o = p as { lat?: unknown; lon?: unknown; t?: unknown };
-    if (
-      typeof o.lat === "number" &&
-      Number.isFinite(o.lat) &&
-      typeof o.lon === "number" &&
-      Number.isFinite(o.lon) &&
-      typeof o.t === "string" &&
-      o.t
-    ) {
-      out.push({ lat: o.lat, lon: o.lon, t: o.t });
-    }
-  }
-  return out.length >= 2 ? out : null;
-}
-
 /**
  * ЄДИНЕ канонічне джерело повітряних цілей.
  *
@@ -722,6 +653,25 @@ function readTrail(raw: unknown): { lat: number; lon: number; t: string }[] | nu
 let neptunCache: { at: number; threats: Threat[] } | null = null;
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
   const now = Date.now();
+
+  /*
+   * Спочатку — живий WebSocket-міст до Нептуна.
+   *
+   * Один процес Railway тримає ОДНЕ постійне зʼєднання `wss://.../stream` на
+   * всіх користувачів: снапшот + пуші `upsert` рухають ціль щосекунди, а не раз
+   * на опитування. Поки міст підключений і свіжий, віддаємо його знімок напряму
+   * — це і є «пряме джерело Нептуна для трансляції польоту в реальному часі».
+   * `ensureNeptunStream()` лише будить лінивий конектор (idempotent) і нічого не
+   * блокує: якщо WS ще не готовий, падаємо на REST-опитування нижче.
+   */
+  ensureNeptunStream();
+  const live = liveThreats();
+  if (live) {
+    // Дзеркалимо у модульний кеш, щоб фолбек мав останню відому картину.
+    neptunCache = { at: now, threats: live };
+    return live;
+  }
+
   if (neptunCache && now - neptunCache.at < maxAgeMs) return neptunCache.threats;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
@@ -748,51 +698,8 @@ export async function fetchNeptunThreats(signal: AbortSignal): Promise<Threat[] 
   if (!Array.isArray(list)) return null;
   const out: Threat[] = [];
   for (const t of list) {
-    /*
-     * `Number.isFinite`, а не `typeof === "number"`.
-     *
-     * typeof NaN — це «number», а всі порівняння NaN із межами bbox нижче
-     * хибні, тож запис із NaN проходив би повз обидві перевірки й потрапляв у
-     * систему. На карті його намалювати неможливо, у лічильнику він є — і
-     * число над картою перестає збігатися з тим, що під нею.
-     *
-     * Чесно: з JSON це недосяжно (у JSON немає літерала NaN), і на живому фіді
-     * я такого не спостерігав. Але перевірка, яка не перевіряє того, що
-     * обіцяє, — це вада незалежно від того, чи вистрілила вона сьогодні.
-     */
-    if (typeof t.lat !== "number" || !Number.isFinite(t.lat)) continue;
-    if (typeof t.lon !== "number" || !Number.isFinite(t.lon)) continue;
-    if (t.status && t.status !== "active") continue;
-    if (
-      t.lat < UA_BBOX.south ||
-      t.lat > UA_BBOX.north ||
-      t.lon < UA_BBOX.west ||
-      t.lon > UA_BBOX.east
-    )
-      continue;
-    const text = `${t.title ?? ""} ${t.explanationShort ?? ""}`;
-    const trail = readTrail(t.trail);
-    out.push({
-      id: t.id,
-      name: t.locality || t.district || t.region || t.title || "Ціль",
-      lat: t.lat,
-      lon: t.lon,
-      source: "neptun.in.ua",
-      type: mapNeptunType(t.type, text),
-      count: t.count ?? 1,
-      since: t.confirmedAt ?? t.updatedAt ?? "",
-      expires: "",
-      reports: t.sourceCount ?? 1,
-      lastSeen: t.updatedAt ?? t.confirmedAt ?? "",
-      ...(typeof t.heading === "number" ? { heading: t.heading } : {}),
-      ...(t.confidenceLevel ? { confidence: t.confidenceLevel } : {}),
-      // Те, що джерело каже про власну точність. Без цього позначка ±45 км
-      // малювалась крапкою, а припущений курс — як спостережений.
-      quality: readQuality(t),
-      ...(trail ? { trail } : {}),
-      ...(t.sea === true ? { sea: true } : {}),
-      ...(t.region ? { region: t.region } : {}),
-    });
+    const mapped = mapNeptunThreat(t);
+    if (mapped) out.push(mapped);
   }
   return out;
 }
