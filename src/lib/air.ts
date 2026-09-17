@@ -226,6 +226,19 @@ export interface Threat {
 }
 
 /**
+ * Число з чужого JSON або запасне значення.
+ *
+ * Той самий урок, що й у `readCount`, але для величин, які бувають відʼємними
+ * й дробовими — температура, вітер, опади. `typeof === "number"` тут не
+ * рятує: `JSON.parse("1e400")` віддає Infinity, і воно проходить перевірку
+ * типу, а `Math.round(Infinity)` лишається Infinity. Далі це просто їде в
+ * текст користувачеві — «мороз -Infinity°C».
+ */
+export function finiteOr(raw: unknown, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : fallback;
+}
+
+/**
  * Скільки цілей у цій позначці — з чужого JSON у число, якому можна вірити.
  *
  * `?? 1` тут не досить, і це не теорія. У JSON немає літерала `NaN`, але

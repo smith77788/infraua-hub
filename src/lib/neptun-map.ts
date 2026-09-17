@@ -114,7 +114,14 @@ export function mapNeptunThreat(t: NeptunThreat): Threat | null {
     count: readCount(t.count),
     since: t.confirmedAt ?? t.updatedAt ?? "",
     expires: "",
-    reports: t.sourceCount ?? 1,
+    /*
+     * Через `readCount`, а не `?? 1`, і це не косметика: `reports` живить
+     * `verifyThreat`, де `reports >= 3` означає «підтверджено незалежними
+     * джерелами». `Infinity >= 3` істинне, тож зіпсоване число з чужого JSON
+     * підвищувало б ДОВІРУ до цілі — непідтверджена позначка читалась би як
+     * зведена з трьох каналів.
+     */
+    reports: readCount(t.sourceCount),
     lastSeen: t.updatedAt ?? t.confirmedAt ?? "",
     ...(typeof t.heading === "number" ? { heading: t.heading } : {}),
     ...(t.confidenceLevel ? { confidence: t.confidenceLevel } : {}),

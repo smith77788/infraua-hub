@@ -7,6 +7,7 @@ import {
   observedAt,
   type Threat,
   readCount,
+  finiteOr,
 } from "./air";
 import { renderChannelPost } from "./channel-post";
 
@@ -233,5 +234,26 @@ describe("readCount — чужий лічильник у число, якому 
     // велике число.
     expect(readCount(500)).toBe(500);
     expect(readCount(100_000)).toBe(100_000);
+  });
+});
+
+describe("finiteOr — величини, які бувають відʼємними й дробовими", () => {
+  it("Infinity не переживає читання", () => {
+    // `typeof Infinity === "number"` істинне, і `Math.round(Infinity)` теж
+    // Infinity — тому перевірки типу тут не досить.
+    expect(finiteOr(JSON.parse("1e400") as number, 0)).toBe(0);
+    expect(finiteOr(-Infinity, 0)).toBe(0);
+    expect(finiteOr(Number.NaN, 0)).toBe(0);
+  });
+
+  it("справжні величини проходять, зокрема відʼємні й дробові", () => {
+    expect(finiteOr(-12.5, 0)).toBe(-12.5);
+    expect(finiteOr(0, 7)).toBe(0);
+  });
+
+  it("чуже за типом і відсутнє — запасне значення", () => {
+    expect(finiteOr("-5", 0)).toBe(0);
+    expect(finiteOr(undefined, 3)).toBe(3);
+    expect(finiteOr(null, 3)).toBe(3);
   });
 });

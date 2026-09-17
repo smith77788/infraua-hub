@@ -18,6 +18,7 @@ import {
   type Threat,
   type ThreatType,
   type WeatherNow,
+  finiteOr,
   readCount,
 } from "./air";
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
@@ -1293,12 +1294,14 @@ export const getWeather = createServerFn({ method: "GET" }).handler(
         };
       };
       const c = data.current;
-      if (!c || typeof c.temperature_2m !== "number") throw new Error("no current");
+      // Скінченність, а не лише тип: Infinity проходить `typeof === "number"`,
+      // переживає `Math.round` і їде в текст користувачеві як «мороз -Infinity°C».
+      if (!c || !Number.isFinite(c.temperature_2m)) throw new Error("no current");
       const payload: WeatherNow = {
-        tempC: Math.round(c.temperature_2m),
-        windKmh: Math.round(c.wind_speed_10m ?? 0),
-        windDir: Math.round(c.wind_direction_10m ?? 0),
-        precip: c.precipitation ?? 0,
+        tempC: Math.round(finiteOr(c.temperature_2m, 0)),
+        windKmh: Math.round(finiteOr(c.wind_speed_10m, 0)),
+        windDir: Math.round(finiteOr(c.wind_direction_10m, 0)),
+        precip: finiteOr(c.precipitation, 0),
         degraded: false,
       };
       writeCache("weather", payload);
