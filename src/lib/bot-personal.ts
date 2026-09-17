@@ -20,7 +20,13 @@ import type { ThreatType } from "./air";
 import { escapeHtml } from "./telegram";
 import { preAlertFooter, preAlertHeader } from "./pre-alert";
 import type { SoundKind } from "./acoustic";
-import { type AlertTier, type NightMode, type Subscriber, DEFAULT_RADIUS_KM } from "./subscribers";
+import {
+  type AlertTier,
+  DEFAULT_RADIUS_KM,
+  NIGHT_WAKE_MIN,
+  type NightMode,
+  type Subscriber,
+} from "./subscribers";
 import { EMPTY_QUALITY, qualityLine } from "./threat-quality";
 import { KIND_EMOJI, KIND_NOTE, type NearbyShelter } from "./shelters";
 import { clampLead } from "./lead-threshold";
@@ -375,8 +381,18 @@ const TIER_LABEL: Record<AlertTier, string> = {
   all: "усе поблизу",
 };
 
+/**
+ * Підписи нічного режиму мусять казати, що він РОБИТЬ.
+ *
+ * «Лише критичне» перестало бути правдою: фільтр типів більше не діє, коли
+ * ціль ось-ось прилетить. Причина заміряна — з усталеним `critical` наліт
+ * шахедів уночі давав нуль сповіщень, удень сім, тобто бот мовчав саме тоді,
+ * коли потрібен. Але змінити поведінку й лишити старий підпис означало б
+ * зробити те, що я весь цей аудит виправляв в інших місцях: код, який не
+ * робить того, що про нього написано.
+ */
 const NIGHT_LABEL: Record<NightMode, string> = {
-  critical: "лише критичне",
+  critical: `ракети — завжди, решта — за ${NIGHT_WAKE_MIN} хв до підльоту`,
   all: "усе, як удень",
   silent: "тиша",
 };
@@ -393,6 +409,7 @@ export function renderSettings(sub: Subscriber): string {
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
     "",
     "<i>Нічний режим лише звужує денний — він ніколи не розбудить вас тим, чого ви не просили вдень.</i>",
+    `<i>Уночі дрон будить, лише коли до підльоту лишається ${NIGHT_WAKE_MIN} хв чи менше: далекий рух не турбує, а той, що вже поруч, — розбудить. Ракети й КАБи будять на будь-якій відстані.</i>`,
     "<i>Поріг часу міряє не кілометри, а запас часу дійти до укриття: шахед за 50 км — це пів години, балістика за ті самі 50 км — менше хвилини. Коли час підльоту оцінити не вдалося, поріг вас не глушить — попереджаємо.</i>",
   ].join("\n");
 }
@@ -429,7 +446,9 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
         callback_data: `${PERSONAL_ACTIONS.tierPrefix}${t}`,
       })),
       nights.map((n) => ({
-        text: `${sub.night === n ? "✅ " : ""}Ніч: ${n === "silent" ? "тиша" : n === "critical" ? "критичне" : "усе"}`,
+        // На кнопці місця мало — пишемо коротко, а повне значення стоїть у
+        // рядку налаштувань вище.
+        text: `${sub.night === n ? "✅ " : ""}Ніч: ${n === "silent" ? "тиша" : n === "critical" ? "поруч" : "усе"}`,
         callback_data: `${PERSONAL_ACTIONS.nightPrefix}${n}`,
       })),
       radii.map((km) => ({

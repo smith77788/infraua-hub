@@ -14,7 +14,7 @@ import {
   renderShelters,
   settingsKeyboard,
 } from "./bot-personal";
-import { newSubscriber, type Subscriber } from "./subscribers";
+import { newSubscriber, type Subscriber, NIGHT_WAKE_MIN } from "./subscribers";
 import type { NearbyShelter } from "./shelters";
 
 const KYIV = { lat: 50.45, lon: 30.52 };
@@ -431,5 +431,33 @@ describe("сповіщення каже, наскільки стара сама 
     expect(renderAlert(assess, dangerIndex(assess), "моя точка", { now: NOW })).not.toContain(
       "позиція",
     );
+  });
+});
+
+describe("підпис нічного режиму каже, що він робить", () => {
+  it("не обіцяє «лише критичне», бо це вже неправда", () => {
+    /*
+     * Поведінку `night: "critical"` змінено: фільтр типів більше не діє, коли
+     * ціль ось-ось прилетить (причина — з усталеним режимом наліт шахедів
+     * уночі давав нуль сповіщень). Лишити старий підпис означало б зробити те
+     * саме, що виправлялось у публічному API й у тексті каналу: код, який не
+     * робить того, що про нього написано.
+     */
+    const text = renderSettings(sub({ night: "critical" }));
+    expect(text).not.toContain("лише критичне");
+  });
+
+  it("називає число, за яким дрон уночі розбудить", () => {
+    const text = renderSettings(sub({ night: "critical" }));
+    expect(text).toContain(String(NIGHT_WAKE_MIN));
+    expect(text).toContain("до підльоту");
+  });
+
+  it("каже, що ракети будять на будь-якій відстані", () => {
+    expect(renderSettings(sub({ night: "critical" }))).toContain("Ракети");
+  });
+
+  it("«тиша» лишається тишею й у підписі", () => {
+    expect(renderSettings(sub({ night: "silent" }))).toContain("тиша");
   });
 });
