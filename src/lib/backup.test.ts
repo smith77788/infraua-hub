@@ -101,3 +101,59 @@ describe("тексти", () => {
     expect(r).toContain("не переписувались");
   });
 });
+
+describe("копія не несе координат із точністю до будинку", () => {
+  const sub = (lat: number, lon: number, places?: { lat: number; lon: number; title: string }[]) =>
+    ({
+      ...newSubscriber(1, "2026-01-01T00:00:00Z"),
+      point: { lat, lon, label: "дім" },
+      ...(places ? { places: places.map((p) => ({ ...p, addedAt: 0 })) } : {}),
+    }) as Subscriber;
+
+  it("точку огрублено до сітки близько кілометра", () => {
+    /*
+     * У файлі лежить домашня адреса кожного користувача, підписана словом
+     * «дім» або «школа». У країні під обстрілами це перелік цілей, і він іде
+     * в Telegram, де лишається назавжди. Ціна огрублення заміряна: зсув ≤0,66
+     * км, тобто 13 секунд часу підльоту проти 205 секунд застою самих даних.
+     */
+    const file = buildBackup([sub(50.4501234, 30.5236789)], [], "2026-09-17T00:00:00Z");
+    const p = file.subscribers[0]!.point!;
+    expect(p.lat).toBeCloseTo(50.45, 5);
+    expect(p.lon).toBeCloseTo(30.52, 5);
+  });
+
+  it("огрублення менше за кілометр — тобто функція не страждає", () => {
+    const file = buildBackup([sub(49.9876543, 36.2345678)], [], "2026-09-17T00:00:00Z");
+    const p = file.subscribers[0]!.point!;
+    const dLatKm = Math.abs(p.lat - 49.9876543) * 111.32;
+    const dLonKm = Math.abs(p.lon - 36.2345678) * 111.32 * Math.cos((49.99 * Math.PI) / 180);
+    expect(Math.hypot(dLatKm, dLonKm)).toBeLessThan(1);
+  });
+
+  it("мої місця огрублено так само — саме вони найчутливіші", () => {
+    // «Школа» з точністю до будинку — найгірше, що може бути в цьому файлі.
+    const file = buildBackup(
+      [sub(50.45, 30.52, [{ lat: 50.4512345, lon: 30.5298765, title: "школа" }])],
+      [],
+      "2026-09-17T00:00:00Z",
+    );
+    const place = file.subscribers[0]!.places![0]!;
+    expect(place.lat).toBeCloseTo(50.45, 5);
+    expect(place.title).toBe("школа");
+  });
+
+  it("повторне збереження не зсуває точку далі", () => {
+    // Округлення до сталої сітки ідемпотентне: цикл «відновив → зберіг» не має
+    // відводити людину від її дому з кожним разом.
+    const once = buildBackup([sub(50.4567, 30.5234)], [], "t");
+    const twice = buildBackup(once.subscribers, [], "t");
+    expect(twice.subscribers[0]!.point).toEqual(once.subscribers[0]!.point);
+  });
+
+  it("решта полів не чіпається", () => {
+    const file = buildBackup([sub(50.45, 30.52)], [], "2026-09-17T00:00:00Z");
+    expect(file.subscribers[0]!.chatId).toBe(1);
+    expect(file.subscribers[0]!.point!.label).toBe("дім");
+  });
+});
