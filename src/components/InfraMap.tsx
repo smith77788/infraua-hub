@@ -318,19 +318,6 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
 }
 
 /**
- * Прибирає рекламний префікс «Leaflet» з атрибуції — лишається лише кредит
- * даних (Esri/OSM), якого вимагає ліцензія. Саме посилання «Leaflet» на карті
- * зайве й ще й налазило на стрічку внизу.
- */
-function AttributionPrefixOff() {
-  const map = useMap();
-  useEffect(() => {
-    map.attributionControl?.setPrefix(false);
-  }, [map]);
-  return null;
-}
-
-/**
  * Куди можна доїхати зумом.
  *
  * `MAX_ZOOM` — межа САМОЇ карти, `maxNativeZoom` — до якого зуму в підкладки
@@ -801,8 +788,10 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
             >
-              <Popup>
-                <div className="space-y-1 font-sans text-xs">
+              <Popup maxWidth={240} autoPanPadding={[12, 12]}>
+                {/* Обмежуємо картку, щоб вона не перекривала всю карту на
+                    невисокому мобільному вьюпорті: вузька ширина + прокрутка. */}
+                <div className="max-h-[45vh] space-y-1 overflow-y-auto pr-1 font-sans text-xs">
                   <p className="font-semibold" style={{ color: style.color }}>
                     {style.label}
                     {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
@@ -973,8 +962,11 @@ export default function InfraMap({
       scrollWheelZoom
       className="size-full"
       style={{ background: "#0a0e14" }}
+      // Стрічка атрибуції («Esri…») налазила на карту й закривала цілі внизу
+      // екрана. Прибираємо контрол цілком — кредит даних лишається в «Легенді
+      // карти», а сама мапа не має бути затулена.
+      attributionControl={false}
     >
-      <AttributionPrefixOff />
       <BaseLayers />
 
       {/*

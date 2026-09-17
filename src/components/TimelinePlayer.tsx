@@ -9,6 +9,8 @@ const TICK = 420; // мс між кроками
 interface Props {
   /** Викликається зі значенням правої межі курсора (ms) або null у «живому» режимі. */
   onCursor: (cursorMs: number | null) => void;
+  /** Вбудований у спільний скрабер: без власної рамки/фону й підпису. */
+  hideLabel?: boolean;
 }
 
 /**
@@ -21,7 +23,7 @@ interface Props {
  * виглядає все правильно, — тому час свідомо зʼявляється лише в браузері, а до
  * того плеєр показує себе неактивним.
  */
-export default function TimelinePlayer({ onCursor }: Props) {
+export default function TimelinePlayer({ onCursor, hideLabel = false }: Props) {
   const [nowMs, setNowMs] = useState<number | null>(null);
   useEffect(() => {
     setNowMs(Date.now());
@@ -64,19 +66,18 @@ export default function TimelinePlayer({ onCursor }: Props) {
       });
 
   return (
-    <div className="pointer-events-auto flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur">
-      {/*
-        Назва того, що саме перемотує цей повзунок.
-        
-        Без неї на телефоні він нерозрізненний від реплею нальоту, який стоїть
-        просто над ним: обидва — кнопка, радіо й повзунок. А керують вони
-        різними шкалами: цей — історією ударів за тридцять днів, той —
-        повітряною картиною за хвилини. Зі знімка користувача сказати, що є що,
-        було неможливо.
-      */}
-      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
-        Історія
-      </span>
+    <div
+      className={
+        hideLabel
+          ? "pointer-events-auto flex items-center gap-2 px-3 pb-2 pt-1"
+          : "pointer-events-auto flex items-center gap-2 border-t border-border bg-background/92 px-3 py-2 backdrop-blur"
+      }
+    >
+      {hideLabel ? null : (
+        <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+          Історія
+        </span>
+      )}
       <button
         onClick={() => {
           if (live) setCursor(min + TRAIL_MS);

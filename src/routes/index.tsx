@@ -50,8 +50,8 @@ import StaleShellNotice from "@/components/StaleShellNotice";
 import PersonalThreatPanel from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import MapOverlays from "@/components/MapOverlays";
-import TimelinePlayer, { TRAIL_MS } from "@/components/TimelinePlayer";
-import RaidReplay from "@/components/RaidReplay";
+import { TRAIL_MS } from "@/components/TimelinePlayer";
+import TimeScrubbers from "@/components/TimeScrubbers";
 import WaveForecast from "@/components/WaveForecast";
 import ActiveWaves from "@/components/ActiveWaves";
 import OfflineBanner from "@/components/OfflineBanner";
@@ -1605,10 +1605,11 @@ function Console() {
                 }
                 bottomLeft={<MapLegend showInfra={!infraDisabled} />}
                 bars={
-                  <>
-                    <RaidReplay frames={raidFrames} onCursor={setRaidCursor} />
-                    <TimelinePlayer onCursor={setPlayCursor} />
-                  </>
+                  <TimeScrubbers
+                    frames={raidFrames}
+                    onRaidCursor={setRaidCursor}
+                    onHistoryCursor={setPlayCursor}
+                  />
                 }
               />
 
