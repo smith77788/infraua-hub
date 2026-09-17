@@ -367,7 +367,20 @@ async function health(request: Request): Promise<Response> {
   // здогадувалось. `connected:false` при спокійному небі — норма (ще не кликали);
   // `connected:false` під час активної хвилі — сигнал, що трансляція йде з REST.
   const { neptunStreamStatus } = await import("./lib/neptun-stream");
-  let body: Record<string, unknown> = { ...report, neptunStream: neptunStreamStatus() };
+  /*
+   * Канали, ролі яких ми не знаємо, — у звіт про здоровʼя.
+   *
+   * Замір показав, що 79% повідомлень приходили від незнайомих каналів, а
+   * невідома роль мовчки знижує надійність позначки до «невідомої» й робить
+   * одиночне повідомлення «непідтвердженим». Перелік каналів у ніші живий, тож
+   * без цього рядка через місяць буде те саме. Порожній масив — усе впізнано.
+   */
+  const { unknownChannelReport } = await import("./lib/infra.functions");
+  let body: Record<string, unknown> = {
+    ...report,
+    neptunStream: neptunStreamStatus(),
+    unknownSources: unknownChannelReport(),
+  };
   if (url.searchParams.get("probe") === "1") body = { ...body, probes: await runProbes() };
   // ?telegram=1 питає Telegram про стан вебхука — діагностика «бот мовчить».
   if (url.searchParams.get("telegram") === "1") body = { ...body, webhook: await webhookStatus() };

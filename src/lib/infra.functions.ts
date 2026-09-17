@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 
-import { TG_CHANNELS } from "./osint-sources";
+import { roleOfSource, TG_CHANNELS } from "./osint-sources";
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 import { formatVoltage, highestVoltage, plantOutputMw } from "./osm-tags";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
@@ -784,6 +784,36 @@ async function fetchThreatTypesByPlace(placeNames: string[]): Promise<Map<string
  * Свій короткий кеш і власний строк: збій цього запиту не має валити головний
  * шлях — без свідків картина лишається такою, як була, просто без підтверджень.
  */
+/**
+ * Канали, яких немає в нашому переліку джерел, — щоб їхня поява не була мовчазною.
+ *
+ * Системна частина знахідки, а не дрібниця. Замір 2026-09-17: 79% повідомлень
+ * приходили від каналів, ролі яких код не знав. Невідома роль дає «надійність
+ * невідома» і робить одиночне повідомлення «непідтвердженим» — тобто ми
+ * знецінювали власні дані, і ніде цього не було видно.
+ *
+ * Перелік каналів у ніші живий: старі згасають, нові зʼявляються. Якщо не
+ * дивитись, через місяць буде те саме. Тому невідомі імена накопичуються тут і
+ * показуються в `/api/health` — маленький список, який видно щодня, дешевший за
+ * ще один такий самий замір через півроку.
+ */
+const unknownChannels = new Map<string, number>();
+
+function rememberUnknownChannels(reports: readonly ChannelReport[]): void {
+  for (const r of reports) {
+    if (roleOfSource(r.channel) !== "unknown") continue;
+    unknownChannels.set(r.channel, (unknownChannels.get(r.channel) ?? 0) + 1);
+  }
+}
+
+/** Невідомі канали для звіту про здоровʼя: найактивніші першими. */
+export function unknownChannelReport(): { channel: string; seen: number }[] {
+  return [...unknownChannels.entries()]
+    .map(([channel, seen]) => ({ channel, seen }))
+    .sort((a, b) => b.seen - a.seen)
+    .slice(0, 10);
+}
+
 const REPORTS_TTL_MS = 20_000;
 let reportsCache: { at: number; reports: ChannelReport[] } | null = null;
 
@@ -817,6 +847,7 @@ export async function fetchChannelReports(signal?: AbortSignal): Promise<Channel
       if (!Number.isFinite(at)) continue;
       out.push({ lat, lon, channel, at });
     }
+    rememberUnknownChannels(out);
     reportsCache = { at: now, reports: out };
     return out;
   } catch {
