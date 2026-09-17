@@ -720,7 +720,7 @@ function readTrail(raw: unknown): { lat: number; lon: number; t: string }[] | nu
  * воно й робило канал окремою правдою.
  */
 let neptunCache: { at: number; threats: Threat[] } | null = null;
-export async function neptunThreatsCached(maxAgeMs = 60_000): Promise<Threat[]> {
+export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
   const now = Date.now();
   if (neptunCache && now - neptunCache.at < maxAgeMs) return neptunCache.threats;
   const controller = new AbortController();
@@ -875,7 +875,7 @@ async function fetchThreatTypesByPlace(placeNames: string[]): Promise<Map<string
  * Свій короткий кеш і власний строк: збій цього запиту не має валити головний
  * шлях — без свідків картина лишається такою, як була, просто без підтверджень.
  */
-const REPORTS_TTL_MS = 60_000;
+const REPORTS_TTL_MS = 20_000;
 let reportsCache: { at: number; reports: ChannelReport[] } | null = null;
 
 export async function fetchChannelReports(signal?: AbortSignal): Promise<ChannelReport[]> {
