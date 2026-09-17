@@ -54,7 +54,7 @@ import {
   type PipelineFacts,
   type PipelineLevel,
 } from "./lib/pipeline-health";
-import { verifyInitData } from "./lib/telegram-initdata";
+import { verifyInitData, ADMIN_INITDATA_MAX_AGE_SEC } from "./lib/telegram-initdata";
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
@@ -4816,7 +4816,9 @@ async function telegramRepair(request: Request): Promise<Response> {
   if (!token) return json({ ok: false, reason: "TELEGRAM_BOT_TOKEN не заданий" }, 503);
 
   const body = (await request.json().catch(() => null)) as { initData?: string } | null;
-  const verified = await verifyInitData(body?.initData ?? "", token);
+  // Коротший строк, ніж для перегляду: ця точка перереєстровує вебхук, і
+  // перехоплений підпис не має давати добу адміністративного доступу.
+  const verified = await verifyInitData(body?.initData ?? "", token, ADMIN_INITDATA_MAX_AGE_SEC);
   if (!verified.ok)
     return json({ ok: false, reason: `initData не підтверджено: ${verified.reason}` }, 401);
 

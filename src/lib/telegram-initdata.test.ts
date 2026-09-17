@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { verifyInitData } from "./telegram-initdata";
+import { ADMIN_INITDATA_MAX_AGE_SEC, verifyInitData } from "./telegram-initdata";
 
 const TOKEN = "123456:TEST-bot-token";
 
@@ -68,5 +68,29 @@ describe("перевірка initData Telegram Mini App", () => {
   it("без токена або даних не проходить", async () => {
     expect((await verifyInitData("", TOKEN)).ok).toBe(false);
     expect((await verifyInitData("auth_date=1&hash=x", "")).ok).toBe(false);
+  });
+});
+
+describe("строк для адміністративних дій коротший за строк для перегляду", () => {
+  it("підпис віком пів години вже не годиться для дії", async () => {
+    /*
+     * `/api/telegram/repair` перереєстровує вебхук. При усталених 24 годинах
+     * перехоплений initData давав би добу адміністративного доступу — з
+     * пересланого знімка екрана, з історії браузера, з проксі. Людина, яка
+     * відкрила Mini App і натиснула «полагодити», робить це за хвилини.
+     */
+    const half = Math.floor(Date.now() / 1000) - 30 * 60;
+    const data = await signed({ auth_date: String(half), user: JSON.stringify({ id: 1 }) });
+    const forView = await verifyInitData(data, TOKEN);
+    const forAction = await verifyInitData(data, TOKEN, ADMIN_INITDATA_MAX_AGE_SEC);
+    expect(forView.ok).toBe(true);
+    expect(forAction.ok).toBe(false);
+    expect(forAction.reason).toContain("stale");
+  });
+
+  it("свіжий підпис проходить і для дії", async () => {
+    const justNow = String(Math.floor(Date.now() / 1000) - 10);
+    const data = await signed({ auth_date: justNow, user: JSON.stringify({ id: 1 }) });
+    expect((await verifyInitData(data, TOKEN, ADMIN_INITDATA_MAX_AGE_SEC)).ok).toBe(true);
   });
 });
