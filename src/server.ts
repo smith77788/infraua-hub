@@ -60,6 +60,12 @@ import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
 import {
+  isInUkraine,
+  parseReverseGeocode,
+  renderAbroadNotice,
+  reverseGeocodeUrl,
+} from "./lib/geo-country";
+import {
   cardAfter,
   decideCardAction,
   renderCardHelp,
@@ -229,7 +235,7 @@ import {
   renderCircleHelp,
   renderPeerOk,
 } from "./lib/circle";
-import { alertPhase, leadMinutes, renderOfficialConfirmed } from "./lib/pre-alert";
+import { alertPhase, leadMinutes, renderOfficialConfirmed, type AlertPhase } from "./lib/pre-alert";
 import { roleOfSource } from "./lib/osint-sources";
 import { updateHistory, type FixPoint } from "./lib/track-history";
 import { parseOfficialAlerts, stillAlerting } from "./lib/official-alerts";
@@ -2031,22 +2037,88 @@ async function personalCard(
   // Чи діє офіційна тривога над точкою. `null` — джерело мовчить, і це так і
   // передається далі: невідоме не зводиться ні до «діє», ні до «знято».
   const active = await fetchOfficialAlerts();
-  const officialAlert =
-    active === null ? null : active.includes(oblastOf(sub.point.lat, sub.point.lon));
+  // Область точки, а не найближчий обласний центр: людина за кордоном не має
+  // діставати чужу тривогу як власну (див. geo-country.ts).
+  const ownOblast = subscriberOblast(sub, sub.point);
+  const officialAlert = active === null || ownOblast === null ? null : active.includes(ownOblast);
   const now = Date.now();
   const heard = renderClusters(corroborate(soundReports, sub.point, now));
   const live = Boolean(sub.liveUntil && sub.liveUntil > now);
+  const card = renderPersonal(assess, danger, sub.point.label, sub.radiusKm, {
+    officialAlert,
+    heard,
+    live,
+  });
   return {
-    text: renderPersonal(assess, danger, sub.point.label, sub.radiusKm, {
-      officialAlert,
-      heard,
-      live,
-    }),
+    // Порожній радар за кордоном без пояснення читається як поломка: цілей
+    // навколо Варшави справді немає, а чому — ніде не сказано.
+    text: ownOblast === null ? card + "\n" + renderAbroadNotice() : card,
     keyboard: personalKeyboard(opts.withOk ? { withOk: true } : {}),
   };
 }
 
 /** Зберігає точку й одразу показує першу картку — без «надішліть /my ще раз». */
+/**
+ * Визначає країну точки й дописує її в підписку.
+ *
+ * Один запит на КОЖНЕ задання точки, а не на сповіщення: точка не переїжджає
+ * між країнами, тож відповідь живе в підписці. Nominatim просить не більше
+ * запиту на секунду й вимагає представитись — тому власний User-Agent і
+ * невеликий строк; ця частота дотримується природно, бо точку задають рідко.
+ *
+ * Будь-яка невдача — мовчазна. Країна лише УТОЧНЮЄ картину; без неї бот
+ * поводиться як раніше, і зривати через неї задання точки було б абсурдом.
+ */
+async function resolveCountry(chatId: number, lat: number, lon: number): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let raw: unknown;
+    try {
+      const res = await fetch(reverseGeocodeUrl(lat, lon), {
+        signal: controller.signal,
+        headers: { "user-agent": NOMINATIM_UA, "accept-language": "uk" },
+      });
+      if (!res.ok) return;
+      raw = await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+    const place = parseReverseGeocode(raw);
+    if (!place?.countryCode) return;
+    // Перечитуємо підписку: між записом точки й відповіддю джерела людина
+    // могла встигнути змінити налаштування, і затирати їх не можна.
+    const fresh = await getSubscriber(chatId);
+    if (!fresh) return;
+    await putSubscriber({ ...fresh, country: place.countryCode, countryAt: Date.now() });
+  } catch {
+    /* джерело мовчить — лишаємось при «не знаємо» */
+  }
+}
+
+/**
+ * Представлення для Nominatim.
+ *
+ * OSM вимагає змістовний User-Agent і відмовляє анонімним клієнтам — саме на
+ * цьому вже обпікся Overpass у цьому проєкті (відмови 406 читались як «джерело
+ * лежить»). Тому рядок тут, а не за замовчуванням.
+ */
+const NOMINATIM_UA = "infraua-hub/1.0 (air-raid radar; github.com/smith77788/infraua-hub)";
+
+/**
+ * Область точки людини — або `null`, коли точка не в Україні.
+ *
+ * Обгортка над `oblastOf`, яка знає те, чого не знає він: чи точка взагалі в
+ * країні. Сам `oblastOf` лишається як є — він групує ЦІЛІ, а цілі завжди
+ * всередині, і там обмеження відстані тільки заважало б.
+ *
+ * «Не знаємо країни» поводиться як «Україна»: інакше кожна стара підписка,
+ * задана до появи перевірки, мовчки втратила б офіційні тривоги.
+ */
+function subscriberOblast(sub: Subscriber, point: { lat: number; lon: number }): string | null {
+  return isInUkraine(sub.country) === false ? null : oblastOf(point.lat, point.lon);
+}
+
 async function savePoint(
   token: string,
   chatId: number,
@@ -2071,6 +2143,16 @@ async function savePoint(
   // Негайний запис: саме цю зміну найприкріше втратити при перезапуску —
   // людина щойно задала точку й вважає, що бот її знає.
   await putSubscriber(updated, true);
+
+  /*
+   * Країна точки — після запису, не перед ним.
+   *
+   * Зовнішнє джерело може мовчати або відповідати секунди, а людина вже
+   * натиснула кнопку й чекає. Точка зберігається одразу; країна доїжджає
+   * слідом і нічого не блокує. Не доїхала — лишається «не знаємо», і це
+   * чесно: `isInUkraine` розрізняє «не знаємо» і «ні».
+   */
+  void resolveCountry(chatId, lat, lon);
 
   // Оновлення живої точки приходить щохвилини. Писати на кожне «ви переїхали
   // на 300 метрів» означало б зробити з радара балакучого пасажира — тому
@@ -2257,7 +2339,9 @@ async function personalCommand(
         // Ритм саме тієї області, у якій стоїть точка, а не «по країні»:
         // питання «чи бути напоготові цієї ночі» — місцеве, і середнє по
         // Україні відповідає на нього гірше, ніж мовчання.
-        rhythm: summarizeRhythm(rhythmBuckets, oblastOf(point.lat, point.lon)),
+        // Ритм чужої країни не має сенсу: за кордоном рядок просто не
+        // зʼявиться, бо `confident` на порожній гістограмі — false.
+        rhythm: summarizeRhythm(rhythmBuckets, subscriberOblast(sub, point) ?? ""),
         hourKyiv: kyivHour(new Date()),
       }),
     };
@@ -3390,7 +3474,12 @@ interface AlertPayload {
   /** `null` — це сповіщення про ЧУЖЕ місце, і власний стан людини воно не чіпає. */
   decision: ReturnType<typeof decideAlert> | null;
   pre: boolean;
-  oblast: string;
+  /**
+   * Область точки. `null` — точка не в Україні, тож області в нашому сенсі
+   * немає, і випередження сирени для неї не вимірюється: там інша система
+   * оповіщення, з якою наші хвилини порівнювати нема з чим.
+   */
+  oblast: string | null;
   /** Заповнене лише для другорядних місць — тоді записуємо кулдаун по місцю. */
   place?: MyPlace;
   /**
@@ -3535,8 +3624,17 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     const point = pointOf(sub, now);
     if (!point) continue;
 
-    const oblast = oblastOf(point.lat, point.lon);
-    const phase = alertPhase(official, oblast);
+    /*
+     * За кордоном офіційна фаза — «невідомо», а не «ще не оголошена».
+     *
+     * Порожня назва області провалюється в `alertPhase` як «немає в переліку
+     * активних», тобто ПЕРЕДТРИВОГА, — і людина в Перемишлі (91 км від
+     * Львова, тобто цілі в її радіусі є) діставала б «офіційну ще не
+     * оголошували» про сирену, якої в її країні не буває. Ми справді не
+     * знаємо стану її тривог: її система — не наша.
+     */
+    const oblast = subscriberOblast(sub, point);
+    const phase: AlertPhase = oblast === null ? "unknown" : alertPhase(official, oblast);
 
     // Передтривога, за якою сирена так і не пролунала, застаріває. Інакше
     // через півдня перша-ліпша офіційна тривога зарахувалась би як «ми
@@ -3879,7 +3977,11 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
                   liveCard: cardAfter(sub.liveCard, card, decision.level, at, res.messageId),
                 }
               : marked;
-          await putSubscriber(pre ? { ...withCard, preAlert: { at, oblast } } : withCard);
+          // Передтривогу без області зберігати нема сенсу: підтвердити її
+          // офіційним оголошенням буде нічим, і вона просто застаріє.
+          await putSubscriber(
+            pre && oblast !== null ? { ...withCard, preAlert: { at, oblast } } : withCard,
+          );
         }
       } else if (res.status === 403) {
         // Бота заблокували або видалили чат. Далі слати — марно витрачати
