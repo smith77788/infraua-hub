@@ -417,7 +417,22 @@ function Console() {
     }
     return [...byId.values()];
   }, [facilitiesQuery.data, facTiles]);
-  const allEvents = useMemo(() => eventsQuery.data?.events ?? [], [eventsQuery.data]);
+  /*
+   * Сейсміка — геть із радара ППО.
+   *
+   * Джерело подій (NASA/USGS) приносить і землетруси. На екрані це виглядало
+   * так: найбільший блок унизу — три поштовхи в Румунії та Росії, один
+   * тритижневої давнини, — і чип «Сейсміка 3» у рядку статусу поряд із
+   * «Повітряна тривога». До питання «що в небі і чи летить на мене» вони не
+   * мають стосунку, а місця й уваги забирали більше за саму повітряну картину.
+   *
+   * Відсікаємо в ОДНОМУ місці, на вході: так вони зникають разом із карти,
+   * чипів, стрічки й аналітики, а не в трьох місцях по-різному.
+   */
+  const allEvents = useMemo(
+    () => (eventsQuery.data?.events ?? []).filter((e) => e.kind !== "quake"),
+    [eventsQuery.data],
+  );
   const regions = useMemo(() => alertsQuery.data?.regions ?? [], [alertsQuery.data]);
   const activeAlarms = useMemo(() => regions.filter((r) => r.active).length, [regions]);
   // ── Автономний режим: останній відомий знімок повітря ────────────────────
@@ -1328,141 +1343,160 @@ function Console() {
               </button>
             )}
 
-            <div>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                Вікно подій
-              </p>
-              <div className="grid grid-cols-4 gap-1">
-                {TIME_WINDOWS.map((w) => (
-                  <button
-                    key={w.id}
-                    onClick={() => setWindowId(w.id)}
-                    className={`rounded border px-1 py-1 font-mono text-[10px] transition-colors ${
-                      windowId === w.id
-                        ? "border-primary/60 text-primary"
-                        : "border-border text-muted-foreground"
-                    }`}
-                  >
-                    {w.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {palanterQuery.data?.configured && !infraDisabled ? (
-              <div className="rounded border border-border bg-card p-2.5">
-                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                  Аналітична платформа
-                </p>
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 font-mono text-[10px] uppercase"
-                    disabled={pushState.status === "sending" || allFacilities.length === 0}
-                    onClick={() => void sendToPlatform()}
-                  >
-                    <Share2 className="size-3" />
-                    {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 font-mono text-[10px] uppercase"
-                    onClick={() => setShowPlatform(true)}
-                  >
-                    <Network className="size-3" /> Аналітика
-                  </Button>
-                </div>
-                {pushState.status === "done" ? (
-                  <p
-                    className={`mt-1.5 text-[10px] leading-relaxed ${pushState.ok ? "text-muted-foreground" : "text-destructive"}`}
-                  >
-                    {pushState.text}
-                  </p>
-                ) : (
-                  <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
-                    Обʼєкти, події та звʼязки живлення разом із їх походженням — під онтологією,
-                    рівнями доступу і журналом аудиту платформи. Похідні оцінки не надсилаються:
-                    вони перераховуються з графа.
-                  </p>
-                )}
-              </div>
-            ) : null}
-
-            {outageId ? (
-              <div className="rounded border border-destructive/50 bg-destructive/10 p-2.5">
-                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-destructive">
-                  Симуляція відключення
-                </p>
-                <p className="mt-1 text-xs">
-                  {byId.get(outageId)?.name ?? "—"} → {impactedIds.size}{" "}
-                  {impactedIds.size === 1 ? "обʼєкт втрачає" : "обʼєктів втрачають"} живлення
-                </p>
-                {outage && !outage.hasSources ? (
-                  <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                    У наборі немає жодної електростанції, тож рахувати шлях до генерації нема від
-                    чого. Увімкніть категорію «Електростанції».
-                  </p>
-                ) : (
-                  <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                    Рахується як втрата шляху до генерації: обʼєкт із резервним живленням не гасне.{" "}
-                    {impactedIds.size > 0 ? (
-                      <>
-                        <span className="text-primary">{outage?.grounded.size ?? 0}</span> з них
-                        підтверджено спостереженою топологією, решта тримається на виведених
-                        звʼязках.
-                      </>
-                    ) : null}
-                  </p>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="mt-1.5 h-7 px-2 font-mono text-[10px] uppercase"
-                  onClick={() => setOutageId(null)}
-                >
-                  Скинути
-                </Button>
-              </div>
-            ) : null}
-
-            <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
-              Дані: {infraDisabled ? "" : "OpenStreetMap (обʼєкти), "}NASA EONET та GDACS (події),
-              USGS (сейсміка), detoyshahed.in.ua (тривоги, полігони, повітряні цілі — OSINT).
-              {facilitiesQuery.data?.fetchedAt
-                ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
-                : ""}
-            </p>
-            <SourceHealth sources={sources} />
-
-            {/* Джерело мовчить — це стан, а не прогрес. */}
-            {sourceDown ? (
-              <p className="font-mono text-[10px] leading-relaxed text-destructive">
-                Overpass не відповідає — довантаження призупинено, інтервал збільшено. Показане
-                лишається дійсним, але покриття не зростає.
-              </p>
-            ) : null}
-
-            {/* Приховані звʼязки: ховаються припущення, факти лишаються. */}
-            {hiddenLinks > 0 && showLinks ? (
-              <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
-                На карті показано {shownLinks} звʼязків, {hiddenLinks} приховано через стелю
-                малювання — ховаються виведені, спостережені показуються завжди.
-              </p>
-            ) : null}
-
             {/*
+              Другорядне — під розгортання.
+              
+              Заміряно на телефоні: сторінка 2988 px, з них карта 430. Решта —
+              вікно подій, перелік джерел і діагностика — стояла між людиною і
+              відповіддю на її єдине питання. Дані нікуди не діли: провенанс —
+              принцип цього проєкту, тож він лишається на місці, але за один
+              дотик, а не поперек екрана.
+            */}
+            <details className="group rounded border border-border bg-card/40">
+              <summary className="cursor-pointer list-none px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                <span className="inline-block transition-transform group-open:rotate-90">▸</span>{" "}
+                Джерела та дані
+              </summary>
+              <div className="space-y-4 px-2.5 pb-3">
+                <div>
+                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                    Вікно подій
+                  </p>
+                  <div className="grid grid-cols-4 gap-1">
+                    {TIME_WINDOWS.map((w) => (
+                      <button
+                        key={w.id}
+                        onClick={() => setWindowId(w.id)}
+                        className={`rounded border px-1 py-1 font-mono text-[10px] transition-colors ${
+                          windowId === w.id
+                            ? "border-primary/60 text-primary"
+                            : "border-border text-muted-foreground"
+                        }`}
+                      >
+                        {w.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {palanterQuery.data?.configured && !infraDisabled ? (
+                  <div className="rounded border border-border bg-card p-2.5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                      Аналітична платформа
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 font-mono text-[10px] uppercase"
+                        disabled={pushState.status === "sending" || allFacilities.length === 0}
+                        onClick={() => void sendToPlatform()}
+                      >
+                        <Share2 className="size-3" />
+                        {pushState.status === "sending" ? "Надсилання…" : "Передати картину"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 font-mono text-[10px] uppercase"
+                        onClick={() => setShowPlatform(true)}
+                      >
+                        <Network className="size-3" /> Аналітика
+                      </Button>
+                    </div>
+                    {pushState.status === "done" ? (
+                      <p
+                        className={`mt-1.5 text-[10px] leading-relaxed ${pushState.ok ? "text-muted-foreground" : "text-destructive"}`}
+                      >
+                        {pushState.text}
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                        Обʼєкти, події та звʼязки живлення разом із їх походженням — під онтологією,
+                        рівнями доступу і журналом аудиту платформи. Похідні оцінки не надсилаються:
+                        вони перераховуються з графа.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {outageId ? (
+                  <div className="rounded border border-destructive/50 bg-destructive/10 p-2.5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-destructive">
+                      Симуляція відключення
+                    </p>
+                    <p className="mt-1 text-xs">
+                      {byId.get(outageId)?.name ?? "—"} → {impactedIds.size}{" "}
+                      {impactedIds.size === 1 ? "обʼєкт втрачає" : "обʼєктів втрачають"} живлення
+                    </p>
+                    {outage && !outage.hasSources ? (
+                      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                        У наборі немає жодної електростанції, тож рахувати шлях до генерації нема
+                        від чого. Увімкніть категорію «Електростанції».
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                        Рахується як втрата шляху до генерації: обʼєкт із резервним живленням не
+                        гасне.{" "}
+                        {impactedIds.size > 0 ? (
+                          <>
+                            <span className="text-primary">{outage?.grounded.size ?? 0}</span> з них
+                            підтверджено спостереженою топологією, решта тримається на виведених
+                            звʼязках.
+                          </>
+                        ) : null}
+                      </p>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mt-1.5 h-7 px-2 font-mono text-[10px] uppercase"
+                      onClick={() => setOutageId(null)}
+                    >
+                      Скинути
+                    </Button>
+                  </div>
+                ) : null}
+
+                <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
+                  Дані: {infraDisabled ? "" : "OpenStreetMap (обʼєкти), "}NASA EONET та GDACS
+                  (події), USGS (сейсміка), detoyshahed.in.ua (тривоги, полігони, повітряні цілі —
+                  OSINT).
+                  {facilitiesQuery.data?.fetchedAt
+                    ? ` Оновлено ${new Date(facilitiesQuery.data.fetchedAt).toLocaleTimeString("uk-UA")}.`
+                    : ""}
+                </p>
+                <SourceHealth sources={sources} />
+
+                {/* Джерело мовчить — це стан, а не прогрес. */}
+                {sourceDown ? (
+                  <p className="font-mono text-[10px] leading-relaxed text-destructive">
+                    Overpass не відповідає — довантаження призупинено, інтервал збільшено. Показане
+                    лишається дійсним, але покриття не зростає.
+                  </p>
+                ) : null}
+
+                {/* Приховані звʼязки: ховаються припущення, факти лишаються. */}
+                {hiddenLinks > 0 && showLinks ? (
+                  <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
+                    На карті показано {shownLinks} звʼязків, {hiddenLinks} приховано через стелю
+                    малювання — ховаються виведені, спостережені показуються завжди.
+                  </p>
+                ) : null}
+
+                {/*
               Обрізаний набір виглядає точнісінько як повний. Категорія, що
               вперлася у власну стелю, — це не «стільки об'єктів існує», а
               «стільки ми дозволили собі попросити».
             */}
-            {truncated.length > 0 ? (
-              <p className="font-mono text-[10px] leading-relaxed text-amber-400/90">
-                Набір неповний: {truncated.map((c) => CATEGORIES[c].label).join(", ")} — досягнуто
-                межі запиту, тож обʼєктів насправді більше.
-              </p>
-            ) : null}
+                {truncated.length > 0 ? (
+                  <p className="font-mono text-[10px] leading-relaxed text-amber-400/90">
+                    Набір неповний: {truncated.map((c) => CATEGORIES[c].label).join(", ")} —
+                    досягнуто межі запиту, тож обʼєктів насправді більше.
+                  </p>
+                ) : null}
+              </div>
+            </details>
           </aside>
 
           {/* Map */}
@@ -2088,7 +2122,7 @@ function Console() {
                   <p className="font-mono text-[11px] text-muted-foreground">
                     {eventsQuery.isLoading
                       ? "Отримуємо дані…"
-                      : "За останні 30 днів у межах України активних подій не зафіксовано."}
+                      : "За останні 30 днів у вікні спостереження активних подій не зафіксовано."}
                   </p>
                 ) : (
                   events.slice(0, 40).map((ev) => (
