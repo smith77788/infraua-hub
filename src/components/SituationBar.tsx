@@ -104,24 +104,38 @@ export default function SituationBar({
 
   return (
     <div className="z-10 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card/40 px-4 py-2">
-      <span
-        className={`flex items-center gap-2 rounded-full border px-2.5 py-1 ${s.border} ${s.bg}`}
-      >
-        <span className="relative flex size-2">
-          <span
-            className={`absolute inline-flex size-full rounded-full ${s.dot} ${
-              summary.level === "normal" ? "" : "animate-ping opacity-75"
-            }`}
-          />
-          <span className={`relative inline-flex size-2 rounded-full ${s.dot}`} />
-        </span>
-        <LevelIcon level={summary.level} className={`size-3.5 ${s.text}`} />
+      {/*
+        Рівень описує стан МЕРЕЖІ ОБʼЄКТІВ, а не наявність тривоги (див.
+        `summarize`) — і це правильно. Але коли шари інфраструктури вимкнені,
+        обʼєктів немає ЖОДНОГО, тож `atRisk` і `underAlarm` завжди нулі й
+        рівень не може стати нічим, крім «штатний».
+
+        Виходив намертво зелений чип «ШТАТНИЙ РЕЖИМ» на найпомітнішому місці —
+        та ще й упритул до «ПОВІТРЯНА ТРИВОГА 10 обл.». Людина читає їх разом,
+        як одне речення, і чує «все спокійно» під час нальоту. Індикатор, який
+        не здатен змінитись, не несе інформації — лише спростовує сусідній.
+        Тому без обʼєктів не показуємо його зовсім.
+      */}
+      {showInfra ? (
         <span
-          className={`font-mono text-[10px] font-semibold uppercase tracking-[0.14em] ${s.text}`}
+          className={`flex items-center gap-2 rounded-full border px-2.5 py-1 ${s.border} ${s.bg}`}
         >
-          {loading ? "Оцінка обстановки…" : summary.label}
+          <span className="relative flex size-2">
+            <span
+              className={`absolute inline-flex size-full rounded-full ${s.dot} ${
+                summary.level === "normal" ? "" : "animate-ping opacity-75"
+              }`}
+            />
+            <span className={`relative inline-flex size-2 rounded-full ${s.dot}`} />
+          </span>
+          <LevelIcon level={summary.level} className={`size-3.5 ${s.text}`} />
+          <span
+            className={`font-mono text-[10px] font-semibold uppercase tracking-[0.14em] ${s.text}`}
+          >
+            {loading ? "Оцінка обстановки…" : summary.label}
+          </span>
         </span>
-      </span>
+      ) : null}
 
       {threats > 0 ? (
         <span
