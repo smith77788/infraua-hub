@@ -378,10 +378,28 @@ async function health(request: Request): Promise<Response> {
    * без цього рядка через місяць буде те саме. Порожній масив — усе впізнано.
    */
   const { unknownChannelReport } = await import("./lib/infra.functions");
+  /*
+   * Звідки взявся шлях до сховища — і чи переживе він редеплой.
+   *
+   * Стан живого поста каналу (`wave.messageId`, підпис, час дотику) лежить
+   * позначкою на тому. Якщо тому немає, `source: "default"` — запис іде в
+   * ефемерний `./data`, і КОЖЕН редеплой під час нальоту дає в каналі НОВИЙ
+   * пост замість правки живого. Ззовні це читається як «бот строчить», а
+   * причина не в коді поста взагалі. Тому ознака стоїть у звіті про здоровʼя:
+   * інакше цей клас відмов доводиться вгадувати.
+   */
+  const { dataDirSource, isDurable } = await import("./lib/subscriber-store");
   let body: Record<string, unknown> = {
     ...report,
     neptunStream: neptunStreamStatus(),
     unknownSources: unknownChannelReport(),
+    // Без проби запису: /api/health смикають часто, а проба — це файлова
+    // операція на кожен виклик. Глибша діагностика вже є в /api/subscribers/stats.
+    storage: {
+      source: dataDirSource(),
+      durable: isDurable(),
+      service: process.env["RAILWAY_SERVICE_NAME"]?.trim() || null,
+    },
   };
   if (url.searchParams.get("probe") === "1") body = { ...body, probes: await runProbes() };
   // ?telegram=1 питає Telegram про стан вебхука — діагностика «бот мовчить».
@@ -911,6 +929,14 @@ async function airSnapshotResponse(): Promise<Response> {
 // Навіть коли нічого суттєво не змінилось, зрідка постимо «тримається» — щоб
 // канал виглядав живим, а не мертвим. Але рідко, щоб не було відчуття дублів.
 const CHANNEL_HEARTBEAT_MS = 25 * 60 * 1000;
+/**
+ * Найменший проміжок між двома дотиками до каналу (пост або правка).
+ *
+ * Нижчий за крок таймера каналу (5 хв), щоб штатний тик не відсікався
+ * випадковим запізненням планувальника, але достатній, щоб кілька джерел
+ * тику не складались у потік.
+ */
+const CHANNEL_MIN_TOUCH_MS = 4 * 60 * 1000;
 let lastChannelPost: { signature: string; at: number; snapshot: AirSnapshot | undefined } = {
   signature: "",
   at: 0,
@@ -1437,6 +1463,17 @@ interface ChannelState {
   wave: WaveState | null;
   lastPostAt: number;
   /**
+   * Коли востаннє ДОТОРКНУЛИСЬ до каналу (пост або правка) — окремо від
+   * `lastPostAt`, бо живий пост створюється раз, а правиться багато разів.
+   *
+   * Без цього поля лічильник після редеплою починався з нуля, тобто
+   * `heartbeatDue` виходив істинним на ПЕРШОМУ ж тику: кожен перезапуск
+   * коштував зайвої правки з перемальовуванням картинки, хоч у небі нічого
+   * не змінилось. При частих деплоях під час нальоту це і є те «пости надто
+   * часто», яке видно збоку.
+   */
+  lastTouchAt?: number;
+  /**
    * Зріз і підпис останнього поста — щоб після редеплою бот РЕДАГУВАВ живий
    * пост, а не постив новий. Без зрізу `newCriticalTypes` бачить порожнє
    * «було», тобто КОЖЕН критичний тип у небі — як щойно зʼявлений, оголошує
@@ -1480,6 +1517,10 @@ async function hydrateLiveState(now: number): Promise<void> {
         at: s.lastPostAt,
         snapshot: s.snapshot,
       };
+      // Дотик береться зі збереженого, а за його відсутності (позначка старої
+      // збірки) — з часу створення поста: це нижня межа, вона лише зсуває
+      // heartbeat раніше, ніж треба, і ніколи не пізніше.
+      lastChannelTouch = typeof s.lastTouchAt === "number" ? s.lastTouchAt : s.lastPostAt;
     }
     // Добова статистика й дедуп підсумку теж мають пережити редеплой: інакше
     // підсумок доби не виходить, якщо перезапуск стався між зміною доби і 9:00
@@ -1506,6 +1547,7 @@ async function runChannelTick(
     const state: ChannelState = {
       wave,
       lastPostAt: lastChannelPost.at,
+      lastTouchAt: lastChannelTouch,
       snapshot: lastChannelPost.snapshot,
       signature: lastChannelPost.signature,
       currentDay,
@@ -1643,6 +1685,24 @@ async function runChannelTickCore(
   // правдивим. Мовчимо лише тоді, коли не змінилось узагалі нічого.
   if (!opts.force && !changed && !heartbeatDue) {
     return { posted: false, reason: "без суттєвих змін" };
+  }
+
+  /*
+   * Мінімальний інтервал між дотиками до каналу.
+   *
+   * Тик смикає не один планувальник: внутрішній таймер (кожні 5 хв), зовнішній
+   * крон через `/api/channel-tick`, команда `/channel`, а після редеплою — ще
+   * й прогрів на 20-й секунді. Кожен із них сам по собі розумний, але разом
+   * вони дають частоту, якої не задавав ніхто, і збоку це читається як
+   * «канал строчить».
+   *
+   * Поріг нижчий за крок таймера, щоб штатний тик не з'їдався джитером
+   * планувальника. Ескалація (новий критичний тип у небі) проходить повз
+   * поріг: запізнитися з попередженням дорожче, ніж пропустити правку.
+   */
+  const tooSoon = now - lastChannelTouch < CHANNEL_MIN_TOUCH_MS;
+  if (!opts.force && escalation.length === 0 && tooSoon) {
+    return { posted: false, reason: "щойно оновлювали" };
   }
 
   // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
