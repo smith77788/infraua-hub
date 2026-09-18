@@ -60,6 +60,13 @@ import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
 import {
+  cardAfter,
+  decideCardAction,
+  renderCardHelp,
+  renderCardSaved,
+  type CardAction,
+} from "./lib/live-card";
+import {
   CIRCLE_ALERT_COOLDOWN_MS,
   decideCircleAlert,
   pendingCheckins,
@@ -551,7 +558,7 @@ async function telegramSend(
   text: string,
   replyMarkup?: unknown,
   queued = false,
-): Promise<{ ok: boolean; status: number; retryAfterSec?: number }> {
+): Promise<{ ok: boolean; status: number; retryAfterSec?: number; messageId?: number }> {
   const body = JSON.stringify({
     chat_id: chatId,
     text,
@@ -560,7 +567,14 @@ async function telegramSend(
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
 
-  const attempt = async (): Promise<{ ok: boolean; status: number; retryAfter: number | null }> => {
+  // Id надісланого повідомлення потрібен живій картці: без нього немає що
+  // правити наступного разу, і режим тихо вироджується назад у потік.
+  const attempt = async (): Promise<{
+    ok: boolean;
+    status: number;
+    retryAfter: number | null;
+    messageId?: number;
+  }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
     try {
@@ -570,7 +584,23 @@ async function telegramSend(
         body,
         signal: controller.signal,
       });
-      if (response.ok) return { ok: true, status: response.status, retryAfter: null };
+      if (response.ok) {
+        // Читання тіла — best-effort: без id картка просто відкриється заново
+        // наступного разу, а сповіщення вже доставлено, і це головне.
+        let messageId: number | undefined;
+        try {
+          const parsed = (await response.json()) as { result?: { message_id?: number } };
+          if (typeof parsed.result?.message_id === "number") messageId = parsed.result.message_id;
+        } catch {
+          /* тіло не розібралось — id немає, і це не поразка відправки */
+        }
+        return {
+          ok: true,
+          status: response.status,
+          retryAfter: null,
+          ...(messageId !== undefined ? { messageId } : {}),
+        };
+      }
       const raw = await response.text();
       console.error("telegram sendMessage failed", response.status, raw);
       return { ok: false, status: response.status, retryAfter: parseRetryAfter(raw) };
@@ -585,7 +615,13 @@ async function telegramSend(
   };
 
   const first = await attempt();
-  if (first.ok || first.status !== 429) return { ok: first.ok, status: first.status };
+  if (first.ok || first.status !== 429) {
+    return {
+      ok: first.ok,
+      status: first.status,
+      ...(first.messageId !== undefined ? { messageId: first.messageId } : {}),
+    };
+  }
   if (queued) {
     return {
       ok: false,
@@ -597,7 +633,11 @@ async function telegramSend(
   const wait = Math.min(first.retryAfter ?? 1, MAX_RETRY_AFTER_S);
   await new Promise((r) => setTimeout(r, wait * 1000));
   const second = await attempt();
-  return { ok: second.ok, status: second.status };
+  return {
+    ok: second.ok,
+    status: second.status,
+    ...(second.messageId !== undefined ? { messageId: second.messageId } : {}),
+  };
 }
 
 /**
@@ -2043,6 +2083,9 @@ async function personalCommand(
     "ніч",
     "погода",
     "weather",
+    "картка",
+    "card",
+    "жива",
   ]);
 
   // У групі chatId спільний: завести там «підписника» означало б слати
@@ -2268,6 +2311,26 @@ async function personalCommand(
     const value = off ? null : clampLead(n);
     await putSubscriber({ ...sub, leadMin: value });
     return { text: renderLeadSaved(value) };
+  }
+
+  /*
+   * Жива картка — режим НА ВИБІР, і саме тому в нього є команда.
+   *
+   * Ввімкнути його всім не можна: правка в Telegram не дає сповіщення, тож
+   * людина, яка відклала телефон, про нові цілі не почує. Це чесна ціна за
+   * тишу, але платити її має вирішувати людина, а не ми за неї.
+   */
+  if (command === "картка" || command === "card" || command === "жива") {
+    const { sub } = await ensureSubscriber(chatId, new Date().toISOString());
+    const raw = args.trim().toLowerCase();
+    if (!raw) return { text: renderCardHelp(sub.liveCardMode === true) };
+    const on = raw.startsWith("увімк") || raw.startsWith("вкл") || raw === "on" || raw === "так";
+    const off = raw.startsWith("вимк") || raw.startsWith("выкл") || raw === "off" || raw === "ні";
+    if (!on && !off) return { text: renderCardHelp(sub.liveCardMode === true) };
+    // Вимкнення закриває відкриту картку: інакше наступне сповіщення пішло б
+    // окремо, а стара картка лишилась би в чаті назавжди з проміжним станом.
+    await putSubscriber({ ...sub, liveCardMode: on, liveCard: null });
+    return { text: renderCardSaved(on) };
   }
 
   if (command === "settings" || command === "налаштування") {
@@ -3477,7 +3540,12 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
         wasAlerted: sub.lastAlertAt >= sub.alarmSince,
         now,
       });
-      await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null });
+      /*
+       * Відбій закриває живу картку. Без цього картка минулої хвилі ловила б
+       * правки наступної — і попередження про новий наліт лягло б тихою
+       * правкою у вчорашню переписку, без звуку й без шансу бути поміченим.
+       */
+      await putSubscriber({ ...sub, alarmSince: null, alarmCountedAt: null, liveCard: null });
       if (clear.send) {
         const summary = summarizeMonth(sub.stats, now);
         /*
@@ -3674,7 +3742,39 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     queue,
     async (envelope) => {
       const { sub, text, keyboard, decision, pre, oblast, place } = envelope.payload;
-      const res = await telegramSend(token, sub.chatId, text, keyboard, true);
+      /*
+       * Жива картка: одне повідомлення, яке правиться, замість потоку.
+       *
+       * Стосується лише сповіщень про НЕБЕЗПЕКУ над самою людиною (`decision`).
+       * Звістка про чуже місце чи про людину з кола — окрема тема, і зливати
+       * її в ту саму картку означало б переписати повідомлення про батьків
+       * повідомленням про себе.
+       *
+       * Правка не дає сповіщення, тож рішення про неї ухвалює чиста
+       * `decideCardAction` (live-card.ts), і загострення там завжди лишається
+       * окремим повідомленням зі звуком.
+       */
+      const useCard = decision !== null && !place && !envelope.payload.circleNotice;
+      const card = useCard
+        ? decideCardAction({
+            enabled: sub.liveCardMode === true,
+            card: sub.liveCard,
+            level: decision.level,
+            now: Date.now(),
+          })
+        : ({ action: "send", reason: "не про власну небезпеку" } as CardAction);
+
+      let res: { ok: boolean; status: number; retryAfterSec?: number; messageId?: number };
+      if (card.action === "edit") {
+        const edited = await telegramEditMessage(token, sub.chatId, card.messageId, text, keyboard);
+        // Правка не вдалася — картку знесли або чат змінився. Не лишаємо
+        // людину зі старим текстом: шлемо звичайне повідомлення.
+        res = edited
+          ? { ok: true, status: 200, messageId: card.messageId }
+          : await telegramSend(token, sub.chatId, text, keyboard, true);
+      } else {
+        res = await telegramSend(token, sub.chatId, text, keyboard, true);
+      }
       if (res.ok) {
         const at = Date.now();
         if (envelope.payload.circleNotice) {
@@ -3703,7 +3803,17 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
             decision,
             at,
           );
-          await putSubscriber(pre ? { ...marked, preAlert: { at, oblast } } : marked);
+          // Стан картки оновлюється навіть коли режим вимкнено: id останнього
+          // повідомлення знадобиться тій самій людині відразу, щойно вона
+          // режим увімкне, і хвиля не почнеться з порожнечі.
+          const withCard =
+            useCard && res.messageId !== undefined
+              ? {
+                  ...marked,
+                  liveCard: cardAfter(sub.liveCard, card, decision.level, at, res.messageId),
+                }
+              : marked;
+          await putSubscriber(pre ? { ...withCard, preAlert: { at, oblast } } : withCard);
         }
       } else if (res.status === 403) {
         // Бота заблокували або видалили чат. Далі слати — марно витрачати
@@ -3854,7 +3964,7 @@ async function telegramEditMessage(
   messageId: number,
   text: string,
   replyMarkup?: unknown,
-): Promise<void> {
+): Promise<boolean> {
   const response = await fetch(`${TELEGRAM_API}/bot${token}/editMessageText`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -3867,14 +3977,14 @@ async function telegramEditMessage(
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     }),
   });
-  if (!response.ok) {
-    const body = await response.text();
-    // «message is not modified» — це не помилка: стан не змінився, і Telegram
-    // відмовляється переписувати те саме. Кнопка вже відповіла спливним написом.
-    if (!body.includes("message is not modified")) {
-      console.error("telegram editMessageText failed", response.status, body);
-    }
-  }
+  if (response.ok) return true;
+  const body = await response.text();
+  // «message is not modified» — це не помилка: стан не змінився, і Telegram
+  // відмовляється переписувати те саме. Кнопка вже відповіла спливним написом.
+  // Для викликача це успіх: у чаті лежить рівно те, що мало лежати.
+  if (body.includes("message is not modified")) return true;
+  console.error("telegram editMessageText failed", response.status, body);
+  return false;
 }
 
 /** Живі дані для /status. Тільки дешеві джерела: вебхук не має чекати хвилину. */

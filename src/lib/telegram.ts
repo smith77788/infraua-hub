@@ -350,6 +350,11 @@ export function publicCommands(): TgBotCommand[] {
     { command: "calm", description: "Коли історично тихіше — щоб спланувати сон" },
     { command: "lead", description: "Будити за запасом часу, а не за кілометрами" },
     { command: "weather", description: "Льотна ніч: чи сприяє погода заходу дронів" },
+    {
+      command: "card",
+      description: "Жива картка: одне повідомлення замість потоку",
+      hint: "жива картка: <code>/картка увімк</code> — оновлення нальоту в одне повідомлення (правка не дає звуку; загострення лишається гучним)",
+    },
     { command: "settings", description: "Налаштування сповіщень: тип, радіус, ніч" },
     { command: "status", description: "Поточна обстановка: тривоги, події, джерела" },
     { command: "circle", description: "Коло: «я в порядку» одним дотиком замість дзвінків" },

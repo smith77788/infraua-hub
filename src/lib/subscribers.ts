@@ -21,6 +21,7 @@ import { kyivHour } from "./kyiv";
 import { withinLead } from "./lead-threshold";
 import type { MyPlace, PlaceAlertState } from "./places-mine";
 import type { PersonalStats } from "./personal-stats";
+import type { LiveCard } from "./live-card";
 
 /** На що будити. Порядок — від найвужчого до найширшого. */
 export type AlertTier = "critical" | "inbound" | "all";
@@ -124,6 +125,18 @@ export interface Subscriber {
   lastCircleNoticeAt?: number | null;
   /** Коли востаннє надсилала акустичний доклад (антиспам). */
   lastSoundAt?: number | null;
+  /**
+   * Режим живої картки: одне повідомлення, яке правиться, замість потоку.
+   *
+   * Усталено вимкнено, і це не забудькуватість. Правка в Telegram не дає
+   * сповіщення, тож із карткою людина, яка відклала телефон, про нові цілі не
+   * почує — побачить, лише коли сама відкриє чат. Нинішня поведінка будить її
+   * навмисно, і міняти це за людину не можна. Загострення й з карткою
+   * приходить окремим повідомленням зі звуком — див. `live-card.ts`.
+   */
+  liveCardMode?: boolean;
+  /** Відкрита жива картка, якщо режим увімкнено й хвиля триває. */
+  liveCard?: LiveCard | null;
   /**
    * Жива геолокація: до цього моменту точка оновлюється сама.
    *
