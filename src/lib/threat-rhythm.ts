@@ -141,3 +141,46 @@ export function decayRhythm(buckets: RhythmBuckets, factor = 0.97): RhythmBucket
   }
   return out;
 }
+
+/**
+ * Внесок одного зрізу неба в ритм, нормований на пройдений час.
+ *
+ * ЧОМУ НЕ ПОТИКОВО. Якби кожен тик додавав однаково, гістограма міряла б не
+ * небо, а частоту наших опитувань. Після рестарту, стороннього крона чи
+ * ручного `/channel` тиків за ту годину більше — і та сама година набрала б
+ * удвічі більше, ніж сусідня з такою самою обстановкою. Ритм показував би наш
+ * планувальник.
+ *
+ * `minutes` — скільки часу минуло з попереднього накопичення; внесок ділиться
+ * на `perTickMinutes` (штатний крок), тож штатний тик важить рівно одиницю, а
+ * зайвий — рівно стільки, скільки часу справді представляє.
+ *
+ * Стеля в 15 хвилин обрізає прогалину після рестарту: між двома тиками могло
+ * минути пів дня, і зарахувати їх усі в одну годину означало б вигадати наліт,
+ * якого ніхто не спостерігав.
+ */
+export function accrueSnapshotRhythm(
+  buckets: RhythmBuckets,
+  snapshot: { oblasts: Record<string, Partial<Record<string, number>>> },
+  hourKyiv: number,
+  minutes: number,
+  perTickMinutes = 5,
+): RhythmBuckets {
+  if (!Number.isFinite(minutes) || minutes <= 0) return buckets;
+  if (!Number.isFinite(perTickMinutes) || perTickMinutes <= 0) return buckets;
+  const share = Math.min(minutes, MAX_ACCRUAL_MIN) / perTickMinutes;
+  let out = buckets;
+  for (const [oblast, byType] of Object.entries(snapshot.oblasts)) {
+    let n = 0;
+    for (const value of Object.values(byType)) {
+      // Битий зріз не має ставати нескінченністю у вічній позначці:
+      // JSON.parse("1e400") дає Infinity, і воно пережило б будь-який редеплой.
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) n += value;
+    }
+    if (n > 0) out = accrueRhythm(out, oblast, hourKyiv, n * share);
+  }
+  return out;
+}
+
+/** Стеля внеску одного накопичення, хв — обрізає прогалину після рестарту. */
+export const MAX_ACCRUAL_MIN = 15;

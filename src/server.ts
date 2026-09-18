@@ -115,6 +115,12 @@ import { renderShareCard } from "./lib/share-card";
 import { rankBySafeSide } from "./lib/shelter-safe-side";
 import { droneWeather, type DroneWeatherVerdict } from "./lib/drone-weather";
 import { renderFlightNight } from "./lib/flight-night";
+import {
+  accrueSnapshotRhythm,
+  decayRhythm,
+  summarizeRhythm,
+  type RhythmBuckets,
+} from "./lib/threat-rhythm";
 import { matchPlace } from "./lib/places";
 import {
   locationKeyboard,
@@ -1228,6 +1234,16 @@ let liveStateHydrated = false;
 let lastAccrualAt = 0;
 /** Коли востаннє щось зробили в каналі — надіслали пост або відредагували. */
 let lastChannelTouch = 0;
+/**
+ * Ритм загрози по областях: коли в кожній області історично гарячіше.
+ *
+ * Накопичується з тих самих зрізів, що йдуть у канал, бо тик каналу — єдиний
+ * прохід, який трапляється надійно й часто (кожні 5 хв) і вже має зріз неба
+ * по областях. Окремий збирач був би другою памʼяттю про той самий факт.
+ */
+let rhythmBuckets: RhythmBuckets = {};
+/** Київська доба, за яку ритму востаннє застосували забування. */
+let rhythmDecayedOn = "";
 
 function rollKyivDay(now: number): void {
   const today = kyivDate(new Date(now));
@@ -1505,6 +1521,17 @@ interface ChannelState {
    */
   snapshot?: AirSnapshot | undefined;
   signature?: string | undefined;
+  /**
+   * Ритм загрози по областях — гістограма за годинами доби.
+   *
+   * Живе саме тут, бо накопичується з тих самих зрізів, що й добова
+   * статистика, і має ту саму вимогу: пережити редеплой. Ритм із памʼяті
+   * процесу не має сенсу взагалі — його цінність у тому, що він ПАМʼЯТАЄ
+   * місяцями, а процес живе годинами.
+   */
+  rhythm?: RhythmBuckets;
+  /** Доба, за яку ритму востаннє застосували забування. */
+  rhythmDecayedOn?: string;
   /** Добова статистика й дедуп підсумку — щоб підсумок виходив і після редеплою. */
   currentDay?: DayStats;
   pendingDigest?: DayStats | null;
@@ -1549,6 +1576,8 @@ async function hydrateLiveState(now: number): Promise<void> {
     // (pendingDigest скидався в null), а накопичення доби фрагментувалось.
     // Далі rollKyivDay сам розбереться зі зміною доби, а digestPostedFor не дасть
     // подвоїти підсумок.
+    if (s.rhythm && typeof s.rhythm === "object") rhythmBuckets = s.rhythm;
+    if (typeof s.rhythmDecayedOn === "string") rhythmDecayedOn = s.rhythmDecayedOn;
     if (s.currentDay && typeof s.currentDay.date === "string") currentDay = s.currentDay;
     if (s.pendingDigest !== undefined) pendingDigest = s.pendingDigest;
     if (typeof s.digestPostedFor === "string") digestPostedFor = s.digestPostedFor;
@@ -1570,6 +1599,8 @@ async function runChannelTick(
       wave,
       lastPostAt: lastChannelPost.at,
       lastTouchAt: lastChannelTouch,
+      rhythm: rhythmBuckets,
+      rhythmDecayedOn: rhythmDecayedOn,
       snapshot: lastChannelPost.snapshot,
       signature: lastChannelPost.signature,
       currentDay,
@@ -1693,6 +1724,34 @@ async function runChannelTickCore(
   const sinceAccrual = lastAccrualAt ? Math.min((now - lastAccrualAt) / 60_000, 15) : 0;
   lastAccrualAt = now;
   currentDay = accrueDay(currentDay, post.snapshot, sinceAccrual);
+  /*
+   * Ритм загрози накопичується тут, із того самого зрізу.
+   *
+   * Вага — кількість цілей, а не «одна подія»: масований захід має важити
+   * більше за поодиноку розвідку, інакше гістограма показувала б, коли хоч
+   * щось буває, а не коли справді гаряче.
+   *
+   * Внесок нормується на пройдений час (`sinceAccrual`), а не рахується
+   * потиково. Інакше ритм вимірював би не небо, а частоту наших опитувань:
+   * після рестарту чи стороннього крона тиків більше, і та сама година
+   * набрала б удвічі більше — ритм показував би наш планувальник.
+   */
+  rhythmBuckets = accrueSnapshotRhythm(
+    rhythmBuckets,
+    post.snapshot,
+    kyivHour(new Date(now)),
+    sinceAccrual,
+  );
+  /*
+   * Повільне забування — раз на добу. Без нього ритм трирічної давнини
+   * перекриє те, як ворог змінив тактику цього місяця, і рядок «історично
+   * гарячіше» стане історичною довідкою замість підказки на сьогодні.
+   */
+  const today = kyivDate(new Date(now));
+  if (rhythmDecayedOn !== today) {
+    if (rhythmDecayedOn !== "") rhythmBuckets = decayRhythm(rhythmBuckets);
+    rhythmDecayedOn = today;
+  }
   await maybeDigest(token, channel, now);
   await maybeBackup(token, now);
 
@@ -2193,7 +2252,14 @@ async function personalCommand(
     if (!point) return { text: renderAskPoint(), keyboard: locationKeyboard(chatType) };
     const weather = await fetchDroneWeather(point.lat, point.lon);
     return {
-      text: renderFlightNight({ weather, rhythm: null, hourKyiv: kyivHour(new Date()) }),
+      text: renderFlightNight({
+        weather,
+        // Ритм саме тієї області, у якій стоїть точка, а не «по країні»:
+        // питання «чи бути напоготові цієї ночі» — місцеве, і середнє по
+        // Україні відповідає на нього гірше, ніж мовчання.
+        rhythm: summarizeRhythm(rhythmBuckets, oblastOf(point.lat, point.lon)),
+        hourKyiv: kyivHour(new Date()),
+      }),
     };
   }
 

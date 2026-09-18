@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 
-import { accrueRhythm, decayRhythm, summarizeRhythm, type RhythmBuckets } from "./threat-rhythm";
+import {
+  accrueRhythm,
+  accrueSnapshotRhythm,
+  decayRhythm,
+  MAX_ACCRUAL_MIN,
+  summarizeRhythm,
+  type RhythmBuckets,
+} from "./threat-rhythm";
 
 describe("accrueRhythm", () => {
   it("накопичує вагу в правильне відро години", () => {
@@ -65,5 +72,53 @@ describe("decayRhythm", () => {
     const d = decayRhythm(b, 0.5);
     expect(d["A"]![5]).toBe(50);
     expect(d["B"]).toBeUndefined();
+  });
+});
+
+describe("внесок зрізу, нормований на час", () => {
+  const snap = (n: number) => ({ oblasts: { Харківщина: { shahed: n } } });
+
+  it("штатний тик важить рівно одиницю на ціль", () => {
+    const b = accrueSnapshotRhythm({}, snap(4), 2, 5);
+    expect(b["Харківщина"]?.[2]).toBe(4);
+  });
+
+  it("подвійна прогалина важить удвічі — ритм міряє небо, а не наші опитування", () => {
+    const b = accrueSnapshotRhythm({}, snap(4), 2, 10);
+    expect(b["Харківщина"]?.[2]).toBe(8);
+  });
+
+  it("два зайві тики поспіль дають те саме, що один штатний", () => {
+    // Це і є суть нормування: після рестарту чи стороннього крона тиків
+    // більше, і без нього та сама година набрала б удвічі.
+    let a: RhythmBuckets = {};
+    a = accrueSnapshotRhythm(a, snap(4), 2, 2.5);
+    a = accrueSnapshotRhythm(a, snap(4), 2, 2.5);
+    const b = accrueSnapshotRhythm({}, snap(4), 2, 5);
+    expect(a["Харківщина"]?.[2]).toBeCloseTo(b["Харківщина"]?.[2] ?? 0, 6);
+  });
+
+  it("прогалина після рестарту обрізається стелею, а не вигадує наліт", () => {
+    const huge = accrueSnapshotRhythm({}, snap(1), 2, 12 * 60);
+    const capped = accrueSnapshotRhythm({}, snap(1), 2, MAX_ACCRUAL_MIN);
+    expect(huge["Харківщина"]?.[2]).toBe(capped["Харківщина"]?.[2]);
+  });
+
+  it("нескінченність із битої позначки не потрапляє в гістограму", () => {
+    // JSON.parse("1e400") дає Infinity, і воно пережило б будь-який редеплой.
+    const b = accrueSnapshotRhythm(
+      {},
+      { oblasts: { Харківщина: { shahed: JSON.parse("1e400") as number, kab: 2 } } },
+      3,
+      5,
+    );
+    expect(b["Харківщина"]?.[3]).toBe(2);
+    expect(Number.isFinite(b["Харківщина"]?.[3] ?? NaN)).toBe(true);
+  });
+
+  it("нульовий або відʼємний час нічого не додає", () => {
+    expect(accrueSnapshotRhythm({}, snap(4), 2, 0)).toEqual({});
+    expect(accrueSnapshotRhythm({}, snap(4), 2, -5)).toEqual({});
+    expect(accrueSnapshotRhythm({}, snap(4), 2, NaN)).toEqual({});
   });
 });
