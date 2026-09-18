@@ -19,6 +19,7 @@ import {
   updateWave,
   waveEnded,
   waveStateUsable,
+  type WaveState,
 } from "./channel-wave";
 
 function threat(p: Partial<Threat>): Threat {
@@ -177,14 +178,53 @@ describe("хвиля", () => {
 });
 
 describe("newCriticalTypes", () => {
+  const NOW = 1_700_000_000_000;
+  /** Хвиля, яка вже бачила задані типи. */
+  const waveThatSaw = (snapshot: AirSnapshot): WaveState =>
+    updateWave(beginWave(NOW), snapshot, NOW);
+
   it("поява балістики там, де були шахеди, — привід для НОВОГО поста", () => {
-    const prev = snap({ Сумщина: { shahed: 3 } });
+    const wave = waveThatSaw(snap({ Сумщина: { shahed: 3 } }));
     const cur = snap({ Сумщина: { shahed: 3, ballistic: 1 } });
-    expect(newCriticalTypes(prev, cur)).toEqual(["ballistic"]);
+    expect(newCriticalTypes(wave, cur)).toEqual(["ballistic"]);
   });
+
   it("ті самі типи — приводу немає", () => {
     const s = snap({ Сумщина: { shahed: 3 } });
-    expect(newCriticalTypes(s, s)).toEqual([]);
+    expect(newCriticalTypes(waveThatSaw(s), s)).toEqual([]);
+  });
+
+  it("перший пост нальоту — ескалація: там усе справді вперше", () => {
+    expect(newCriticalTypes(undefined, snap({ Сумщина: { kab: 2 } }))).toEqual(["kab"]);
+  });
+
+  it("тип, що блимнув і повернувся, НЕ нова загроза", () => {
+    /*
+     * Головне виправлення. Порівняння йшло з попереднім тиком, а набір типів у
+     * OSINT блимає: ціль зникає з видачі на одну вибірку й повертається.
+     * Заміряно на сорока хвилинах живого фіду: `kab` «зʼявлявся вперше» тричі,
+     * `missile` ще раз — разом чотири НОВІ пости за один безперервний наліт.
+     *
+     * «Зʼявився новий тип загрози» — подія рівня ХВИЛІ, а не тику.
+     */
+    let wave = beginWave(NOW);
+    wave = updateWave(wave, snap({ Сумщина: { shahed: 3, kab: 1 } }), NOW);
+    // Джерело загубило КАБ на один тик.
+    const blinkedOut = snap({ Сумщина: { shahed: 3 } });
+    wave = updateWave(wave, blinkedOut, NOW + 60_000);
+    // І повернуло.
+    const backAgain = snap({ Сумщина: { shahed: 3, kab: 1 } });
+    expect(newCriticalTypes(wave, backAgain)).toEqual([]);
+  });
+
+  it("новий тип після блимання іншого все одно помічається", () => {
+    // Захист від надмірного глушіння: справжня нова загроза має пройти.
+    let wave = beginWave(NOW);
+    wave = updateWave(wave, snap({ Сумщина: { shahed: 3, kab: 1 } }), NOW);
+    wave = updateWave(wave, snap({ Сумщина: { shahed: 3 } }), NOW + 60_000);
+    expect(newCriticalTypes(wave, snap({ Сумщина: { shahed: 3, ballistic: 1 } }))).toEqual([
+      "ballistic",
+    ]);
   });
 });
 

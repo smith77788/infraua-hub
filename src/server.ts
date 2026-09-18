@@ -1605,7 +1605,16 @@ async function runChannelTickCore(
 
   if (opts.dryRun) return { posted: false, dryRun: true, targets: post.targets, text: post.text };
 
-  const escalation = newCriticalTypes(lastChannelPost.snapshot, post.snapshot);
+  /*
+   * Ескалація рахується проти того, що бачила ХВИЛЯ, а не проти попереднього
+   * тику: інакше блимання джерела (тип зник на одну вибірку й повернувся)
+   * читається як нова загроза й змушує новий пост замість правки живого.
+   * Заміряно: 4 нові пости за 40 хвилин одного нальоту.
+   *
+   * Важливо, що це стоїть ДО `updateWave`: там `wave.types` ще без поточного
+   * зрізу, тобто ми питаємо саме «чи бачили ми це РАНІШЕ в цій хвилі».
+   */
+  const escalation = newCriticalTypes(wave ?? undefined, post.snapshot);
   wave = updateWave(wave ?? beginWave(now), post.snapshot, now);
   // Запам'ятовуємо факт офіційної тривоги, поки вона триває: саме він дає
   // право оголосити відбій, коли її знімуть. Недоступне джерело тут не біда —

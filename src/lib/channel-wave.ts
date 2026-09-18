@@ -493,15 +493,41 @@ export function renderDigest(day: DayStats): string | null {
  * про яку в стрічці мають побачити окремим повідомленням; правка тексту в
  * пості, який уже пролистали, тут рівносильна мовчанню.
  */
-export function newCriticalTypes(prev: AirSnapshot | undefined, cur: AirSnapshot): ThreatType[] {
-  const critical: ThreatType[] = ["ballistic", "missile", "cruise", "kab"];
+const CRITICAL_FOR_ESCALATION: ThreatType[] = ["ballistic", "missile", "cruise", "kab"];
+
+/**
+ * Критичні типи, яких ЦЯ ХВИЛЯ ще не бачила.
+ *
+ * ## Що було не так
+ *
+ * Порівняння йшло з ПОПЕРЕДНІМ ТИКОМ. Але набір типів у OSINT блимає: ціль
+ * зникає з видачі на одну вибірку й повертається. Заміряно на сорока хвилинах
+ * живого фіду під час одного нальоту — набір типів мінявся вісім разів, і
+ * `kab` «зʼявлявся вперше» ТРИЧІ, а `missile` ще раз.
+ *
+ * Ескалація змушує НОВИЙ пост замість правки живого. Отже блимання давало
+ * чотири нові пости за сорок хвилин — по одному на десять, — тимчасом як
+ * наліт був один і безперервний. Саме це читач бачить як «постить дуже
+ * часто».
+ *
+ * ## Як має бути
+ *
+ * «Зʼявився новий тип загрози» — це подія рівня ХВИЛІ, а не тику. Тип,
+ * помічений двадцять хвилин тому в цьому ж нальоті, не стає новим від того,
+ * що джерело на хвилину його загубило.
+ *
+ * `WaveState.types` вже пам'ятає кожен тип, який хвиля бачила, — саме з ним і
+ * звіряємось. Перший пост нальоту (хвилі ще немає) лишається ескалацією: там
+ * усе справді вперше.
+ */
+export function newCriticalTypes(wave: WaveState | undefined, cur: AirSnapshot): ThreatType[] {
   const before = new Set<ThreatType>();
-  for (const m of Object.values(prev?.oblasts ?? {})) {
-    for (const t of Object.keys(m) as ThreatType[]) before.add(t);
+  for (const [type, n] of Object.entries(wave?.types ?? {}) as [ThreatType, number][]) {
+    if (n > 0) before.add(type);
   }
   const seen = new Set<ThreatType>();
   for (const m of Object.values(cur.oblasts)) {
     for (const t of Object.keys(m) as ThreatType[]) seen.add(t);
   }
-  return critical.filter((t) => seen.has(t) && !before.has(t));
+  return CRITICAL_FOR_ESCALATION.filter((t) => seen.has(t) && !before.has(t));
 }
