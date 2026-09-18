@@ -58,6 +58,7 @@ import { verifyInitData, ADMIN_INITDATA_MAX_AGE_SEC } from "./lib/telegram-initd
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
+import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
 import {
   CIRCLE_ALERT_COOLDOWN_MS,
   decideCircleAlert,
@@ -926,17 +927,6 @@ async function airSnapshotResponse(): Promise<Response> {
  * спамив би той самий пост. Найгірше після редеплою — один повтор; це
  * прийнятно й не варте стороннього сховища.
  */
-// Навіть коли нічого суттєво не змінилось, зрідка постимо «тримається» — щоб
-// канал виглядав живим, а не мертвим. Але рідко, щоб не було відчуття дублів.
-const CHANNEL_HEARTBEAT_MS = 25 * 60 * 1000;
-/**
- * Найменший проміжок між двома дотиками до каналу (пост або правка).
- *
- * Нижчий за крок таймера каналу (5 хв), щоб штатний тик не відсікався
- * випадковим запізненням планувальника, але достатній, щоб кілька джерел
- * тику не складались у потік.
- */
-const CHANNEL_MIN_TOUCH_MS = 4 * 60 * 1000;
 let lastChannelPost: { signature: string; at: number; snapshot: AirSnapshot | undefined } = {
   signature: "",
   at: 0,
@@ -1149,14 +1139,6 @@ async function editChannelUpdate(
 
 /* ─── Хвиля, відбій, підсумок доби ──────────────────────────────────────── */
 
-/**
- * Скільки живе один пост, який редагується.
- *
- * Довша хвиля розбивається на кілька постів навмисно: пост, який редагують
- * четверту годину, не підніметься в стрічці ні в кого, хто його вже бачив, —
- * а за цей час обстановка змінилася повністю.
- */
-const LIVE_POST_MAX_MS = 45 * 60 * 1000;
 /** Година за Києвом, коли виходить підсумок доби. */
 const DIGEST_HOUR = 9;
 /** Як часто можна давати адресний сигнал по тому самому місту. */
@@ -1674,36 +1656,31 @@ async function runChannelTickCore(
   await maybeDigest(token, channel, now);
   await maybeBackup(token, now);
 
-  const changed = post.signature !== lastChannelPost.signature;
-  // Ознака життя рахується від ОСТАННЬОГО ДОТИКУ (поста чи правки), а не від
-  // створення живого поста: інакше через 25 хвилин редагувань heartbeat
-  // лишався б назавжди «прострочений» і щотику змушував перемальовувати
-  // картинку заради правки, яка нічого не міняє.
-  const heartbeatDue = now - lastChannelTouch >= CHANNEL_HEARTBEAT_MS;
-  // Редагування живого поста нікого не турбує, тож поріг для нього нижчий за
-  // поріг нового поста: у стрічці нічого не зʼявляється, а пост лишається
-  // правдивим. Мовчимо лише тоді, коли не змінилось узагалі нічого.
-  if (!opts.force && !changed && !heartbeatDue) {
-    return { posted: false, reason: "без суттєвих змін" };
-  }
-
   /*
-   * Мінімальний інтервал між дотиками до каналу.
+   * Постити, правити чи мовчати — вирішує чиста функція (channel-cadence.ts).
    *
-   * Тик смикає не один планувальник: внутрішній таймер (кожні 5 хв), зовнішній
-   * крон через `/api/channel-tick`, команда `/channel`, а після редеплою — ще
-   * й прогрів на 20-й секунді. Кожен із них сам по собі розумний, але разом
-   * вони дають частоту, якої не задавав ніхто, і збоку це читається як
-   * «канал строчить».
+   * Раніше це рішення жило тут, розсипане між умовами, і разом із ним —
+   * найпомітніша для читача поведінка бота. Перевірити її тестом було
+   * неможливо: вона сплетена з Telegram, рендером картинки й читанням фіду.
+   * Тепер частота постів доводиться тестом, а не спостереженням за живим
+   * каналом під час нальоту.
    *
-   * Поріг нижчий за крок таймера, щоб штатний тик не з'їдався джитером
-   * планувальника. Ескалація (новий критичний тип у небі) проходить повз
-   * поріг: запізнитися з попередженням дорожче, ніж пропустити правку.
+   * Ознака життя рахується від ОСТАННЬОГО ДОТИКУ (поста чи правки), а не від
+   * створення живого поста: інакше через 25 хвилин редагувань heartbeat
+   * лишався б назавжди «прострочений».
    */
-  const tooSoon = now - lastChannelTouch < CHANNEL_MIN_TOUCH_MS;
-  if (!opts.force && escalation.length === 0 && tooSoon) {
-    return { posted: false, reason: "щойно оновлювали" };
-  }
+  const { decideChannelAction } = await import("./lib/channel-cadence");
+  const decision = decideChannelAction({
+    now,
+    signature: post.signature,
+    lastSignature: lastChannelPost.signature,
+    lastTouchAt: lastChannelTouch,
+    livePostAt: lastChannelPost.at,
+    messageId: wave.messageId,
+    escalation,
+    ...(opts.force ? { force: true } : {}),
+  });
+  if (decision.action === "silent") return { posted: false, reason: decision.reason };
 
   // Картинка обстановки — best-effort, за тим самим згладженим набором, що й
   // текст: якщо не вийшла, шлемо текст без неї.
@@ -1716,10 +1693,7 @@ async function runChannelTickCore(
   const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
   const silent = shouldPostSilently(types, now);
 
-  const liveStale = now - lastChannelPost.at > LIVE_POST_MAX_MS;
-  const canEdit = !opts.force && wave.messageId !== null && !liveStale && escalation.length === 0;
-
-  if (canEdit && wave.messageId !== null) {
+  if (decision.action === "edit" && wave.messageId !== null) {
     const ok = await editChannelUpdate(
       token,
       channel,
