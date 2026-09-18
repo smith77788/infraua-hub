@@ -2018,7 +2018,9 @@ function Console() {
                   ) : null}
                 </div>
               </section>
-            ) : (
+            ) : infraDisabled ? null : (
+              // Без шарів інфраструктури обирати нема чого: панель звала
+              // «оберіть обʼєкт на карті» там, де жодного обʼєкта немає.
               <section className="mb-5">
                 <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                   <AlertTriangle className="size-3" /> Обʼєкти під загрозою
