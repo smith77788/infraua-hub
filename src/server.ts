@@ -3087,7 +3087,42 @@ async function routeReport(from: RoutePoint, to: RoutePoint): Promise<string> {
       alarm: active.includes(oblast),
     };
   });
-  return renderRoute(report);
+
+  /*
+   * Укриття — ЛИШЕ для небезпечних ділянок.
+   *
+   * Перелік укриттів уздовж усього спокійного шляху — це шум, який ховає
+   * єдиний рядок, що справді важить. Набір локальний (`shelter-data`), тож
+   * мережі тут немає: це аварійна функція, і залежність, яка гальмує саме
+   * тоді, коли на неї спираються, для неї не годиться.
+   */
+  const { sheltersInBox } = await import("./lib/shelter-data");
+  const { shelterNear, renderRouteShelters, SHELTER_REACH_KM } =
+    await import("./lib/route-shelter");
+  const { sampleRoute } = await import("./lib/route");
+  const dangerous = sampleRoute(from, to, 40).filter((p) => {
+    const oblast = oblastOf(p.lat, p.lon);
+    return active.includes(oblast) || threats.some((t) => distanceKm(t, p) <= 50);
+  });
+  const legs = dangerous.map((p) => {
+    // Рамка з запасом на поріг: 1° широти ≈ 111 км, довготи на цих широтах
+    // ≈ 70 км, тому по довготі беремо ширше, щоб не зрізати кандидатів.
+    const dLat = SHELTER_REACH_KM / 111;
+    const dLon = SHELTER_REACH_KM / 70;
+    return {
+      fromStartKm: p.fromStartKm,
+      shelter: shelterNear(p, (q) =>
+        sheltersInBox({
+          south: q.lat - dLat,
+          north: q.lat + dLat,
+          west: q.lon - dLon,
+          east: q.lon + dLon,
+        }),
+      ),
+    };
+  });
+  const shelters = renderRouteShelters(legs);
+  return shelters ? renderRoute(report) + "\n" + shelters : renderRoute(report);
 }
 
 /**
