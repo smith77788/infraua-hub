@@ -111,7 +111,7 @@ export default function MapOverlays({
         виміряної `--map-bottom-inset`, тож розійтися з реальністю не може.
       */}
       <div
-        className={`pointer-events-none absolute inset-x-0 top-2 z-[600] flex items-start gap-2 ${SIDE_PAD}`}
+        className={`map-overlay-top pointer-events-none absolute inset-x-0 top-2 z-[600] flex items-start gap-2 ${SIDE_PAD}`}
         style={{ bottom: "calc(var(--map-bottom-inset, 3rem) + 0.5rem)" }}
       >
         <div className="flex h-full min-h-0 min-w-0 flex-col items-start gap-2">{topLeft}</div>

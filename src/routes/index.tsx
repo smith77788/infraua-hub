@@ -1501,7 +1501,7 @@ function Console() {
 
           {/* Map */}
           <div className="order-1 flex min-h-[52svh] min-w-0 flex-1 flex-col lg:order-2">
-            <main className="relative min-h-0 flex-1">
+            <main className="map-stage relative min-h-0 flex-1">
               <ClientOnly fallback={<MapSkeleton />}>
                 <Suspense fallback={<MapSkeleton />}>
                   <InfraMap

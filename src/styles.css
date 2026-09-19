@@ -174,13 +174,64 @@
   background: transparent !important;
   border: none !important;
 }
+/*
+ * Картка цілі: темна й ПОВЕРХ накладок.
+ *
+ * Два справжні збої, обидва видно на знімку з телефона:
+ *
+ * 1. Картка була БІЛОЮ. Правила нижче існували й до того, але `leaflet.css`
+ *    імпортується з компонента (`InfraMap.tsx`), тож потрапляє в бандл ПІСЛЯ
+ *    цього файла — і при однаковій специфічності перемагав дефолтний білий
+ *    фон Leaflet. Звідси `!important`: це не стиль заради стилю, а єдиний
+ *    спосіб виграти в правила, що вантажиться пізніше.
+ *
+ * 2. Кнопки карти («Я тут», «Шари карти») лягали ПОВЕРХ тексту картки:
+ *    накладки стоять на `z-[600]` (див. MapOverlays), а панель попапа Leaflet —
+ *    на 700 всередині свого контексту, і цього не вистачало. Піднімаємо панель
+ *    вище за накладки.
+ */
+.leaflet-popup-pane {
+  z-index: 1000;
+}
+/*
+ * Накладки карти — сусід контейнера Leaflet, а не його вміст, тож жодний
+ * z-index усередині карти їх не перебʼє: «Я тут» і «Шари карти» лягали просто
+ * поверх тексту картки цілі (видно на знімку з телефона). Поки картка
+ * відкрита, верхня смуга кнопок прибирається — читати її нічого не заважає, а
+ * закриття картки повертає кнопки на місце.
+ */
+.map-stage:has(.leaflet-popup) .map-overlay-top,
+/*
+ * Кнопки масштабу — власний шар Leaflet (`.leaflet-control-container`,
+ * z-index 800) ПОВЕРХ панелі попапа, яка живе всередині `.leaflet-map-pane`
+ * (контекст z-index 400). Тому підняти попап над ними зсередини карти
+ * неможливо — їх теж прибираємо, поки картка відкрита. Щипком масштаб
+ * лишається доступним, а тап по карті закриває картку й повертає кнопки.
+ */
+.map-stage:has(.leaflet-popup) .leaflet-control-zoom {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
 .leaflet-popup-content-wrapper {
-  background: #0f141b;
-  color: #e2e8f0;
+  background: #0f141b !important;
+  color: #e2e8f0 !important;
   border: 1px solid #1f2937;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 55%);
+}
+.leaflet-popup-content-wrapper a {
+  color: #67e8f9;
 }
 .leaflet-popup-tip {
-  background: #0f141b;
+  background: #0f141b !important;
+  border: 1px solid #1f2937;
+}
+/* Хрестик закриття: дефолтний темно-сірий на темному тлі майже невидимий. */
+.leaflet-popup-close-button {
+  color: #94a3b8 !important;
+}
+.leaflet-popup-close-button:hover {
+  color: #e2e8f0 !important;
 }
 
 /*

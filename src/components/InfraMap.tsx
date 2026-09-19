@@ -698,7 +698,20 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     );
   }
 
-  const inView = animated.filter((t) => bounds.contains([t.lat, t.lon]));
+  /*
+   * Відсікаємо за РОЗШИРЕНИМИ межами, а не за точними.
+   *
+   * Заміряно в браузері: тап по цілі → попап відкривається (+28 мс) → Leaflet
+   * автопрокручує карту, щоб його вмістити (+41…292 мс, 258 px на екрані 844) →
+   * позначка виїжджає за нижню межу контейнера → точне `bounds.contains` її
+   * відкидає → React розмонтовує маркер → попап зникає сам (+564 мс). Тобто
+   * «вікно відкривається і одразу закривається» і «карта стрибає» — це одна
+   * подія, а не дві.
+   *
+   * Запас у 30% тримає змонтованими позначки трохи за кадром, тож панорамування
+   * (і автопрокрутка попапа) більше не вбиває те, що людина щойно відкрила.
+   */
+  const inView = animated.filter((t) => bounds.pad(0.3).contains([t.lat, t.lon]));
   return (
     <>
       {inView.map((t) => {
@@ -788,26 +801,22 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
             >
-              <Popup maxWidth={240} autoPanPadding={[12, 12]}>
-                {/* Обмежуємо картку, щоб вона не перекривала всю карту на
-                    невисокому мобільному вьюпорті: вузька ширина + прокрутка. */}
-                <div className="max-h-[45vh] space-y-1 overflow-y-auto pr-1 font-sans text-xs">
+              <Popup maxWidth={220} autoPanPadding={[8, 8]}>
+                {/*
+                  Стеля висоти — у ПІКСЕЛЯХ, а не у відсотках вікна.
+                  
+                  Було `45vh`: на телефоні це ~380 px при карті ~440 px, тобто
+                  картка накривала майже всю мапу, а Leaflet мусив зсувати карту
+                  на 258 px, щоб її вмістити. Саме цей зсув і вибивав позначку з
+                  кадру. 190 px із прокруткою прибирають і перекриття, і потребу
+                  кудись їхати: решта тексту гортається всередині картки.
+                */}
+                <div className="max-h-[190px] space-y-1 overflow-y-auto pr-1 font-sans text-xs">
                   <p className="font-semibold" style={{ color: style.color }}>
                     {style.label}
                     {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
                   </p>
                   <p className="opacity-80">{t.name}</p>
-                  <p className="opacity-70">
-                    {/*
-                      Число названо тим, чим воно є: скільки каналів сказали про
-                      цю ціль. Це впевненість джерела, а не властивість цілі, —
-                      і саме тому воно тут, а не на позначці.
-                    */}
-                    {t.reports && t.reports > 1
-                      ? `Підтверджень: ${t.reports} · канали: `
-                      : "Канал: "}
-                    {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
-                  </p>
                   {hasCourse ? (
                     <p className="opacity-70">
                       Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
@@ -827,11 +836,6 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                       сигналу — оцінка, не факт
                     </p>
                   ) : null}
-                  {q.speedKmh !== null ? (
-                    <p className="opacity-70">
-                      Швидкість: {Math.round(q.speedKmh)} км/год (заміряна)
-                    </p>
-                  ) : null}
                   {t.sea ? <p className="opacity-70">Над морем</p> : null}
                   {hasCourse
                     ? (() => {
@@ -844,14 +848,6 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                         ) : null;
                       })()
                     : null}
-                  {observed.length >= 2 || vecEnd ? (
-                    <p className="opacity-60 text-[11px] leading-snug">
-                      {observed.length >= 2
-                        ? `── трек (де була${fromSource.length >= 2 ? ", з джерела" : ""}) · `
-                        : ""}
-                      {vecEnd ? "╌╌ курс (екстраполяція, не факт)" : ""}
-                    </p>
-                  ) : null}
                   {(() => {
                     // Анти-фейк: наскільки цій позначці можна вірити, словами
                     // й кольором. Одиночне непідтверджене повідомлення не має
@@ -864,15 +860,58 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                       </p>
                     );
                   })()}
-                  {t.confidence ? <p className="opacity-70">Впевненість: {t.confidence}</p> : null}
-                  {seen ? (
-                    <p className="opacity-70">
-                      Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
-                    </p>
-                  ) : null}
-                  {type === "unknown" ? (
-                    <p className="opacity-50">Тип не визначено з тексту OSINT-каналів</p>
-                  ) : null}
+                  {/*
+                    Другорядне — під «деталі».
+                    
+                    Заміряно в браузері: картка виходила 269×220 px на карті
+                    390×440, тобто накривала половину мапи, і Leaflet мусив
+                    зсувати карту, щоб її вмістити. Видимим лишається те, що
+                    відповідає на «чи летить на мене»: тип, місце, курс із
+                    містами, розкид позиції та довіра. Провенанс і решта нікуди
+                    не діли — вони за одним дотиком.
+                  */}
+                  <details className="mt-0.5">
+                    <summary className="cursor-pointer list-none opacity-60 [&::-webkit-details-marker]:hidden">
+                      Деталі ▸
+                    </summary>
+                    <div className="mt-1 space-y-1">
+                      <p className="opacity-70">
+                        {/*
+                            Число названо тим, чим воно є: скільки каналів сказали про
+                            цю ціль. Це впевненість джерела, а не властивість цілі, —
+                            і саме тому воно тут, а не на позначці.
+                          */}
+                        {t.reports && t.reports > 1
+                          ? `Підтверджень: ${t.reports} · канали: `
+                          : "Канал: "}
+                        {t.sources && t.sources.length ? t.sources.join(", ") : t.source}
+                      </p>
+                      {q.speedKmh !== null ? (
+                        <p className="opacity-70">
+                          Швидкість: {Math.round(q.speedKmh)} км/год (заміряна)
+                        </p>
+                      ) : null}
+                      {observed.length >= 2 || vecEnd ? (
+                        <p className="opacity-60 text-[11px] leading-snug">
+                          {observed.length >= 2
+                            ? `── трек (де була${fromSource.length >= 2 ? ", з джерела" : ""}) · `
+                            : ""}
+                          {vecEnd ? "╌╌ курс (екстраполяція, не факт)" : ""}
+                        </p>
+                      ) : null}
+                      {t.confidence ? (
+                        <p className="opacity-70">Впевненість: {t.confidence}</p>
+                      ) : null}
+                      {seen ? (
+                        <p className="opacity-70">
+                          Останній сигнал: {new Date(seen).toLocaleString("uk-UA")}
+                        </p>
+                      ) : null}
+                      {type === "unknown" ? (
+                        <p className="opacity-50">Тип не визначено з тексту OSINT-каналів</p>
+                      ) : null}
+                    </div>
+                  </details>
                 </div>
               </Popup>
             </Marker>
