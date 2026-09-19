@@ -3,6 +3,7 @@ import { Layers3 } from "lucide-react";
 
 import type { Threat, ThreatType } from "@/lib/air";
 import { UK } from "@/lib/channel-lexicon";
+import { oblastOf } from "@/lib/channel-post";
 import { subsetVector } from "@/lib/swarm-forecast";
 import type { Wave } from "@/lib/waves";
 import CollapsiblePanel from "./CollapsiblePanel";
@@ -55,7 +56,23 @@ export default function ActiveWaves({
       const members = w.threatIds.map((id) => byId.get(id)).filter((t): t is Threat => !!t);
       const sw = subsetVector(members, now);
       const dir = sw && sw.coherence >= 0.5 ? dirUk(sw.bearingDeg) : null;
-      return { wave: w, dir };
+      /*
+       * ДЕ ця хвиля. Без цього перелік читався як «1 шахед · стабільно» ×11 —
+       * одинадцять рядків, що не відповідають на головне питання й забирають
+       * пів екрана. Область беремо з тих самих координат, що й канал
+       * (`oblastOf`), тож назва в хвилях і в обласній стрічці — одна.
+       */
+      const tally = new Map<string, number>();
+      for (const m of members) {
+        const o = oblastOf(m.lat, m.lon);
+        tally.set(o, (tally.get(o) ?? 0) + 1);
+      }
+      const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+      const place = ranked[0]?.[0] ?? null;
+      // Хвиля може лежати на межі двох областей — чесніше сказати «+1», ніж
+      // мовчки приписати її одній.
+      const alsoIn = Math.max(0, ranked.length - 1);
+      return { wave: w, dir, place, alsoIn };
     });
   }, [waves, threats]);
 
@@ -75,7 +92,7 @@ export default function ActiveWaves({
       }
     >
       <ul className="space-y-1">
-        {rows.map(({ wave, dir }) => (
+        {rows.map(({ wave, dir, place, alsoIn }) => (
           <li key={wave.id} className="flex items-baseline gap-1.5 text-[11px] leading-tight">
             <span
               className="mt-1 size-2 shrink-0 rounded-full"
@@ -83,6 +100,15 @@ export default function ActiveWaves({
             />
             <span className="min-w-0 text-foreground">
               <b>{wave.count}</b> {UK.typeName(wave.dominantType, wave.count)}
+              {place ? (
+                <>
+                  {" — "}
+                  <b className="text-orange-300">{place}</b>
+                  {alsoIn > 0 ? (
+                    <span className="text-muted-foreground">{` +${alsoIn}`}</span>
+                  ) : null}
+                </>
+              ) : null}
               <span className="text-muted-foreground">
                 {" · "}
                 {TREND[wave.trend]}
