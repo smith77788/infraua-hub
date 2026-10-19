@@ -37,6 +37,12 @@ type LocationFailure = Extract<LocationOutcome, { ok: false }>["reason"];
  * перевибирати їх щоразу.
  */
 
+/**
+ * Де лежить точка людини. Експортується разом із читачем, бо її потребує не
+ * лише ця панель: банер небезпеки має знати ОБЛАСТЬ людини, інакше він
+ * світився б на будь-яку тривогу в країні й перестав би щось означати.
+ * Два місця, що читають одне сховище власним кодом, рано чи пізно розійдуться.
+ */
 const LS_POINT = "infraua.me.point.v1";
 const LS_WINDOW = "infraua.me.window.v1";
 const LS_SOUND = "infraua.me.sound.v1";
@@ -96,7 +102,7 @@ function resolvePlace(query: string, allowPrefix: boolean): (typeof ALL_PLACES)[
   );
 }
 
-function loadPoint(): Point | null {
+export function loadPoint(): Point | null {
   try {
     const raw = localStorage.getItem(LS_POINT);
     return raw ? (JSON.parse(raw) as Point) : null;

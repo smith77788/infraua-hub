@@ -47,7 +47,9 @@ import OrientationCard, { hasSeenOrientation } from "@/components/OrientationCar
 import SituationBar from "@/components/SituationBar";
 import StatusStrip from "@/components/StatusStrip";
 import StaleShellNotice from "@/components/StaleShellNotice";
-import PersonalThreatPanel from "@/components/PersonalThreatPanel";
+import DangerBanner from "@/components/DangerBanner";
+import { dangerNotice } from "@/lib/danger-notice";
+import PersonalThreatPanel, { loadPoint } from "@/components/PersonalThreatPanel";
 import HotOblasts from "@/components/HotOblasts";
 import MapOverlays from "@/components/MapOverlays";
 import { TRAIL_MS } from "@/components/TimelinePlayer";
@@ -58,6 +60,7 @@ import OfflineBanner from "@/components/OfflineBanner";
 import { useOnline } from "@/hooks/useConnection";
 import { airConnection } from "@/lib/connection-status";
 import { observedAt } from "@/lib/air";
+import { oblastOf } from "@/lib/channel-post";
 import { browserStore, readSnapshot, writeSnapshot } from "@/lib/snapshot-cache";
 import { registerServiceWorker } from "@/lib/register-sw";
 import { clusterThreats, updateWaves, type Wave } from "@/lib/waves";
@@ -534,6 +537,21 @@ function Console() {
     ],
   );
 
+  /*
+   * Банер небезпеки рахується від ОБЛАСТІ людини, якщо вона задала точку.
+   * Без цього довелося б світити на будь-яку тривогу в країні — а червоний
+   * рівень є майже завжди десь, тож банер висів би постійно й перестав би
+   * щось означати. Ціна такого банера — довіра до всіх інших.
+   */
+  const myOblast = useMemo(() => {
+    const p = loadPoint();
+    return p ? oblastOf(p.lat, p.lon) : null;
+  }, [nowTick]);
+  const danger = useMemo(
+    () => dangerNotice(alertLevels, threats, myOblast),
+    [alertLevels, threats, myOblast],
+  );
+
   // Пишемо знімок повітряної картини в буфер реплею при кожному оновленні фіду
   // (recordFrame сам відсіює незмінні кадри й тримає вікно/стелю).
   useEffect(() => {
@@ -989,6 +1007,13 @@ function Console() {
         можна. Мовчить, доки не доведено протилежне.
       */}
       <StaleShellNotice />
+      {/*
+        Офіційне попередження — найперше, що має бачити людина. Виник після
+        випадку, коли в місті були вибухи, офіційно діяла підвищена небезпека,
+        а консоль мовчала: рівень тривоги фарбував полігон на карті й ніде
+        більше не зʼявлявся.
+      */}
+      <DangerBanner notice={danger} />
       {/*
         Смуга стану замість декоративного банера класифікації. У консолях
         такого класу зверху стоїть рядок, який каже, з чим саме ти працюєш; тут
