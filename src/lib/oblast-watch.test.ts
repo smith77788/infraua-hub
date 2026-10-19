@@ -1,10 +1,15 @@
 import { describe, expect, it } from "bun:test";
 
+import { parseAlertLevels } from "./alert-levels";
+
 import {
   oblastTransitions,
   renderAlertCleared,
   renderAlertStarted,
   updateAlertStarts,
+  levelEscalations,
+  levelMapOf,
+  renderEscalation,
 } from "./oblast-watch";
 
 describe("oblastTransitions", () => {
@@ -94,5 +99,132 @@ describe("назви ззовні не ламають повідомлення",
 
   it("наша власна розмітка лишається цілою", () => {
     expect(renderAlertStarted("Сумщина", [])).toContain("<b>Повітряна тривога");
+  });
+});
+
+describe("рівень небезпеки: підвищення під час тривоги", () => {
+  const lvl = (pairs: [string, "red" | "yellow"][]) => new Map(pairs);
+
+  it("жовтий → червоний будить: часу стало менше", () => {
+    /*
+     * Та сама подія, яку бот не вмів помічати взагалі: тривога вже триває,
+     * людина вже отримала «оголошено офіційно», і тут дронова загроза стає
+     * ракетною. До дрона можна дійти до укриття, до балістики — ні.
+     */
+    expect(levelEscalations(lvl([["сумська", "yellow"]]), lvl([["сумська", "red"]]))).toEqual([
+      "сумська",
+    ]);
+  });
+
+  it("поява червоного там, де нічого не було, теж підвищення", () => {
+    expect(levelEscalations(lvl([]), lvl([["харківська", "red"]]))).toEqual(["харківська"]);
+  });
+
+  it("червоний, що триває, не повторюється", () => {
+    expect(levelEscalations(lvl([["сумська", "red"]]), lvl([["сумська", "red"]]))).toEqual([]);
+  });
+
+  it("зниження рівня НЕ будить", () => {
+    // Помилитись у бік спокою не можна, але й поспішати з ним нікуди:
+    // відбій прийде окремо й офіційно.
+    expect(levelEscalations(lvl([["сумська", "red"]]), lvl([["сумська", "yellow"]]))).toEqual([]);
+  });
+
+  it("жовтий сам по собі не будить", () => {
+    expect(levelEscalations(lvl([]), lvl([["сумська", "yellow"]]))).toEqual([]);
+  });
+
+  it("перший знімок не дає підвищень", () => {
+    /*
+     * Без цього кожен редеплой розсилав би «рівень підвищено» всім, у кого
+     * червоний уже тривав годину.
+     */
+    expect(levelEscalations(null, lvl([["сумська", "red"]]))).toEqual([]);
+  });
+});
+
+describe("levelMapOf", () => {
+  const levels = parseAlertLevels({
+    raions: [
+      { key: "a", name: "A", oblast: "Сумська область", level: "yellow", since: "", reasons: [] },
+      { key: "b", name: "B", oblast: "Сумська область", level: "red", since: "", reasons: [] },
+    ],
+    oblasts: [],
+  })!;
+
+  it("область бере НАЙГОСТРІШИЙ рівень серед своїх районів", () => {
+    // Інакше ракетна загроза в одному районі загубилась би за жовтими сусідами.
+    expect(levelMapOf(levels).get("сумська")).toBe("red");
+  });
+
+  it("без рівнів — порожньо, а не вигадані значення", () => {
+    expect(levelMapOf(null).size).toBe(0);
+  });
+});
+
+describe("renderEscalation", () => {
+  it("каже, що тривога триває, і називає причину словами джерела", () => {
+    const t = renderEscalation("Сумщина", {
+      level: "red",
+      reasons: ["Ракетна загроза (червоний рівень)"],
+      blindTo: null,
+    });
+    expect(t).toContain("Рівень підвищено");
+    expect(t).toContain("Тривога триває");
+    expect(t).toContain("Ракетна загроза");
+  });
+
+  it("несе застереження про нашу сліпоту, коли воно є", () => {
+    const t = renderEscalation("Сумщина", {
+      level: "red",
+      reasons: ["Ракетна загроза (червоний рівень)"],
+      blindTo: "Ракети й КАБи наш радар не відстежує.",
+    });
+    expect(t).toContain("не відстежує");
+  });
+
+  it("чужий текст у причині не ламає повідомлення", () => {
+    // Інакше Telegram відхилить його цілком — і про підвищення ніхто не дізнається.
+    const t = renderEscalation("Сумщина", { level: "red", reasons: ["<b>x</b>"], blindTo: null });
+    expect(t).toContain("&lt;b&gt;x&lt;/b&gt;");
+  });
+});
+
+describe("renderAlertStarted із рівнем", () => {
+  it("початок тривоги одразу несе причину", () => {
+    const t = renderAlertStarted("Сумщина", [], {
+      level: "red",
+      reasons: ["Ракетна загроза (червоний рівень)"],
+      blindTo: "Порожня карта НЕ означає, що тихо.",
+    });
+    expect(t).toContain("Ракетна загроза");
+    expect(t).toContain("НЕ означає, що тихо");
+  });
+
+  it("без рівня лишається таким, як був", () => {
+    expect(renderAlertStarted("Сумщина", [])).toContain("Повітряна тривога");
+  });
+});
+
+describe("підвищення без названої причини", () => {
+  it("не обіцяє пояснити те, чого джерело не сказало", () => {
+    /*
+     * Заміряно на живих даних: для частини областей `reasons` порожній.
+     * Рядок «загроза змінилась:» із порожнечею після двокрапки — обіцянка без
+     * змісту, а в повідомленні, яке будить уночі, це гірше за її відсутність.
+     */
+    const t = renderEscalation("Крим", { level: "red", reasons: [], blindTo: null });
+    expect(t).not.toContain("змінилась:");
+    expect(t).toContain("підвищено до червоного");
+  });
+
+  it("з причиною — пояснює", () => {
+    const t = renderEscalation("Сумщина", {
+      level: "red",
+      reasons: ["Ракетна загроза (червоний рівень)"],
+      blindTo: null,
+    });
+    expect(t).toContain("змінилась:");
+    expect(t).toContain("Ракетна загроза");
   });
 });

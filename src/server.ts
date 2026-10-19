@@ -4,7 +4,13 @@ import { consumeLastCapturedError } from "./lib/error-capture";
 import { mainMenuKeyboard, parseMenuAction } from "./lib/bot-menu";
 import { baseReport, probe, type SourceProbe } from "./lib/health";
 import { courseIsObserved, EMPTY_QUALITY } from "./lib/threat-quality";
-import { type AlertLevels, levelForOblast, parseAlertLevels } from "./lib/alert-levels";
+import {
+  type AlertLevel,
+  type AlertLevels,
+  levelForOblast,
+  oblastKey,
+  parseAlertLevels,
+} from "./lib/alert-levels";
 import type { AlertRing } from "./lib/situation-image";
 import {
   ADMIN_ACTIONS,
@@ -177,11 +183,16 @@ import { estimateMotion, type MotionState } from "./lib/track-filter";
 import { deliver, type Envelope, Priority } from "./lib/delivery";
 import { capacityFor, renderCapacity, USEFUL_WINDOW_MS } from "./lib/capacity";
 import {
+  levelEscalations,
+  levelMapOf,
   oblastTransitions,
   renderAlertCleared,
   renderAlertStarted,
+  renderEscalation,
   updateAlertStarts,
+  type OblastDanger,
 } from "./lib/oblast-watch";
+import { dangerNotice } from "./lib/danger-notice";
 import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
 import { observationsTooOldForAlerts } from "./lib/air";
 import {
@@ -3266,6 +3277,12 @@ async function groupDutySweep(threats: readonly Threat[], now: number): Promise<
  */
 let knownAlerts: string[] | null = null;
 let alertStarts = new Map<string, number>();
+/*
+ * Рівні з попереднього обходу. `null` — ще не бачили жодного зрізу: тоді
+ * підвищень немає за означенням, інакше кожен редеплой розсилав би «рівень
+ * підвищено» всім, у кого червоний уже тривав годину.
+ */
+let knownLevels: Map<string, AlertLevel> | null = null;
 
 async function officialAlertSweep(): Promise<void> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
@@ -3278,7 +3295,37 @@ async function officialAlertSweep(): Promise<void> {
   const startsBefore = alertStarts;
   knownAlerts = [...active];
   alertStarts = updateAlertStarts(alertStarts, active, now);
-  if (transitions.length === 0) return;
+
+  /*
+   * Рівень небезпеки — окрема подія від самої тривоги.
+   *
+   * Підвищення стається ВСЕРЕДИНІ тривоги, що вже триває: людина вже отримала
+   * «оголошено офіційно», і тут дронова загроза стає ракетною. Доти обхід
+   * виходив на `transitions.length === 0` і цієї події не помічав узагалі —
+   * саме її й бракувало, коли в місті пролунали вибухи.
+   */
+  const levels = await fetchAlertLevels();
+  const levelsNow = levelMapOf(levels);
+  const escalated = levelEscalations(knownLevels, levelsNow);
+  knownLevels = levelsNow;
+
+  if (transitions.length === 0 && escalated.length === 0) return;
+
+  /*
+   * Цілі потрібні не для сповіщення, а для ЧЕСНОСТІ: якщо оголошено ракетну
+   * небезпеку, а ракетних цілей у фіді немає, людина має це почути разом із
+   * попередженням, а не вирішити з порожньої карти, що тихо.
+   */
+  const threatsNow = await fetchThreatsCached(60_000);
+  const dangerFor = (oblast: string): OblastDanger | null => {
+    const n = dangerNotice(levels, threatsNow, oblast);
+    if (n.level === "none") return null;
+    return {
+      level: n.level === "danger" ? "red" : "yellow",
+      reasons: n.reasons,
+      blindTo: n.blindTo,
+    };
+  };
 
   const subs = await allSubscribers();
   const queue: Envelope<{ chatId: number; text: string; stats: StatsHook | null }>[] = [];
@@ -3317,6 +3364,7 @@ async function officialAlertSweep(): Promise<void> {
           ? renderAlertStarted(
               t.oblast,
               mine.map((p) => p.label),
+              dangerFor(t.oblast),
             )
           : renderAlertCleared(
               t.oblast,
@@ -3369,6 +3417,39 @@ async function officialAlertSweep(): Promise<void> {
           },
         });
       }
+    }
+  }
+
+  /*
+   * Підвищення рівня — окрема розсилка.
+   *
+   * Не повтор початку тривоги: людина вже знає, що тривога є. Нове тут одне —
+   * часу стало менше, бо дронова загроза стала ракетною. Саме цього
+   * повідомлення й бракувало, коли в місті пролунали вибухи.
+   *
+   * Межі ті самі, що й у решти сповіщень: пауза (`/stop`) поважається,
+   * вимкнені офіційні тривоги — теж. Пріоритет найвищий: це «в укриття зараз».
+   */
+  for (const key of escalated) {
+    const danger = dangerFor(key);
+    if (!danger) continue;
+    for (const sub of subs) {
+      if (sub.muted || sub.officialAlerts === false) continue;
+      const mine = placesFromLegacy(sub.point, sub.places, now).filter(
+        (pl) => oblastKey(oblastOf(pl.lat, pl.lon)) === key,
+      );
+      if (mine.length === 0) continue;
+      queue.push({
+        chatId: sub.chatId,
+        priority: Priority.Shelter,
+        expiresAt: now + USEFUL_WINDOW_MS,
+        payload: {
+          chatId: sub.chatId,
+          text: renderEscalation(oblastOf(mine[0]!.lat, mine[0]!.lon), danger),
+          // Підвищення рівня — не окрема тривога: лічильник веде сама тривога.
+          stats: null,
+        },
+      });
     }
   }
 
