@@ -21,6 +21,8 @@
  * зміні стану видно тестом, а не спостереженням за живим ботом.
  */
 
+import { oblastKey, type AlertLevel, type AlertLevels } from "./alert-levels";
+
 export interface OblastTransition {
   oblast: string;
   kind: "started" | "cleared";
@@ -62,6 +64,103 @@ function safe(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/* ─── Рівень небезпеки: жовтий, червоний і перехід між ними ─────────────── */
+
+/**
+ * Подробиці небезпеки для повідомлення.
+ *
+ * `blindTo` приходить ззовні (`dangerNotice`), а не рахується тут: рішення про
+ * те, чого ми не бачимо, має бути ОДНЕ на весь проєкт. Друге таке рішення поряд
+ * із першим неминуче з ним розійдеться.
+ */
+export interface OblastDanger {
+  level: AlertLevel;
+  reasons: string[];
+  blindTo: string | null;
+}
+
+/** Рівень по областях — у вигляді, придатному для порівняння двох зрізів. */
+export function levelMapOf(levels: AlertLevels | null): Map<string, AlertLevel> {
+  const out = new Map<string, AlertLevel>();
+  if (!levels) return out;
+  for (const a of [...levels.oblasts, ...levels.raions]) {
+    const key = oblastKey(a.oblast);
+    if (a.level === "red" || out.get(key) !== "red") out.set(key, a.level);
+  }
+  return out;
+}
+
+/**
+ * Де рівень ПІДВИЩИВСЯ.
+ *
+ * Це та подія, про яку бот не вмів казати взагалі. Тривога вже триває, людина
+ * вже отримала «оголошено офіційно» — і тут рівень переходить із жовтого в
+ * червоний, тобто з дронової загрози в ракетну. Це не повтор попереднього
+ * повідомлення, а зміна того, скільки в людини часу: до дрона можна дійти до
+ * укриття, до балістики — ні.
+ *
+ * Лише вгору. Зниження рівня не будить: помилитись у бік спокою не можна, а
+ * поспішати з ним нікуди — відбій прийде окремо й офіційно.
+ *
+ * `previous === null` означає «перший знімок»: переходів немає. Без цього
+ * кожен редеплой розсилав би «рівень підвищено» всім, у кого червоний уже
+ * тривав годину.
+ */
+export function levelEscalations(
+  previous: ReadonlyMap<string, AlertLevel> | null,
+  current: ReadonlyMap<string, AlertLevel>,
+): string[] {
+  if (previous === null) return [];
+  const out: string[] = [];
+  for (const [key, level] of current) {
+    if (level !== "red") continue;
+    if (previous.get(key) === "red") continue;
+    out.push(key);
+  }
+  return out.sort((a, b) => a.localeCompare(b, "uk"));
+}
+
+/**
+ * Рядок про причину й нашу межу — спільний для початку тривоги й підвищення.
+ *
+ * Причина йде словами джерела: саме вона каже, що робити, а не колір.
+ */
+function dangerLines(d: OblastDanger): string[] {
+  const out: string[] = [];
+  if (d.reasons.length > 0) out.push(d.reasons.map(safe).join(" · "));
+  if (d.blindTo) out.push("", `<i>${safe(d.blindTo)}</i>`);
+  return out;
+}
+
+/**
+ * Рівень підвищено до червоного під час тривоги, що вже триває.
+ *
+ * Окреме повідомлення, а не повтор початку тривоги: людина вже в курсі, що
+ * тривога є. Нове тут одне — часу стало менше.
+ */
+export function renderEscalation(oblast: string, d: OblastDanger): string {
+  /*
+   * Без причин не обіцяємо пояснення.
+   *
+   * Джерело дає причину не завжди — заміряно на живих даних: для частини
+   * областей `reasons` порожній. Рядок «загроза змінилась:» із порожнечею після
+   * двокрапки — обіцянка без змісту, а в повідомленні, яке будить уночі, це
+   * гірше за відсутність рядка. Тоді кажемо просто те, що знаємо напевно:
+   * рівень став червоним.
+   */
+  const explained = d.reasons.length > 0;
+  return [
+    `🔴 <b>Рівень підвищено — ${safe(oblast)}</b>`,
+    "",
+    explained
+      ? "Тривога триває, але загроза змінилась:"
+      : "Тривога триває, рівень небезпеки підвищено до червоного.",
+    ...dangerLines(d),
+    "",
+    "<i>Оголошено офіційно. Якщо ви ще не в укритті — йдіть зараз.</i>",
+  ].join("\n");
+}
+
 /**
  * Текст початку тривоги.
  *
@@ -69,13 +168,19 @@ function safe(value: string): string {
  * що це не наша оцінка, а оголошення — від цього залежить, наскільки швидко
  * вона встане.
  */
-export function renderAlertStarted(oblast: string, places: readonly string[]): string {
+export function renderAlertStarted(
+  oblast: string,
+  places: readonly string[],
+  danger?: OblastDanger | null,
+): string {
   const where =
     places.length > 1 ? `\nВаші місця в цій області: ${places.map(safe).join(", ")}` : "";
   return [
     `🔴 <b>Повітряна тривога — ${safe(oblast)}</b>`,
     "",
     `Оголошено офіційно.${where}`,
+    // Причина й межа — одразу тут, бо від них залежить, скільки в людини часу.
+    ...(danger ? dangerLines(danger) : []),
     "",
     "<i>Це офіційна тривога, а не наша оцінка. Пройдіть в укриття.</i>",
   ].join("\n");
