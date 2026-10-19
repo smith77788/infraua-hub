@@ -580,7 +580,37 @@ function idleRegions(): AlertRegion[] {
   return out;
 }
 
-export const getAlerts = createServerFn({ method: "GET" }).handler(async () => {
+/**
+ * Короткий СПІЛЬНИЙ кеш для серверної функції.
+ *
+ * Консоль опитує тривоги частіше, ніж раніше (щоб швидше показувати зміни на
+ * карті), і без цього кожен клієнт бив би по безплатному джерелу окремо. Тут
+ * усі одночасні запити в межах вікна бачать ОДИН виклик до джерела — так само,
+ * як `neptunThreatsCached` коалесить користувачів в одне опитування Нептуна.
+ * Поточний виклик теж поділяється (`inflight`), щоб сплеск одночасних опитувань
+ * не породив рою запитів, поки перший ще в дорозі.
+ */
+function sharedCache<T>(ttlMs: number, fn: () => Promise<T>): () => Promise<T> {
+  let cache: { at: number; value: T } | null = null;
+  let inflight: Promise<T> | null = null;
+  return () => {
+    const now = Date.now();
+    if (cache && now - cache.at < ttlMs) return Promise.resolve(cache.value);
+    if (inflight) return inflight;
+    inflight = (async () => {
+      try {
+        const value = await fn();
+        cache = { at: Date.now(), value };
+        return value;
+      } finally {
+        inflight = null;
+      }
+    })();
+    return inflight;
+  };
+}
+
+const fetchAlertsPayload = sharedCache(15_000, async (): Promise<AlertsPayload> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -626,6 +656,8 @@ export const getAlerts = createServerFn({ method: "GET" }).handler(async () => {
     clearTimeout(timer);
   }
 });
+
+export const getAlerts = createServerFn({ method: "GET" }).handler(() => fetchAlertsPayload());
 
 // Повітряні цілі та зони тривог.
 // Основне джерело — neptun.in.ua/api/v1/threats: keyless, вже типізовані,
@@ -1381,7 +1413,8 @@ function ringToLatLon(ring: number[][]): [number, number][] {
  */
 const ALERT_LEVELS_ENDPOINT = "https://neptun.in.ua/api/v1/alerts";
 
-export const getAlertLevels = createServerFn({ method: "GET" }).handler(
+const fetchAlertLevelsPayload = sharedCache(
+  15_000,
   async (): Promise<{ levels: AlertLevels | null; fetchedAt: number }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
@@ -1397,7 +1430,11 @@ export const getAlertLevels = createServerFn({ method: "GET" }).handler(
   },
 );
 
-export const getAlertZones = createServerFn({ method: "GET" }).handler(async () => {
+export const getAlertLevels = createServerFn({ method: "GET" }).handler(() =>
+  fetchAlertLevelsPayload(),
+);
+
+const fetchZonesPayload = sharedCache(15_000, async (): Promise<ZonesPayload> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
@@ -1441,6 +1478,8 @@ export const getAlertZones = createServerFn({ method: "GET" }).handler(async () 
     clearTimeout(timer);
   }
 });
+
+export const getAlertZones = createServerFn({ method: "GET" }).handler(() => fetchZonesPayload());
 
 /**
  * Реальні лінії електропередач 110 кВ+ — основа **спостереженої** топології.

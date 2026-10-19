@@ -299,8 +299,12 @@ function Console() {
   const alertsQuery = useQuery({
     queryKey: ["alerts"],
     queryFn: () => alertsFn(),
-    staleTime: 60 * 1000,
-    refetchInterval: 60 * 1000,
+    // Сирена — це подія, а не фон: хвилинний крок означав до хвилини мовчання
+    // карти після оголошення тривоги. 20 с ближче до темпу самої події, а
+    // спільний серверний кеш (`sharedCache`, 15 с) не дає частішому полінгу бити
+    // по безплатному джерелі — усі клієнти діляться одним опитуванням.
+    staleTime: 20 * 1000,
+    refetchInterval: 20 * 1000,
   });
   const threatsFn = useServerFn(getThreats);
   const threatsQuery = useQuery({
@@ -310,8 +314,8 @@ function Console() {
     // еталон реального часу; тримаємо короткий інтервал, а серверний спільний
     // кеш (neptunThreatsCached, 10с) обʼєднує всіх користувачів в один запит до
     // джерела, тож частий полінг не бʼє по ньому.
-    staleTime: 6 * 1000,
-    refetchInterval: 8 * 1000,
+    staleTime: 4 * 1000,
+    refetchInterval: 5 * 1000,
     refetchIntervalInBackground: false,
   });
   // Ситуаційні фонові фіди (фронт, пожежі, Kp, інтернет-збої, погода) — в одному
@@ -341,8 +345,8 @@ function Console() {
   const levelsQuery = useQuery({
     queryKey: ["alert-levels"],
     queryFn: () => levelsFn(),
-    staleTime: 45 * 1000,
-    refetchInterval: 45 * 1000,
+    staleTime: 25 * 1000,
+    refetchInterval: 25 * 1000,
   });
   const alertLevels = levelsQuery.data?.levels ?? null;
 
@@ -350,8 +354,8 @@ function Console() {
   const zonesQuery = useQuery({
     queryKey: ["zones"],
     queryFn: () => zonesFn(),
-    staleTime: 45 * 1000,
-    refetchInterval: 45 * 1000,
+    staleTime: 25 * 1000,
+    refetchInterval: 25 * 1000,
   });
 
   const [active, setActive] = useState<Set<CategoryId>>(new Set(ALL_CATEGORIES));
@@ -469,9 +473,11 @@ function Console() {
     }
   }, [airPayload, threatsQuery.dataUpdatedAt]);
   // Годинник для банера: вік фіду росте й без нових даних, тож перемальовуємо
-  // раз на пів хвилини, щоб «7 хв тому» не застигало на «щойно».
+  // його сам. Пів хвилини було замало — банер «затримка/завмерло» міг спізнитися
+  // на ці пів хвилини; 15 с тримають стан звʼязку ближче до правди, а коштує це
+  // лише одного перемальовування двічі частіше.
   useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 30_000);
+    const id = setInterval(() => setNowTick(Date.now()), 15_000);
     return () => clearInterval(id);
   }, []);
   // Service worker — щоб консоль відкривалась і без мережі (див. register-sw).

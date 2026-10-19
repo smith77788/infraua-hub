@@ -774,7 +774,7 @@ function motionOf(threat: Threat): MotionState | null {
  * фальшивий відбій у каналі рівно тоді, коли перевірити його нічим.
  */
 let alertsCache: { at: number; regions: string[] } | null = null;
-async function fetchOfficialAlerts(maxAgeMs = 60_000): Promise<string[] | null> {
+async function fetchOfficialAlerts(maxAgeMs = 25_000): Promise<string[] | null> {
   const now = Date.now();
   if (alertsCache && now - alertsCache.at < maxAgeMs) return alertsCache.regions;
   const controller = new AbortController();
@@ -813,7 +813,7 @@ let alertZonesCache: { at: number; polygons: AlertRing[] } | null = null;
  * а не всі червоним. Вигаданий рівень гірший за його відсутність.
  */
 let alertLevelsCache: { at: number; levels: AlertLevels | null } | null = null;
-async function fetchAlertLevels(maxAgeMs = 60_000): Promise<AlertLevels | null> {
+async function fetchAlertLevels(maxAgeMs = 25_000): Promise<AlertLevels | null> {
   const now = Date.now();
   if (alertLevelsCache && now - alertLevelsCache.at < maxAgeMs) return alertLevelsCache.levels;
   const controller = new AbortController();
@@ -831,7 +831,7 @@ async function fetchAlertLevels(maxAgeMs = 60_000): Promise<AlertLevels | null> 
   }
 }
 
-async function fetchAlertZones(maxAgeMs = 60_000): Promise<AlertRing[]> {
+async function fetchAlertZones(maxAgeMs = 25_000): Promise<AlertRing[]> {
   const now = Date.now();
   if (alertZonesCache && now - alertZonesCache.at < maxAgeMs) return alertZonesCache.polygons;
   const controller = new AbortController();
@@ -3476,10 +3476,17 @@ async function carrierSweep(threats: readonly Threat[], now: number): Promise<vo
  *
  * Пʼятихвилинний крок каналу тут не годиться: шахед за пʼять хвилин проходить
  * пʼятнадцять кілометрів, тобто третину усталеного радіуса — людина отримала б
- * сповіщення тоді, коли воно вже не потрібне. Півтори хвилини — компроміс між
- * цим і навантаженням на джерело, яке нам нічого не винне.
+ * сповіщення тоді, коли воно вже не потрібне.
+ *
+ * Було півтори хвилини — і це була головна причина скарги «система довго реагує
+ * на тривоги»: між оголошенням сирени й сповіщенням могло пройти до 90 с обходу
+ * плюс вік кешу. Тепер пів хвилини. Обхід дешевий: цілі беруться зі СПІЛЬНОГО
+ * кешу (живий WebSocket Нептуна або коротке REST-опитування), офіційні тривоги
+ * — зі спільного кешу на 25 с, а до Telegram доходять лише реальні рішення
+ * `decideAlert`, не кожен тик. Накладання обходів неможливе — їх стереже
+ * `alertSweepRunning`, тож довгий обхід не громадить чергу.
  */
-const ALERT_TICK_EVERY_MS = 90 * 1000;
+const ALERT_TICK_EVERY_MS = 30 * 1000;
 /** Пауза між надсиланнями: Telegram приймає до 30 повідомлень на секунду. */
 const ALERT_SEND_GAP_MS = 40;
 /** Скільки передтривога чекає на сирену, перш ніж перестати рахуватись. */
@@ -3607,7 +3614,11 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   const subs = (await allSubscribers()).filter((s) => !s.muted && pointOf(s, listedAt) !== null);
   if (subs.length === 0) return empty;
 
-  const threats = await fetchThreatsCached(60_000);
+  // Пів хвилини, не хвилина: поки живий WebSocket Нептуна — це картина в
+  // реальному часі байдуже до числа; коли міст упав, обхід не має будити людей
+  // за позицією, старшою за власний крок, тож REST-фолбек оновлюємо щонайменше
+  // раз на 30 с, під темп обходу.
+  const threats = await fetchThreatsCached(30_000);
   const official = await fetchOfficialAlerts();
   const now = Date.now();
 
