@@ -193,6 +193,7 @@ import {
   type OblastDanger,
 } from "./lib/oblast-watch";
 import { dangerNotice } from "./lib/danger-notice";
+import { packAlertMemory, unpackAlertMemory } from "./lib/alert-memory";
 import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
 import { observationsTooOldForAlerts } from "./lib/air";
 import {
@@ -420,8 +421,22 @@ async function health(request: Request): Promise<Response> {
    * інакше цей клас відмов доводиться вгадувати.
    */
   const { dataDirSource, isDurable } = await import("./lib/subscriber-store");
+  /*
+   * Стан обходу тривог — у звіт про здоровʼя.
+   *
+   * Обхід, який не запускається, ззовні НЕ відрізняється від обходу, якому нема
+   * про що сповіщати: і там, і там тиша. Саме так і виглядала ніч, коли
+   * попередження не прийшло. Тепер «коли востаннє працював» і «коли востаннє
+   * слав» можна спитати одним запитом, не заходячи в логи.
+   */
+  const sweep = alertSweepReport();
   let body: Record<string, unknown> = {
     ...report,
+    alertSweep: {
+      lastRunAgoSec: sweep.ranAt === null ? null : Math.round((Date.now() - sweep.ranAt) / 1000),
+      lastSentAgoSec: sweep.sentAt === null ? null : Math.round((Date.now() - sweep.sentAt) / 1000),
+      memoryRestored: sweep.restored,
+    },
     neptunStream: neptunStreamStatus(),
     unknownSources: unknownChannelReport(),
     // Без проби запису: /api/health смикають часто, а проба — це файлова
@@ -3284,6 +3299,38 @@ let alertStarts = new Map<string, number>();
  */
 let knownLevels: Map<string, AlertLevel> | null = null;
 
+/**
+ * Стан обходу видимий назовні — інакше його мовчання непомітне.
+ *
+ * Обхід, який не запускається, ззовні не відрізняється від обходу, якому нема
+ * про що сповіщати. Саме так і виглядала ніч, коли попередження не прийшло.
+ */
+let alertSweepSeen: { ranAt: number | null; sentAt: number | null; restored: boolean } = {
+  ranAt: null,
+  sentAt: null,
+  restored: false,
+};
+export function alertSweepReport(): typeof alertSweepSeen {
+  return alertSweepSeen;
+}
+
+/** Памʼять між перезапусками підтягується один раз на життя процесу. */
+let alertMemoryLoaded = false;
+async function hydrateAlertMemory(now: number): Promise<void> {
+  if (alertMemoryLoaded) return;
+  alertMemoryLoaded = true;
+  const restored = unpackAlertMemory(await readMarker("alert-memory"), now);
+  if (!restored) return;
+  /*
+   * Відновлюємо ЛИШЕ якщо памʼяті ще не набули в цьому процесі: інакше свіжий
+   * зріз, уже взятий цим обходом, затерся б старішим зі сховища.
+   */
+  if (knownAlerts === null) knownAlerts = restored.alerts;
+  if (knownLevels === null) knownLevels = restored.levels as Map<string, AlertLevel>;
+  if (alertStarts.size === 0) alertStarts = restored.starts;
+  alertSweepSeen = { ...alertSweepSeen, restored: true };
+}
+
 async function officialAlertSweep(): Promise<void> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   if (!token) return;
@@ -3291,6 +3338,13 @@ async function officialAlertSweep(): Promise<void> {
   if (active === null) return; // джерело мовчить — станів не вигадуємо
 
   const now = Date.now();
+  /*
+   * Памʼять попереднього зрізу — ДО порівняння. Без неї кожен перезапуск
+   * повертав обхід у стан «перший знімок», де переходів немає за означенням:
+   * тривога, що почалась одразу після редеплою, не оголошувалась нікому.
+   */
+  await hydrateAlertMemory(now);
+  alertSweepSeen = { ...alertSweepSeen, ranAt: now };
   const transitions = oblastTransitions(knownAlerts, active);
   const startsBefore = alertStarts;
   knownAlerts = [...active];
@@ -3308,6 +3362,13 @@ async function officialAlertSweep(): Promise<void> {
   const levelsNow = levelMapOf(levels);
   const escalated = levelEscalations(knownLevels, levelsNow);
   knownLevels = levelsNow;
+
+  /*
+   * Памʼять пишемо ЗАВЖДИ, а не лише коли є що слати. Тихий такт — теж факт:
+   * саме він має стати «що було» для наступного, інакше після перезапуску
+   * порівнювати знову буде ні з чим.
+   */
+  await writeMarker("alert-memory", packAlertMemory(active, levelsNow, alertStarts, now));
 
   if (transitions.length === 0 && escalated.length === 0) return;
 
