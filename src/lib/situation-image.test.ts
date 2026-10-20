@@ -26,29 +26,32 @@ describe("situationSvg", () => {
     ]);
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).toContain("</svg>");
-    // Рахуємо саме позначки, а не кола: коло невизначеності є і в легенді,
-    // тож `<circle` більше не тотожний «ціль». Дрон — силует із rotate,
-    // ракета — ромб.
-    expect((svg.match(/d="M0,-9/g) ?? []).length).toBe(1);
+    // Рахуємо саме позначки, а не кола: силует дрона є і в легенді, тож
+    // рахуємо ПОВЕРНУТІ силуети (позначка), а не сам контур. Ракета — ромб.
+    expect((svg.match(/rotate\(\d+\) scale\([\d.]+\)/g) ?? []).length).toBe(1);
     expect((svg.match(/L-?\d+(\.\d+)?,\d+(\.\d+)? Z" fill="#ff4d4d"/g) ?? []).length).toBe(1);
   });
 
   it("коло невизначеності росте разом із заявленим розкидом", () => {
     const radius = (uncertaintyKm: number) => {
-      const svg = situationSvg([
-        threat({
-          lat: 49,
-          lon: 32,
-          type: "shahed",
-          quality: {
-            uncertaintyKm,
-            position: "approx",
-            lifecycle: "tracking",
-            presumptiveCourse: false,
-            speedKmh: null,
-          },
-        }),
-      ]);
+      const svg = situationSvg(
+        [
+          threat({
+            lat: 49,
+            lon: 32,
+            type: "shahed",
+            quality: {
+              uncertaintyKm,
+              position: "approx",
+              lifecycle: "tracking",
+              presumptiveCourse: false,
+              speedKmh: null,
+            },
+          }),
+        ],
+        [],
+        { uncertainty: true },
+      );
       const m = svg.match(/<circle cx="[\d.]+" cy="[\d.]+" r="(\d+)"/);
       return Number(m![1]);
     };
@@ -57,7 +60,7 @@ describe("situationSvg", () => {
     expect(radius(45)).toBeGreaterThan(radius(4));
   });
 
-  it("припущений курс малюється порожнім контуром, а не залитим силуетом", () => {
+  it("припущений курс — напівпрозорий силует, а не суцільний, як заміряний", () => {
     const presumed = situationSvg([
       threat({
         lat: 49,
@@ -73,14 +76,17 @@ describe("situationSvg", () => {
         },
       }),
     ]);
-    expect(presumed).toContain('fill="none"');
-    expect(presumed).toContain("порожня стрілка");
+    // Напівпрозора заливка з контуром: відмінна від суцільного заміряного,
+    // але не губиться на темному тлі, як порожній тонкий контур.
+    expect(presumed).toContain('fill-opacity="0.3"');
+    expect(presumed).toContain("бліда — курс припущений");
   });
 
   it("легенда не пояснює значків, яких немає", () => {
     const observed = situationSvg([threat({ lat: 49, lon: 32, type: "shahed", heading: 90 })]);
-    expect(observed).toContain("розкид позиції");
-    expect(observed).not.toContain("порожня стрілка");
+    // Розкид — рядком тексту, а не колами (порівняння з Нептуном).
+    expect(observed).toContain("позиції наближені");
+    expect(observed).not.toContain("курс припущений");
   });
 
   it("порожнє небо — валідний SVG без позначок", () => {
@@ -89,6 +95,7 @@ describe("situationSvg", () => {
     expect(svg).not.toContain("<circle ");
     // Порожнє небо — без легенди: пояснювати нічого.
     expect(svg).not.toContain("розкид позиції");
+    expect(svg).not.toContain("позиції наближені");
   });
 
   it("курс на зображенні: стрілка лише коли heading відомий", () => {
@@ -220,8 +227,16 @@ describe("зумована карта каже, ДЕ це і в якому ма�
   });
 
   it("пояснює ореол — на знімку він був найбільшим обʼєктом і нічого не значив", () => {
-    const svg = situationSvgZoom([target], ZP, 70);
+    const svg = situationSvgZoom([target], ZP, 70, { uncertainty: true });
     expect(svg).toContain("де ціль може бути вже зараз");
+  });
+
+  it("усталено — без ореолів, а розкид названо словами", () => {
+    // Порівняння з Нептуном (знімок користувача): чіткий силует за курсом
+    // читається за секунду; десяток ореолів ховав під собою карту.
+    const svg = situationSvgZoom([target], ZP, 70);
+    expect(svg).toContain("позиції наближені");
+    expect(svg).not.toContain('stroke-dasharray="4 6"');
   });
 
   it("назва міста не може зламати розмітку", () => {
@@ -347,22 +362,22 @@ describe("карта показує, що позначка застаріла", 
   });
 
   it("свіжа позначка — без другого кола", () => {
-    const svg = situationSvgZoom([stale(10)], ZP, 70, { now: NOW });
+    const svg = situationSvgZoom([stale(10)], ZP, 70, { now: NOW, uncertainty: true });
     expect(svg).not.toContain('stroke-dasharray="4 6"');
   });
 
   it("застаріла позначка отримує пунктирне коло", () => {
     // Медіанний заміряний застій — 205 с, це 10 км польоту шахеда проти
     // медіанного заявленого розкиду 4 км. Доти карта показувала лише 4.
-    const svg = situationSvgZoom([stale(205)], ZP, 70, { now: NOW });
+    const svg = situationSvgZoom([stale(205)], ZP, 70, { now: NOW, uncertainty: true });
     expect(svg).toContain('stroke-dasharray="4 6"');
   });
 
   it("крапка лишається там, де ціль бачили — її не зсувають", () => {
     // Розширити коло — визнати незнання; зсунути крапку — стверджувати знання.
     // Курс у 21 цілі з 24 припущений, тож зсув їхав би за здогадкою.
-    const fresh = situationSvgZoom([stale(10)], ZP, 70, { now: NOW });
-    const old = situationSvgZoom([stale(400)], ZP, 70, { now: NOW });
+    const fresh = situationSvgZoom([stale(10)], ZP, 70, { now: NOW, uncertainty: true });
+    const old = situationSvgZoom([stale(400)], ZP, 70, { now: NOW, uncertainty: true });
     const at = (svg: string) =>
       svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="\d+" fill="#/)?.slice(1, 3);
     expect(at(fresh)).toEqual(at(old));
@@ -401,13 +416,13 @@ describe("оглядова карта теж знає про застій і п�
      * `now` ІНДЕКС елемента. Вік виходив нульовим, коло застою не малювалось
      * ніколи, і жодного падіння при цьому не було — просто фічі не існувало.
      */
-    expect(dashed(situationSvg([t(600)], [], { now: NOW }))).toBeGreaterThan(
-      dashed(situationSvg([t(5)], [], { now: NOW })),
+    expect(dashed(situationSvg([t(600)], [], { now: NOW, uncertainty: true }))).toBeGreaterThan(
+      dashed(situationSvg([t(5)], [], { now: NOW, uncertainty: true })),
     );
   });
 
   it("свіжа позначка кола застою не отримує — пунктир лишається тільки в легенді", () => {
-    expect(dashed(situationSvg([t(5)], [], { now: NOW }))).toBe(1);
+    expect(dashed(situationSvg([t(5)], [], { now: NOW, uncertainty: true }))).toBe(1);
   });
 
   it("наш вимір курсу бʼє здогадку джерела", () => {

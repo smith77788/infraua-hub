@@ -642,6 +642,17 @@ function ForecastCone({ threats }: { threats: Threat[] }) {
 
 function ThreatLayer({ threats }: { threats: Threat[] }) {
   const map = useMap();
+  /*
+   * Ціль, яку людина торкнулась. Лише для неї малюємо розкид позиції й вектор
+   * курсу.
+   *
+   * Доти кожна позначка несла коло невизначеності й пунктир курсу постійно, і
+   * в наліт карта тонула в ореолах. Порівняння з Нептуном (знімок
+   * користувача): там — лише чіткий силует, повернутий за курсом, і карта
+   * читається за секунду. Розкид при цьому не зникає: він на дотик — у самій
+   * позначці (коло/«крапля») і словами в картці.
+   */
+  const [selected, setSelected] = useState<string | null>(null);
   const [zoom, setZoom] = useState(map.getZoom());
   const [bounds, setBounds] = useState<L.LatLngBounds>(map.getBounds());
   useMapEvents({
@@ -784,7 +795,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             : null;
         return (
           <Fragment key={t.id}>
-            {sector ? (
+            {selected !== t.id ? null : sector ? (
               <Polygon positions={sector} pathOptions={ringStyle} />
             ) : (
               <Circle center={[t.lat, t.lon]} radius={radiusKm * 1000} pathOptions={ringStyle} />
@@ -799,7 +810,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 }}
               />
             ) : null}
-            {vecEnd ? (
+            {vecEnd && selected === t.id ? (
               <Polyline
                 positions={[[t.lat, t.lon], vecEnd]}
                 pathOptions={{
@@ -818,6 +829,10 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               position={[t.lat, t.lon]}
               icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
+              eventHandlers={{
+                popupopen: () => setSelected(t.id),
+                popupclose: () => setSelected((cur) => (cur === t.id ? null : cur)),
+              }}
             >
               <Popup maxWidth={220} autoPanPadding={[8, 8]}>
                 {/*
