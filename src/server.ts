@@ -197,6 +197,7 @@ import {
 } from "./lib/oblast-watch";
 import { dangerNotice } from "./lib/danger-notice";
 import { packAlertMemory, unpackAlertMemory } from "./lib/alert-memory";
+import { appendBoot, bootReport, parseBootLog, type Boot } from "./lib/boot-log";
 import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
 import { observationsTooOldForAlerts } from "./lib/air";
 import {
@@ -440,6 +441,12 @@ async function health(request: Request): Promise<Response> {
       lastSentAgoSec: sweep.sentAt === null ? null : Math.round((Date.now() - sweep.sentAt) / 1000),
       memoryRestored: sweep.restored,
     },
+    /*
+     * Перезапуски: скільки разів процес піднімався на ТІЙ САМІЙ збірці.
+     * Нуль означає, що кожен перезапуск був виходом нової версії, а не
+     * падінням. Див. `boot-log.ts`.
+     */
+    boots: bootLogReport(),
     neptunStream: neptunStreamStatus(),
     // Чи знайдено шрифт картинок: без нього з постів зникав увесь текст.
     imageFonts: await (await import("./lib/image-fonts")).fontStatus(),
@@ -4367,6 +4374,42 @@ function startAlertScheduler(): void {
   (alertTimer as unknown as { unref?: () => void }).unref?.();
 }
 startAlertScheduler();
+
+/**
+ * Запис цього запуску в журнал на томі — щоб перезапуск можна було відрізнити
+ * від деплою.
+ *
+ * Питання «чому перезапускається» з одного `uptime` не розвʼязується: він
+ * каже вік процесу й нічого про причину. Журнал із SHA збірки відповідає
+ * прямо — новий SHA означає деплой, той самий SHA означає, що процес
+ * піднявся сам.
+ *
+ * Із тією ж затримкою, що й самоперевірка сховища: том Railway монтується при
+ * старті контейнера, і запис у першу ж мілісекунду міг би піти в нікуди.
+ * Невдалий запис нічого не ламає — журнал просто лишиться коротшим.
+ */
+let bootLog: Boot[] = [];
+export function bootLogReport(): ReturnType<typeof bootReport> {
+  return bootReport(bootLog);
+}
+
+async function recordBoot(): Promise<void> {
+  const previous = parseBootLog(await readMarker("boot-log"));
+  bootLog = appendBoot(previous, {
+    at: PROCESS_STARTED_AT,
+    sha: currentBuild().sha ?? "",
+  });
+  await writeMarker("boot-log", JSON.stringify(bootLog));
+}
+
+function startBootRecord(): void {
+  const timer = setTimeout(() => {
+    void recordBoot();
+  }, 5_000);
+  // Журнал запусків не має права тримати процес живим.
+  if (typeof timer === "object" && timer && "unref" in timer) timer.unref();
+}
+startBootRecord();
 
 /**
  * Самоперевірка сховища при старті.
