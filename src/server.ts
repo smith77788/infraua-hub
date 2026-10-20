@@ -3763,11 +3763,42 @@ function alertCandidates(subs: readonly Subscriber[], threats: readonly Threat[]
  * Рішення «будити чи ні» лишається там, де було, — у чистій `decideAlert`.
  */
 /*
- * Журнал справджуваності попереджень. У памʼяті процесу: редеплой обнуляє
- * ковзне вікно (findings #106) — для числа «яка частка справдилась» це втрата
- * вибірки, а не хибне значення.
+ * Журнал якості попереджень (`alert-outcome`) і замір точності руху
+ * (`drift-accuracy`). Обидва зберігаються на томі: без цього кожен редеплой
+ * обнуляв би вибірку, і число «скільки попереджень справдилось» ніколи б не
+ * набирало ваги. Пишемо не частіше за хвилину — це метрика, а не стан, від
+ * якого залежить, чи когось розбудять.
  */
-const alertOutcomes = new AlertOutcomes();
+let alertOutcomes = new AlertOutcomes();
+let qualityLoaded = false;
+let qualitySavedAt = 0;
+const QUALITY_MARKER = "quality-ledger";
+const QUALITY_SAVE_EVERY_MS = 60_000;
+
+async function hydrateQuality(): Promise<void> {
+  if (qualityLoaded) return;
+  qualityLoaded = true;
+  const raw = await readMarker(QUALITY_MARKER);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw) as { outcomes?: unknown; drift?: unknown };
+    alertOutcomes = AlertOutcomes.fromState(parsed.outcomes);
+    const { restoreDriftAccuracy } = await import("./lib/neptun-stream");
+    restoreDriftAccuracy(parsed.drift);
+  } catch {
+    // Битий файл — починаємо вибірку з нуля, а не з невідомо чого.
+  }
+}
+
+async function saveQuality(now: number): Promise<void> {
+  if (now - qualitySavedAt < QUALITY_SAVE_EVERY_MS) return;
+  qualitySavedAt = now;
+  const { driftAccuracyState } = await import("./lib/neptun-stream");
+  await writeMarker(
+    QUALITY_MARKER,
+    JSON.stringify({ outcomes: alertOutcomes.toState(), drift: driftAccuracyState() }),
+  );
+}
 
 async function personalAlertSweep(): Promise<AlertSweepResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
@@ -3784,6 +3815,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   // за позицією, старшою за власний крок, тож REST-фолбек оновлюємо щонайменше
   // раз на 30 с, під темп обходу.
   const threats = await fetchThreatsCached(30_000);
+  await hydrateQuality();
   // Звірка вже надісланих попереджень із фактичними фіксаціями — див.
   // `alert-outcome`. До будь-якого раннього виходу: вирок не має залежати від
   // того, чи будемо слати щось нове.
@@ -3838,6 +3870,21 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     const sub = forgetStale(raw, now);
     const point = pointOf(sub, now);
     if (!point) continue;
+    // Чи зайшла ціль у радіус тривоги — і чи людину ДО цього попередили.
+    // Рахується до рішення цього обходу: попередження, надіслане вже після
+    // наближення, — запізніле, і число має це бачити.
+    alertOutcomes.approach(
+      {
+        chatId: sub.chatId,
+        lat: point.lat,
+        lon: point.lon,
+        radiusKm: concernRadiusKm(sub.radiusKm),
+        lastAlertAt: sub.lastAlertAt > 0 ? sub.lastAlertAt : null,
+        quiet: isNight(hour) && sub.night === "silent",
+      },
+      threats,
+      now,
+    );
 
     /*
      * За кордоном офіційна фаза — «невідомо», а не «ще не оголошена».
@@ -4231,6 +4278,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     );
   }
 
+  await saveQuality(Date.now());
   return {
     checked: considered.length,
     sent: report.sent,

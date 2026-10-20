@@ -47,11 +47,21 @@ export interface BasisAccuracy {
    * заміру на користь руху видно одразу.
    */
   samePlace: number;
-  medianDriftKm: number;
-  medianStillKm: number;
+  /** `null`, поки вибірки немає: нуль читався б як «ідеальна точність». */
+  medianDriftKm: number | null;
+  medianStillKm: number | null;
   /** Частка випадків, де рух ближчий до правди, ніж нерухома позначка. */
-  driftWins: number;
+  driftWins: number | null;
 }
+
+/** Серіалізований стан — для збереження на томі між перезапусками. */
+export interface DriftAccuracyState {
+  v: 1;
+  samples: DriftSample[];
+  samePlace: [DriftSample["basis"], number][];
+}
+
+const BASES: readonly DriftSample["basis"][] = ["measured", "stated", "presumed"];
 
 /*
  * Межі, в яких порівняння має сенс. Менше 30 с між фіксаціями — це те саме
@@ -130,18 +140,44 @@ export class DriftAccuracy {
       const samePlace = this.samePlace.get(basis) ?? 0;
       if (!list.length && !samePlace) continue;
       const round = (x: number) => Math.round(x * 10) / 10;
+      const has = list.length > 0;
       out[basis] = {
         n: list.length,
         samePlace,
-        medianDriftKm: round(median(list.map((s) => s.driftErrKm))),
-        medianStillKm: round(median(list.map((s) => s.stillErrKm))),
-        driftWins: list.length
+        medianDriftKm: has ? round(median(list.map((s) => s.driftErrKm))) : null,
+        medianStillKm: has ? round(median(list.map((s) => s.stillErrKm))) : null,
+        driftWins: has
           ? Math.round(
               (list.filter((s) => s.driftErrKm < s.stillErrKm).length / list.length) * 100,
             ) / 100
-          : 0,
+          : null,
       };
     }
     return out;
+  }
+
+  toState(): DriftAccuracyState {
+    return { v: 1, samples: [...this.samples.values()].flat(), samePlace: [...this.samePlace] };
+  }
+
+  /** Бите чи чуже — ігноруємо цілком: краще почати вибірку з нуля. */
+  restore(raw: unknown): void {
+    if (!raw || typeof raw !== "object" || (raw as { v?: unknown }).v !== 1) return;
+    const st = raw as DriftAccuracyState;
+    const num = (x: unknown) => typeof x === "number" && Number.isFinite(x);
+    if (Array.isArray(st.samples))
+      for (const x of st.samples)
+        if (
+          x &&
+          BASES.includes(x.basis) &&
+          num(x.minutes) &&
+          num(x.driftErrKm) &&
+          num(x.stillErrKm)
+        )
+          this.record(x);
+    if (Array.isArray(st.samePlace))
+      for (const p of st.samePlace)
+        if (Array.isArray(p) && BASES.includes(p[0]) && num(p[1]))
+          this.samePlace.set(p[0], (this.samePlace.get(p[0]) ?? 0) + p[1]);
   }
 }

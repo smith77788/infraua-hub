@@ -81,4 +81,26 @@ describe("DriftAccuracy — зведення", () => {
   it("порожній замір — порожнє зведення, а не нулі, що читаються як «ідеально»", () => {
     expect(new DriftAccuracy().summary()).toEqual({});
   });
+
+  it("без вибірки — null, а не нулі, що читаються як «ідеальна точність»", () => {
+    const acc = new DriftAccuracy();
+    const at = new Date(Date.parse(RAW.confirmedAt!) + 6 * 60_000).toISOString();
+    acc.observe(prev, { ...prev, since: at, lastSeen: at });
+    expect(acc.summary().presumed).toMatchObject({
+      n: 0,
+      medianDriftKm: null,
+      medianStillKm: null,
+      driftWins: null,
+    });
+  });
+
+  it("стан переживає перезапуск", () => {
+    const acc = new DriftAccuracy();
+    acc.observe(prev, fixAfter(6, 254.432, 18));
+    const back = new DriftAccuracy();
+    back.restore(JSON.parse(JSON.stringify(acc.toState())));
+    expect(back.summary()).toEqual(acc.summary());
+    back.restore({ v: 9, samples: [{ basis: "presumed" }] });
+    expect(back.summary().presumed!.n).toBe(1);
+  });
 });

@@ -1,5 +1,5 @@
 import type { Threat } from "./air";
-import { DriftAccuracy } from "./drift-accuracy";
+import { DriftAccuracy, type DriftAccuracyState } from "./drift-accuracy";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 
 /**
@@ -275,6 +275,15 @@ export function reconcileNeptunStream(rest: Threat[], startedAt: number): void {
     }
   }
   lastReconcile = { at: startedAt, added, removed };
+}
+
+/** Стан заміру точності руху — щоб пережив редеплой (пише/читає server.ts). */
+export function driftAccuracyState(): DriftAccuracyState {
+  return accuracy.toState();
+}
+
+export function restoreDriftAccuracy(raw: unknown): void {
+  accuracy.restore(raw);
 }
 
 /** Діагностика стану мосту (для health-ендпойнта / адмін-панелі). */
