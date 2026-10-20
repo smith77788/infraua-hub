@@ -64,6 +64,8 @@ import { verifyInitData, ADMIN_INITDATA_MAX_AGE_SEC } from "./lib/telegram-initd
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
+import { concernRadiusKm } from "./lib/advisory";
+import { AlertOutcomes } from "./lib/alert-outcome";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
 import {
   isInUkraine,
@@ -438,6 +440,9 @@ async function health(request: Request): Promise<Response> {
       memoryRestored: sweep.restored,
     },
     neptunStream: neptunStreamStatus(),
+    // Яка частка доставлених попереджень справдилась: ціль пролетіла в радіусі
+    // тривоги людини. «Не підтвердились» — не «хибні»: див. `alert-outcome`.
+    alertOutcomes: alertOutcomes.summary(),
     unknownSources: unknownChannelReport(),
     // Без проби запису: /api/health смикають часто, а проба — це файлова
     // операція на кожен виклик. Глибша діагностика вже є в /api/subscribers/stats.
@@ -3757,6 +3762,13 @@ function alertCandidates(subs: readonly Subscriber[], threats: readonly Threat[]
  *
  * Рішення «будити чи ні» лишається там, де було, — у чистій `decideAlert`.
  */
+/*
+ * Журнал справджуваності попереджень. У памʼяті процесу: редеплой обнуляє
+ * ковзне вікно (findings #106) — для числа «яка частка справдилась» це втрата
+ * вибірки, а не хибне значення.
+ */
+const alertOutcomes = new AlertOutcomes();
+
 async function personalAlertSweep(): Promise<AlertSweepResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   const empty: AlertSweepResult = { checked: 0, sent: 0, skipped: 0 };
@@ -3772,6 +3784,10 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   // за позицією, старшою за власний крок, тож REST-фолбек оновлюємо щонайменше
   // раз на 30 с, під темп обходу.
   const threats = await fetchThreatsCached(30_000);
+  // Звірка вже надісланих попереджень із фактичними фіксаціями — див.
+  // `alert-outcome`. До будь-якого раннього виходу: вирок не має залежати від
+  // того, чи будемо слати щось нове.
+  alertOutcomes.resolve(threats, Date.now());
   const official = await fetchOfficialAlerts();
   const now = Date.now();
 
@@ -4158,6 +4174,16 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
             placeAlerts: markPlaceAlerted(fresh.placeAlerts, place, at),
           });
         } else if (decision) {
+          const at0 = pointOf(sub, at);
+          if (at0) {
+            alertOutcomes.record({
+              chatId: sub.chatId,
+              lat: at0.lat,
+              lon: at0.lon,
+              radiusKm: concernRadiusKm(sub.radiusKm),
+              at,
+            });
+          }
           const marked = markAlerted(
             {
               ...sub,
