@@ -40,7 +40,8 @@ import { swarmForecast } from "@/lib/swarm-forecast";
 import { forecastCone } from "@/lib/trajectory";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
-import { fixedAtMs } from "@/lib/position-age";
+import { fixedAtMs, nowRadiusKm } from "@/lib/position-age";
+import { driftSector, spreadFor } from "@/lib/drift-sector";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -753,24 +754,41 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         const projected = projKm > 0;
         const radiusKm = displayRadiusKm(q) + projKm;
         const courseObserved = courseIsObserved(q);
+        const ringStyle = {
+          color: style.color,
+          weight: 1,
+          opacity: fresh === "stale" ? 0.18 : 0.35,
+          fillColor: style.color,
+          fillOpacity: fresh === "stale" ? 0.03 : 0.07,
+          // Заявлений джерелом радіус — суцільний контур; наше
+          // консервативне припущення, коли джерело промовчало, —
+          // пунктир. Різницю видно, не читаючи попап. Протягнута позиція
+          // — теж пунктир: центр кола сам є оцінкою.
+          ...(radiusIsStated(q) && !projected ? {} : { dashArray: "3 6" }),
+        };
+        /*
+         * Курс відомий і ціль протягнуто — «крапля» від місця фіксації вперед
+         * по курсу, а не коло довкола оцінки: позаду себе ціль опинитись не
+         * могла (`drift-sector`). Без курсу — коло, як і було.
+         */
+        const sector =
+          hasCourse && projected
+            ? driftSector({
+                lat: t.fixLat,
+                lon: t.fixLon,
+                courseDeg: t.heading as number,
+                spreadDeg: spreadFor(courseObserved || t.projBasis === "measured"),
+                driftKm: Math.max(projKm, nowRadiusKm(t, Date.now()).driftKm),
+                statedKm: displayRadiusKm(q),
+              })
+            : null;
         return (
           <Fragment key={t.id}>
-            <Circle
-              center={[t.lat, t.lon]}
-              radius={radiusKm * 1000}
-              pathOptions={{
-                color: style.color,
-                weight: 1,
-                opacity: fresh === "stale" ? 0.18 : 0.35,
-                fillColor: style.color,
-                fillOpacity: fresh === "stale" ? 0.03 : 0.07,
-                // Заявлений джерелом радіус — суцільний контур; наше
-                // консервативне припущення, коли джерело промовчало, —
-                // пунктир. Різницю видно, не читаючи попап. Протягнута позиція
-                // — теж пунктир: центр кола сам є оцінкою.
-                ...(radiusIsStated(q) && !projected ? {} : { dashArray: "3 6" }),
-              }}
-            />
+            {sector ? (
+              <Polygon positions={sector} pathOptions={ringStyle} />
+            ) : (
+              <Circle center={[t.lat, t.lon]} radius={radiusKm * 1000} pathOptions={ringStyle} />
+            )}
             {observed.length >= 2 ? (
               <Polyline
                 positions={observed}

@@ -29,6 +29,9 @@ import { UA_OBLASTS } from "./ua-oblasts";
 import { CITIES } from "./ua-cities";
 import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
 import { type AlertLevel, LEVEL_COLOR, LEVEL_LABEL } from "./alert-levels";
+import { advance } from "./dead-reckoning";
+import { driftSector, spreadFor } from "./drift-sector";
+import { SPEED_KMH } from "./threat-eta";
 import { nowRadiusKm } from "./position-age";
 
 /**
@@ -174,6 +177,8 @@ interface MarkerParts {
   outline: string;
   /** Пунктир «де ціль може бути вже зараз». */
   drift: string;
+  /** Лінія курсу вперед — куди ціль летить, а не лише де вона. */
+  course: string;
   /** Сама позначка — завжди нагорі. */
   icon: string;
 }
@@ -199,12 +204,14 @@ function markerLayers(
   let fills = "";
   let outlines = "";
   let drifts = "";
+  let courses = "";
   let icons = "";
   for (const t of threats) {
     const p = markerParts(t, proj, pxPerKm, now, courseOf);
     fills += p.fill;
     outlines += p.outline;
     if (!opts.driftFor || opts.driftFor.has(t.id)) drifts += p.drift;
+    courses += p.course;
     icons += p.icon;
   }
   return {
@@ -212,7 +219,9 @@ function markerLayers(
       (fills ? `<g opacity="0.16">${fills}</g>` : "") +
       (outlines ? `<g opacity="0.4">${outlines}</g>` : "") +
       (drifts ? `<g opacity="0.5">${drifts}</g>` : ""),
-    over: icons,
+    // Лінії курсу — під значками, над підписами: напрямок читається, але
+    // значок цілі лишається найпомітнішим.
+    over: courses + icons,
   };
 }
 
@@ -261,11 +270,34 @@ function markerParts(
    */
   const nowR = nowRadiusKm(t, now);
   const driftPx = Math.round(nowR.likelyKm * pxPerKm);
+  /*
+   * Курс відомий — «крапля» вперед по курсу, а не коло: позаду цілі вона
+   * опинитись не могла. Див. `drift-sector.ts`. Без курсу — коло, як і було.
+   */
+  const sector =
+    hint !== null
+      ? driftSector({
+          lat: t.lat,
+          lon: t.lon,
+          courseDeg: hint.deg,
+          spreadDeg: spreadFor(hint.observed),
+          driftKm: nowR.driftKm,
+          statedKm: nowR.statedKm,
+        })
+      : null;
   const drift =
-    driftPx > r + 3
-      ? `<circle cx="${x}" cy="${y}" r="${driftPx}" fill="none" stroke="${color}" ` +
-        `stroke-width="1" stroke-dasharray="4 6"/>`
-      : "";
+    driftPx <= r + 3
+      ? ""
+      : sector
+        ? `<path d="${sector
+            .map(([la, lo], i) => {
+              const [px, py] = proj(la, lo);
+              return `${i === 0 ? "M" : "L"}${px},${py}`;
+            })
+            .join(" ")} Z" fill="none" stroke="${color}" stroke-width="1" ` +
+          `stroke-dasharray="4 6" stroke-linejoin="round"/>`
+        : `<circle cx="${x}" cy="${y}" r="${driftPx}" fill="none" stroke="${color}" ` +
+          `stroke-width="1" stroke-dasharray="4 6"/>`;
   // Прозорість — у шарі (`markerLayers`), не тут: інакше перетини накопичуються.
   const fill = `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}"/>`;
   // Заявлений джерелом радіус — тонкий контур; наше припущення, коли
@@ -273,7 +305,25 @@ function markerParts(
   const outline = radiusIsStated(q)
     ? `<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="${color}" stroke-width="0.8"/>`
     : "";
-  const parts = (icon: string): MarkerParts => ({ fill, outline, drift, icon });
+  /*
+   * Лінія курсу вперед — на 10 хв польоту з найімовірнішою швидкістю типу, не
+   * довша за 40 км (балістика за 10 хв перетнула б пів країни, і лінія
+   * читалась би як траєкторія, якої ми не знаємо). Заміряний курс —
+   * виразніший пунктир, припущений — блідий: та сама мова, що й у стрілки.
+   */
+  let course = "";
+  if (hint !== null) {
+    const lenKm = Math.min(COURSE_LINE_MAX_KM, (SPEED_KMH[type] * COURSE_LINE_MIN) / 60);
+    const end = advance(t.lat, t.lon, hint.deg, lenKm);
+    const [ex, ey] = proj(end.lat, end.lon);
+    if (Number.isFinite(ex) && Number.isFinite(ey))
+      course =
+        `<line x1="${x}" y1="${y}" x2="${ex}" y2="${ey}" stroke="${color}" ` +
+        (hint.observed
+          ? `stroke-width="1.6" stroke-dasharray="6 4" opacity="0.85"/>`
+          : `stroke-width="1.2" stroke-dasharray="2 5" opacity="0.6"/>`);
+  }
+  const parts = (icon: string): MarkerParts => ({ fill, outline, drift, course, icon });
 
   // Дрон зі СТРІЛКОЮ — лише коли курс відомий. Інакше не вигадуємо напрямок
   // (це й була причина «курс неправильний»): малюємо нейтральну крапку.
@@ -385,6 +435,10 @@ function legend(showPresumed: boolean): string {
  * ореолу чи межі області, без підкладки-прямокутника, що ховала б карту.
  */
 const TEXT_HALO = `stroke="#0b0f16" stroke-width="3" stroke-linejoin="round" paint-order="stroke"`;
+
+/** Довжина лінії курсу: хвилини польоту й стеля, км. */
+const COURSE_LINE_MIN = 10;
+const COURSE_LINE_MAX_KM = 40;
 
 /** Скільки цілей у кадрі зуму вже «щільно» — і скільком найближчим лишати пунктир. */
 const DENSE_ZOOM = 6;
@@ -803,7 +857,7 @@ export function situationSvgZoom(
    */
   const note =
     `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-    `суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз</text>`;
+    `суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз (уперед по курсу)</text>`;
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +

@@ -14,6 +14,9 @@ import { driftPosition, type DriftBasis } from "@/lib/threat-drift";
 export interface DisplayThreat extends Threat {
   projKm: number;
   projBasis: DriftBasis;
+  /** Де ціль ЗАФІКСУВАЛИ — вершина «краплі» невизначеності (`drift-sector`). */
+  fixLat: number;
+  fixLon: number;
 }
 
 interface Track {
@@ -111,7 +114,8 @@ export function useThreatMotion(threats: Threat[]): DisplayThreat[] {
     const d = driftPosition(t, now);
     const projKm = d.km >= PROJECTED_MIN_KM ? d.km : 0;
     const projBasis: DriftBasis = projKm > 0 ? d.basis : "none";
-    if (!tr) return { ...t, projKm, projBasis };
-    return { ...t, lat: tr.dispLat, lon: tr.dispLon, projKm, projBasis };
+    const fix = { fixLat: t.lat, fixLon: t.lon };
+    if (!tr) return { ...t, projKm, projBasis, ...fix };
+    return { ...t, lat: tr.dispLat, lon: tr.dispLon, projKm, projBasis, ...fix };
   });
 }
