@@ -49,7 +49,9 @@ export function mapNeptunType(type: string | undefined, text: string): ThreatTyp
   if (/kab/.test(t)) return "kab";
   if (/recon|rozvid/.test(t)) return "recon";
   if (/aircraft|jet|avia/.test(t)) return "aircraft";
-  if (/fpv|uav|drone|bpla|shahed/.test(t)) return "shahed";
+  // FPV — окремо й раніше за загальний «дрон»: Нептун має для нього власний тип.
+  if (/fpv/.test(t)) return "fpv";
+  if (/uav|drone|bpla|shahed/.test(t)) return "shahed";
   return "unknown";
 }
 

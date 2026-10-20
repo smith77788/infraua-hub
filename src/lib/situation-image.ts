@@ -29,6 +29,10 @@ import { UA_OBLASTS } from "./ua-oblasts";
 import { CITIES } from "./ua-cities";
 import { courseIsObserved, displayRadiusKm, EMPTY_QUALITY, radiusIsStated } from "./threat-quality";
 import { type AlertLevel, LEVEL_COLOR, LEVEL_LABEL } from "./alert-levels";
+import { advance } from "./dead-reckoning";
+import { driftSector, spreadFor } from "./drift-sector";
+import { SPEED_KMH } from "./threat-eta";
+import { LEGEND_ORDER, TYPE_STYLE } from "./threat-glyphs";
 import { nowRadiusKm } from "./position-age";
 
 /**
@@ -97,6 +101,7 @@ function project(lat: number, lon: number): [number, number] {
 const COLOR: Record<ThreatType, string> = {
   shahed: "#ffd23f",
   reactive: "#ff8c1a",
+  fpv: "#a3e635",
   cruise: "#ff6a2a",
   missile: "#ff4d4d",
   ballistic: "#ff2d2d",
@@ -136,10 +141,6 @@ export type CourseOf = (t: Threat) => CourseHint | null;
 /** Пікселів на кілометр для оглядової проєкції (SCALE — px на градус широти). */
 const PX_PER_KM = SCALE / 111.32;
 
-function marker(t: Threat, now: number, courseOf?: CourseOf | undefined): string {
-  return markerWith(t, project, PX_PER_KM, now, courseOf);
-}
-
 /**
  * Позначка цілі на картинці, яку бачить канал.
  *
@@ -159,13 +160,97 @@ function marker(t: Threat, now: number, courseOf?: CourseOf | undefined): string
  * припущений курс дає порожній контур замість залитого силуету: напрямок
  * видно, але видно й те, що це здогадка.
  */
-function markerWith(
+/**
+ * Позначка цілі, розкладена на шари.
+ *
+ * Розкладено, бо порядок малювання — це зміст, а не косметика. Коли кожна
+ * позначка малювала свій ореол разом із собою, ореоли (а) ставали над
+ * підписами міст і самим підписом міста тривоги, і (б) кожен мав власну
+ * прозорість 0,16, тож десяток перетинів складався в суцільну жовту пляму.
+ * Знімок із проду (зум Запоріжжя, ~12 цілей): ні назви міста, ні сусідів, ні
+ * самих цілей — «просто жах». Тепер ореоли малюються одним шаром із ГРУПОВОЮ
+ * прозорістю: перетин кількох кіл має той самий відтінок, що й одне, — видно
+ * зону, де можуть бути цілі, а не їхню кількість, накладену фарбою.
+ */
+interface MarkerParts {
+  /** Заливка кола невизначеності — малюється без власної прозорості. */
+  fill: string;
+  /** Контур заявленого радіуса. */
+  outline: string;
+  /** Пунктир «де ціль може бути вже зараз». */
+  drift: string;
+  /** Лінія курсу вперед — куди ціль летить, а не лише де вона. */
+  course: string;
+  /** Сама позначка — завжди нагорі. */
+  icon: string;
+}
+
+/** Опції шарів: скільки пунктирів лишити, коли кадр щільний. */
+interface LayerOpts {
+  /** Малювати пунктир «де зараз» лише для цих id; `undefined` — для всіх. */
+  driftFor?: ReadonlySet<string> | undefined;
+  /**
+   * Малювати розкид (ореоли, «краплі», лінії курсу). Усталено — НІ.
+   *
+   * Порівняння з Нептуном (знімок користувача): там лише чіткий силует,
+   * повернутий за курсом, і карта читається за секунду. У нас кожна ціль
+   * несла коло, пунктир і лінію — і в наліт картинка тонула в ореолах.
+   * Розкид не зникає: на картинці він стоїть одним рядком тексту
+   * (`spreadNote`), а на карті бота — на дотик до цілі.
+   */
+  uncertainty?: boolean | undefined;
+  /**
+   * Масштаб значків. Без ореолів значок — єдине, що несе ціль, тож він має
+   * бути великим: огляд — ×1,15, зум міста — ×1,4.
+   */
+  iconScale?: number | undefined;
+}
+
+/**
+ * Позначки всіх цілей, зібрані в шари: `under` — ореоли (під підписами),
+ * `over` — значки (над усім).
+ */
+function markerLayers(
+  threats: readonly Threat[],
+  proj: Proj,
+  pxPerKm: number,
+  now: number,
+  courseOf?: CourseOf | undefined,
+  opts: LayerOpts = {},
+): { under: string; over: string } {
+  let fills = "";
+  let outlines = "";
+  let drifts = "";
+  let courses = "";
+  let icons = "";
+  for (const t of threats) {
+    const p = markerParts(t, proj, pxPerKm, now, courseOf, opts.iconScale ?? 1);
+    fills += p.fill;
+    outlines += p.outline;
+    if (!opts.driftFor || opts.driftFor.has(t.id)) drifts += p.drift;
+    courses += p.course;
+    icons += p.icon;
+  }
+  if (!opts.uncertainty) return { under: "", over: icons };
+  return {
+    under:
+      (fills ? `<g opacity="0.16">${fills}</g>` : "") +
+      (outlines ? `<g opacity="0.4">${outlines}</g>` : "") +
+      (drifts ? `<g opacity="0.5">${drifts}</g>` : ""),
+    // Лінії курсу — під значками, над підписами: напрямок читається, але
+    // значок цілі лишається найпомітнішим.
+    over: courses + icons,
+  };
+}
+
+function markerParts(
   t: Threat,
   proj: Proj,
   pxPerKm: number,
   now: number,
   courseOf?: CourseOf | undefined,
-): string {
+  iconScale = 1,
+): MarkerParts {
   const type: ThreatType = t.type ?? "unknown";
   const [x, y] = proj(t.lat, t.lon);
   const color = COLOR[type];
@@ -204,43 +289,118 @@ function markerWith(
    */
   const nowR = nowRadiusKm(t, now);
   const driftPx = Math.round(nowR.likelyKm * pxPerKm);
+  /*
+   * Курс відомий — «крапля» вперед по курсу, а не коло: позаду цілі вона
+   * опинитись не могла. Див. `drift-sector.ts`. Без курсу — коло, як і було.
+   */
+  const sector =
+    hint !== null
+      ? driftSector({
+          lat: t.lat,
+          lon: t.lon,
+          courseDeg: hint.deg,
+          spreadDeg: spreadFor(hint.observed),
+          driftKm: nowR.driftKm,
+          statedKm: nowR.statedKm,
+        })
+      : null;
   const drift =
-    driftPx > r + 3
-      ? `<circle cx="${x}" cy="${y}" r="${driftPx}" fill="none" stroke="${color}" ` +
-        `stroke-width="1" stroke-dasharray="4 6" opacity="0.5"/>`
-      : "";
-  const halo =
-    drift +
-    `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.16"/>` +
-    // Заявлений джерелом радіус — тонкий контур; наше припущення, коли
-    // джерело промовчало, лишається без нього.
-    (radiusIsStated(q)
-      ? `<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="${color}" stroke-width="0.8" opacity="0.4"/>`
-      : "");
+    driftPx <= r + 3
+      ? ""
+      : sector
+        ? `<path d="${sector
+            .map(([la, lo], i) => {
+              const [px, py] = proj(la, lo);
+              return `${i === 0 ? "M" : "L"}${px},${py}`;
+            })
+            .join(" ")} Z" fill="none" stroke="${color}" stroke-width="1" ` +
+          `stroke-dasharray="4 6" stroke-linejoin="round"/>`
+        : `<circle cx="${x}" cy="${y}" r="${driftPx}" fill="none" stroke="${color}" ` +
+          `stroke-width="1" stroke-dasharray="4 6"/>`;
+  // Прозорість — у шарі (`markerLayers`), не тут: інакше перетини накопичуються.
+  const fill = `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}"/>`;
+  // Заявлений джерелом радіус — тонкий контур; наше припущення, коли
+  // джерело промовчало, лишається без нього.
+  const outline = radiusIsStated(q)
+    ? `<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="${color}" stroke-width="0.8"/>`
+    : "";
+  /*
+   * Лінія курсу вперед — на 10 хв польоту з найімовірнішою швидкістю типу, не
+   * довша за 40 км (балістика за 10 хв перетнула б пів країни, і лінія
+   * читалась би як траєкторія, якої ми не знаємо). Заміряний курс —
+   * виразніший пунктир, припущений — блідий: та сама мова, що й у стрілки.
+   */
+  let course = "";
+  if (hint !== null) {
+    const lenKm = Math.min(COURSE_LINE_MAX_KM, (SPEED_KMH[type] * COURSE_LINE_MIN) / 60);
+    const end = advance(t.lat, t.lon, hint.deg, lenKm);
+    const [ex, ey] = proj(end.lat, end.lon);
+    if (Number.isFinite(ex) && Number.isFinite(ey))
+      course =
+        `<line x1="${x}" y1="${y}" x2="${ex}" y2="${ey}" stroke="${color}" ` +
+        (hint.observed
+          ? `stroke-width="1.6" stroke-dasharray="6 4" opacity="0.85"/>`
+          : `stroke-width="1.2" stroke-dasharray="2 5" opacity="0.6"/>`);
+  }
+  const parts = (icon: string): MarkerParts => ({ fill, outline, drift, course, icon });
 
-  // Дрон зі СТРІЛКОЮ — лише коли курс відомий. Інакше не вигадуємо напрямок
-  // (це й була причина «курс неправильний»): малюємо нейтральну крапку.
-  if ((type === "shahed" || type === "reactive") && hasCourse) {
-    const fill = observed ? color : "none";
-    const width = observed ? 1.4 : 1.6;
-    const stroke = observed ? "#0a0e14" : color;
-    return (
-      halo +
-      `<g transform="translate(${x} ${y}) rotate(${Math.round(hint.deg)}) scale(0.95)">` +
-      `<path d="${DRONE}" fill="${fill}" stroke="${stroke}" stroke-width="${width}" stroke-linejoin="round"/></g>`
-    );
+  return parts(glyphIcon(type, x, y, hasCourse ? hint.deg : null, observed, iconScale));
+}
+
+/*
+ * Типи, у силуету яких є «ніс»: їх повертаємо за курсом. FPV (квадрокоптер)
+ * симетричний — повертати нема чого.
+ */
+const NOSED: ReadonlySet<ThreatType> = new Set([
+  "shahed",
+  "reactive",
+  "cruise",
+  "missile",
+  "ballistic",
+  "kab",
+  "recon",
+  "aircraft",
+]);
+
+/**
+ * Значок цілі — силует ТИПУ, той самий, що на карті бота (`threat-glyphs`).
+ *
+ * Доти картинка каналу малювала всі дрони однаковим трикутником, а ракети й
+ * КАБ — однаковим ромбом: «Шахед» від реактивного, крилату від балістики не
+ * відрізнити. Користувач: «зроби цілі у вигляді шахедів, а не оцих жовтих
+ * трикутників, ракети — у вигляді ракет». Тепер силует — той самий, що в
+ * легенді й на карті: одна мова на всіх екранах.
+ *
+ * Курсу немає — силует НЕ повертаємо й не вигадуємо напрямок: для типу з
+ * носом малюємо кружок кольору типу (як і досі для дронів), бо силует,
+ * що дивиться на північ, читався б як «летить на північ».
+ */
+function glyphIcon(
+  type: ThreatType,
+  x: number,
+  y: number,
+  courseDeg: number | null,
+  observed: boolean,
+  iconScale: number,
+): string {
+  const { glyph } = TYPE_STYLE[type];
+  const color = COLOR[type];
+  if (courseDeg === null && NOSED.has(type)) {
+    return `<circle cx="${x}" cy="${y}" r="${Math.round(5.5 * iconScale * 10) / 10}" fill="${color}" stroke="#0a0e14" stroke-width="1.4"/>`;
   }
-  if (type === "shahed" || type === "reactive") {
-    return (
-      halo +
-      `<circle cx="${x}" cy="${y}" r="5.5" fill="${color}" stroke="#0a0e14" stroke-width="1.4"/>`
-    );
-  }
-  // Ракети/КАБ/інше — компактна позначка-ромб, щоб не плутати з дроном.
+  /*
+   * Припущений курс — напівпрозора заливка з контуром кольору типу; заміряний —
+   * суцільна заливка з темною обводкою. Напрямок видно в обох, а те, що один
+   * із них здогадка, — теж.
+   */
+  const fill =
+    observed || courseDeg === null ? `fill="${color}"` : `fill="${color}" fill-opacity="0.35"`;
+  const stroke = observed || courseDeg === null ? "#0a0e14" : color;
+  const k = Math.round(1.05 * iconScale * 100) / 100;
+  const rot = courseDeg === null ? "" : ` rotate(${Math.round(courseDeg)})`;
   return (
-    halo +
-    `<path d="M${x},${y - 8} L${x + 6},${y} L${x},${y + 8} L${x - 6},${y} Z" ` +
-    `fill="${color}" stroke="#0a0e14" stroke-width="1.4" stroke-linejoin="round"/>`
+    `<g transform="translate(${x} ${y})${rot} scale(${k}) translate(-12 -12)" ${fill} ` +
+    `stroke="${stroke}" stroke-width="1.3" stroke-linejoin="round">${glyph}</g>`
   );
 }
 
@@ -293,8 +453,79 @@ function trackPath(track: TrackLine): string {
  * розмите коло це розкид позиції, а порожня стрілка — курс, якого ніхто не
  * спостерігав. Решта (колір за типом) зрозуміла з підпису або неважлива.
  */
-function legend(showPresumed: boolean): string {
+/**
+ * Розкид позицій одним рядком — замість кола довкола кожної цілі.
+ *
+ * Чесність не має коштувати читабельності: «позиції наближені, ±4–30 км»
+ * каже рівно те саме, що й десяток ореолів, але не ховає під собою карту.
+ * `null` — цілей немає, казати нічого.
+ */
+export function spreadNote(threats: readonly Threat[]): string | null {
+  if (threats.length === 0) return null;
+  const r = threats.map((t) => Math.round(displayRadiusKm(t.quality ?? EMPTY_QUALITY)));
+  const lo = Math.min(...r);
+  const hi = Math.max(...r);
+  return `позиції наближені: ±${lo === hi ? lo : `${lo}–${hi}`} км за джерелом`;
+}
+
+/** Ключ типів: силует + назва для кожного присутнього типу, стовпчиком від (x, y). */
+function typeKey(types: ReadonlySet<ThreatType>, x: number, y: number): string {
+  let out = "";
+  let i = 0;
+  for (const t of LEGEND_ORDER) {
+    if (!types.has(t)) continue;
+    const yy = y + i * 22;
+    out +=
+      `<g transform="translate(${x + 8} ${yy}) scale(0.75) translate(-12 -12)" fill="${COLOR[t]}" ` +
+      `stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round">${TYPE_STYLE[t].glyph}</g>` +
+      `<text x="${x + 24}" y="${yy + 4}" fill="#c3d0dc" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+      `${escapeXml(TYPE_STYLE[t].label)}</text>`;
+    i++;
+  }
+  return out;
+}
+
+function legend(
+  showPresumed: boolean,
+  uncertainty: boolean,
+  note: string | null,
+  types: ReadonlySet<ThreatType> = new Set(),
+): string {
   const x = PAD + 4;
+  if (!uncertainty) {
+    /*
+     * Легенда — ЩО на картинці: силует кожного присутнього типу з назвою.
+     * Без неї жовтий трикутник і помаранчевий ромб нічого не казали тому, хто
+     * бачить карту вперше, — а пост каналу саме такі люди й бачать.
+     */
+    const lines: string[] = [];
+    for (const t of LEGEND_ORDER) {
+      if (!types.has(t)) continue;
+      lines.push(`G:${t}`);
+    }
+    if (showPresumed) lines.push("T:бліда заливка — курс припущений, не спостережений");
+    if (note) lines.push(`T:${note}`);
+    const step = 22;
+    const y0 = H - PAD - step * lines.length + 6;
+    return lines
+      .map((l, i) => {
+        const y = y0 + i * step;
+        if (l.startsWith("G:")) {
+          const t = l.slice(2) as ThreatType;
+          return (
+            `<g transform="translate(${x + 8} ${y}) scale(0.75) translate(-12 -12)" fill="${COLOR[t]}" ` +
+            `stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round">${TYPE_STYLE[t].glyph}</g>` +
+            `<text x="${x + 24}" y="${y + 4}" fill="#c3d0dc" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+            `${escapeXml(TYPE_STYLE[t].label)}</text>`
+          );
+        }
+        return (
+          `<text x="${x}" y="${y + 4}" fill="#8fa3b5" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+          `${escapeXml(l.slice(2))}</text>`
+        );
+      })
+      .join("");
+  }
   const y = H - PAD - 56;
   const rows = [
     `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="#ffd23f" opacity="0.16"/>` +
@@ -313,7 +544,7 @@ function legend(showPresumed: boolean): string {
       `<g transform="translate(${x + 8} ${y + 48}) scale(0.62)">` +
         `<path d="${DRONE}" fill="none" stroke="#ffd23f" stroke-width="1.6" stroke-linejoin="round"/></g>` +
         `<text x="${x + 24}" y="${y + 52}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-        `порожня стрілка — курс припущений, не спостережений</text>`,
+        `бліда стрілка — курс припущений, не спостережений</text>`,
     );
   }
   return rows.join("");
@@ -326,6 +557,20 @@ function legend(showPresumed: boolean): string {
  * позиції цілі), і місто-орієнтир не має вдавати ціль. Малюється під позначками.
  * `inView` дозволяє зумованій карті відсіяти міста поза кадром.
  */
+/*
+ * Темна обводка під текстом: підпис читається і на чорному тлі, і поверх
+ * ореолу чи межі області, без підкладки-прямокутника, що ховала б карту.
+ */
+const TEXT_HALO = `stroke="#0b0f16" stroke-width="3" stroke-linejoin="round" paint-order="stroke"`;
+
+/** Довжина лінії курсу: хвилини польоту й стеля, км. */
+const COURSE_LINE_MIN = 10;
+const COURSE_LINE_MAX_KM = 40;
+
+/** Скільки цілей у кадрі зуму вже «щільно» — і скільком найближчим лишати пунктир. */
+const DENSE_ZOOM = 6;
+const DRIFT_NEAREST = 3;
+
 function cityLayer(
   proj: Proj,
   inView: (lat: number, lon: number) => boolean = () => true,
@@ -337,8 +582,8 @@ function cityLayer(
       const [x, y] = proj(c.lat, c.lon);
       return (
         `<rect x="${x - 1.4}" y="${y - 1.4}" width="2.8" height="2.8" fill="#8fa3b5" opacity="0.7"/>` +
-        `<text x="${x + 5}" y="${y + 4}" fill="#8fa3b5" opacity="0.85" font-family="sans-serif" ` +
-        `font-size="12">${c.name}</text>`
+        `<text x="${x + 5}" y="${y + 4}" fill="#8fa3b5" font-family="sans-serif" ` +
+        `font-size="12" ${TEXT_HALO}>${c.name}</text>`
       );
     })
     .join("");
@@ -471,6 +716,8 @@ export function situationSvg(
     now?: number;
     /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
     courseOf?: CourseOf | undefined;
+    /** Малювати розкид позицій колами. Усталено — ні; див. `LayerOpts.uncertainty`. */
+    uncertainty?: boolean | undefined;
   } = {},
 ): string {
   const now = opts.now ?? Date.now();
@@ -482,7 +729,10 @@ export function situationSvg(
 
   // Треки — ПІД позначками: свіжа позиція має лишатись найпомітнішою.
   const lines = tracks.map(trackPath).join("");
-  const markers = threats.map((t) => marker(t, now, opts.courseOf)).join("");
+  const layers = markerLayers(threats, project, PX_PER_KM, now, opts.courseOf, {
+    uncertainty: opts.uncertainty,
+    iconScale: 1.15,
+  });
   // Пояснення про припущений курс показуємо лише тоді, коли такі цілі справді
   // є: легенда про те, чого на картинці немає, — це шум.
   const anyPresumed = threats.some(
@@ -500,15 +750,25 @@ export function situationSvg(
     // Області під тривогою — над заливкою країни, під межами й контуром, щоб
     // читались як зона, а не ховали кордони.
     alertLayer(opts.alertPolygons ?? []) +
+    // Ореоли невизначеності — ПІД межами й підписами: це тло «де можуть
+    // бути», а не те, що має закривати карту. Див. `MarkerParts`.
+    layers.under +
     `<path d="${oblastBorders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
     `<path d="${outline} Z" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" opacity="0.95"/>` +
     // Міста-орієнтири — під треками й позначками: ціль завжди зверху.
     cityLayer(project) +
     lines +
-    markers +
+    layers.over +
     // Легенда лише тоді, коли є що пояснювати: підпис до значків, яких на
     // картинці немає, — це шум, а порожнє небо має читатися як порожнє.
-    (threats.length ? legend(anyPresumed) : "") +
+    (threats.length
+      ? legend(
+          anyPresumed,
+          opts.uncertainty === true,
+          spreadNote(threats),
+          new Set(threats.map((t) => t.type ?? "unknown")),
+        )
+      : "") +
     // Масштаб і північ — щоб відстань «ціль ↔ місто» читалась у кілометрах, а
     // напрямок не доводилось вгадувати. Масштаб праворуч унизу (ліворуч —
     // легенда); той самий scaleBar, що й на зумі, псевдорадіус 300 км дає
@@ -563,6 +823,8 @@ export async function renderSituationPng(
       {
         background: "#0b0f16",
         fitTo: { mode: "width", value: W },
+        // Свій шрифт, а не «який знайдеться»: без нього весь текст зникав. Див. `image-fonts`.
+        font: await (await import("./image-fonts")).resvgFontOptions(),
       },
     )
       .render()
@@ -649,6 +911,8 @@ export function situationSvgZoom(
     now?: number;
     /** Звідки брати курс: наш вимір бʼє здогадку джерела. Див. `CourseOf`. */
     courseOf?: CourseOf | undefined;
+    /** Малювати розкид позицій колами. Усталено — ні; див. `LayerOpts.uncertainty`. */
+    uncertainty?: boolean | undefined;
   } = {},
 ): string {
   const now = opts.now ?? Date.now();
@@ -682,10 +946,30 @@ export function situationSvgZoom(
     );
   }).join(" ");
 
-  const markers = threats
-    .filter((t) => inView(t.lat, t.lon))
-    .map((t) => markerWith(t, pr, scale / 111.32, now, opts.courseOf))
-    .join("");
+  const visible = threats.filter((t) => inView(t.lat, t.lon));
+  /*
+   * Пунктир «де зараз» у щільному кадрі — лише для найближчих до міста.
+   *
+   * На знімку з проду десяток пунктирних кіл сплітався в павутину, крізь яку
+   * не читалось нічого. Людині в цьому місті важить, де можуть бути ТІ цілі,
+   * що до неї найближче; решта лишаються на карті своїми ореолами й значками.
+   * Коли цілей мало, пунктир малюється всім — як і досі.
+   */
+  const near = (t: Threat) => (t.lat - center.lat) ** 2 + ((t.lon - center.lon) * kk) ** 2;
+  const driftFor =
+    visible.length > DENSE_ZOOM
+      ? new Set(
+          [...visible]
+            .sort((a, b) => near(a) - near(b))
+            .slice(0, DRIFT_NEAREST)
+            .map((t) => t.id),
+        )
+      : undefined;
+  const layers = markerLayers(visible, pr, scale / 111.32, now, opts.courseOf, {
+    driftFor,
+    uncertainty: opts.uncertainty,
+    iconScale: 1.4,
+  });
 
   // Сусідні населені пункти — орієнтир, якого не дають ні кільця, ні межі
   // області: людина впізнає «Бровари», «Ірпінь», а не абстрактний квадрат.
@@ -710,7 +994,7 @@ export function situationSvgZoom(
    */
   const title = opts.label
     ? `<text x="${cx + 16}" y="${cy + 5}" fill="#e6f2f8" font-family="sans-serif" ` +
-      `font-size="17" font-weight="bold">${escapeXml(opts.label)}</text>`
+      `font-size="17" font-weight="bold" ${TEXT_HALO}>${escapeXml(opts.label)}</text>`
     : "";
 
   /*
@@ -718,19 +1002,30 @@ export function situationSvgZoom(
    * обʼєктом кадру й не значила для читача нічого — а вона означає рівно те,
    * наскільки ми НЕ знаємо, де ціль.
    */
+  const noteText = opts.uncertainty
+    ? "суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз (уперед по курсу)"
+    : [spreadNote(visible), "силует — тип цілі, ніс — напрямок польоту"]
+        .filter(Boolean)
+        .join(" · ");
   const note =
-    `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-    `суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз</text>`;
+    `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+    `${escapeXml(noteText)}</text>`;
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${ZW}" height="${zh}" viewBox="0 0 ${ZW} ${zh}">` +
     `<rect width="${ZW}" height="${zh}" fill="#0b0f16"/>` +
+    // Ореоли — найнижче: тло «де можуть бути», над яким читаються межі,
+    // кільця відстані, сусідні міста й назва самого міста.
+    layers.under +
     `<path d="${borders}" fill="none" stroke="#2f4d5e" stroke-width="1" stroke-linejoin="round" opacity="0.9"/>` +
-    cities +
     distanceRings(cx, cy, pxPerKm, radiusKm) +
+    cities +
     crosshair +
+    layers.over +
+    // Назва міста — над усім: без неї карта не каже, де це.
     title +
-    markers +
+    // Що за силуети — у кутку: картинку бачать люди, які карти раніше не бачили.
+    typeKey(new Set(visible.map((t) => t.type ?? "unknown")), 14, 22) +
     scaleBar(14, zh - 34, pxPerKm, radiusKm) +
     northMark(ZW - 26, 24) +
     note +
@@ -748,9 +1043,11 @@ export async function renderZoomPng(
   try {
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
+    const font = await (await import("./image-fonts")).resvgFontOptions();
     return new Resvg(situationSvgZoom(threats, center, radiusKm, opts), {
       background: "#0b0f16",
       fitTo: { mode: "width", value: ZW },
+      font,
     })
       .render()
       .asPng();

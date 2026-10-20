@@ -310,6 +310,15 @@ export interface PersonalAssessment {
 }
 
 /**
+ * Радіус ТРИВОГИ для радіуса спостереження людини: на якій відстані проліт
+ * її вже стосується. Одне місце правди — його беруть і оцінка обстановки, і
+ * облік того, чи справдилось попередження (`alert-outcome`).
+ */
+export function concernRadiusKm(radiusKm: number): number {
+  return Math.min(radiusKm, 15);
+}
+
+/**
  * Оцінка обстановки для точки користувача: найближчі цілі з напрямком і
  * відстанню, скільки з них іде в мій бік, і хвилини до найближчої вхідної.
  * «Вхідна» — та, чий курс проходить у секторі inboundSectorDeg повз точку.
@@ -357,7 +366,7 @@ export function personalAssessment(
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 6;
   const sector = opts.inboundSectorDeg ?? 60;
-  const concernKm = opts.concernKm ?? Math.min(radiusKm, 15);
+  const concernKm = opts.concernKm ?? concernRadiusKm(radiusKm);
 
   const scored: PersonalThreat[] = threats.map((threat) => {
     const d = distanceKm(point, threat);

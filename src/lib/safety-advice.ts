@@ -94,6 +94,8 @@ const BY_TYPE: Record<ThreatType, SafetyAdvice> = {
   kab: KAB,
   shahed: SHAHED,
   reactive: SHAHED,
+  // Окремої перевіреної поради для FPV тут немає — загальна, а не вигадана.
+  fpv: GENERIC,
   aircraft: GENERIC,
   recon: GENERIC,
   unknown: GENERIC,
@@ -117,6 +119,7 @@ const SEVERITY: ThreatType[] = [
   "cruise",
   "reactive",
   "shahed",
+  "fpv",
   "aircraft",
   "recon",
   "unknown",

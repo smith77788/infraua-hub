@@ -64,6 +64,9 @@ import { verifyInitData, ADMIN_INITDATA_MAX_AGE_SEC } from "./lib/telegram-initd
 import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
+import { concernRadiusKm } from "./lib/advisory";
+import { AlertOutcomes } from "./lib/alert-outcome";
+import { onStreamAlerts, streamAlertLevels } from "./lib/neptun-stream";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
 import {
   isInUkraine,
@@ -438,6 +441,11 @@ async function health(request: Request): Promise<Response> {
       memoryRestored: sweep.restored,
     },
     neptunStream: neptunStreamStatus(),
+    // Чи знайдено шрифт картинок: без нього з постів зникав увесь текст.
+    imageFonts: await (await import("./lib/image-fonts")).fontStatus(),
+    // Яка частка доставлених попереджень справдилась: ціль пролетіла в радіусі
+    // тривоги людини. «Не підтвердились» — не «хибні»: див. `alert-outcome`.
+    alertOutcomes: alertOutcomes.summary(),
     unknownSources: unknownChannelReport(),
     // Без проби запису: /api/health смикають часто, а проба — це файлова
     // операція на кожен виклик. Глибша діагностика вже є в /api/subscribers/stats.
@@ -841,6 +849,13 @@ let alertZonesCache: { at: number; polygons: AlertRing[] } | null = null;
 let alertLevelsCache: { at: number; levels: AlertLevels | null } | null = null;
 async function fetchAlertLevels(maxAgeMs = 25_000): Promise<AlertLevels | null> {
   const now = Date.now();
+  // Поки живий потік Нептуна — рівні з нього: той самий формат і те саме
+  // джерело, лише в момент зміни, а не з кроком опитування.
+  const live = streamAlertLevels();
+  if (live) {
+    alertLevelsCache = { at: now, levels: live };
+    return live;
+  }
   if (alertLevelsCache && now - alertLevelsCache.at < maxAgeMs) return alertLevelsCache.levels;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
@@ -1819,7 +1834,18 @@ async function runChannelTickCore(
   // Області під тривогою — з того самого джерела, що й карта бота: канал показує
   // ту саму обстановку. Best-effort: збій зон не має завалити пост.
   const alertZones = await fetchAlertZones().catch(() => []);
-  const png = await renderSituationPng(smoothed, trackLines(smoothed), alertZones, courseForImage);
+  /*
+   * Позначки на картинці — там, де ціль ЗАРАЗ, за тією самою моделлю руху, що
+   * й карта бота (`driftPosition`). Інакше скріншот показував би, де цілі були
+   * хвилини тому, а карта — де вони тепер, і «точна копія» розходилась би на
+   * кілометри. Трек лишається спостереженим: лінія — факт, позначка — оцінка.
+   */
+  const { driftPosition } = await import("./lib/threat-drift");
+  const pictured = smoothed.map((t) => {
+    const d = driftPosition(t, now);
+    return d.km > 0 ? { ...t, lat: d.lat, lon: d.lon } : t;
+  });
+  const png = await renderSituationPng(pictured, trackLines(smoothed), alertZones, courseForImage);
   const keyboard = await channelButtons(token);
   const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
   const silent = shouldPostSilently(types, now);
@@ -3331,10 +3357,12 @@ async function hydrateAlertMemory(now: number): Promise<void> {
   alertSweepSeen = { ...alertSweepSeen, restored: true };
 }
 
-async function officialAlertSweep(): Promise<void> {
+async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   if (!token) return;
-  const active = await fetchOfficialAlerts();
+  // `fresh` — обхід, розбуджений зміною тривог у потоці: кеш тут зайвий, бо
+  // він і є причиною, через яку ми б побачили зміну на крок пізніше.
+  const active = await fetchOfficialAlerts(opts.fresh ? 0 : undefined);
   if (active === null) return; // джерело мовчить — станів не вигадуємо
 
   const now = Date.now();
@@ -3750,6 +3778,44 @@ function alertCandidates(subs: readonly Subscriber[], threats: readonly Threat[]
  *
  * Рішення «будити чи ні» лишається там, де було, — у чистій `decideAlert`.
  */
+/*
+ * Журнал якості попереджень (`alert-outcome`) і замір точності руху
+ * (`drift-accuracy`). Обидва зберігаються на томі: без цього кожен редеплой
+ * обнуляв би вибірку, і число «скільки попереджень справдилось» ніколи б не
+ * набирало ваги. Пишемо не частіше за хвилину — це метрика, а не стан, від
+ * якого залежить, чи когось розбудять.
+ */
+let alertOutcomes = new AlertOutcomes();
+let qualityLoaded = false;
+let qualitySavedAt = 0;
+const QUALITY_MARKER = "quality-ledger";
+const QUALITY_SAVE_EVERY_MS = 60_000;
+
+async function hydrateQuality(): Promise<void> {
+  if (qualityLoaded) return;
+  qualityLoaded = true;
+  const raw = await readMarker(QUALITY_MARKER);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw) as { outcomes?: unknown; drift?: unknown };
+    alertOutcomes = AlertOutcomes.fromState(parsed.outcomes);
+    const { restoreDriftAccuracy } = await import("./lib/neptun-stream");
+    restoreDriftAccuracy(parsed.drift);
+  } catch {
+    // Битий файл — починаємо вибірку з нуля, а не з невідомо чого.
+  }
+}
+
+async function saveQuality(now: number): Promise<void> {
+  if (now - qualitySavedAt < QUALITY_SAVE_EVERY_MS) return;
+  qualitySavedAt = now;
+  const { driftAccuracyState } = await import("./lib/neptun-stream");
+  await writeMarker(
+    QUALITY_MARKER,
+    JSON.stringify({ outcomes: alertOutcomes.toState(), drift: driftAccuracyState() }),
+  );
+}
+
 async function personalAlertSweep(): Promise<AlertSweepResult> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   const empty: AlertSweepResult = { checked: 0, sent: 0, skipped: 0 };
@@ -3765,6 +3831,11 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   // за позицією, старшою за власний крок, тож REST-фолбек оновлюємо щонайменше
   // раз на 30 с, під темп обходу.
   const threats = await fetchThreatsCached(30_000);
+  await hydrateQuality();
+  // Звірка вже надісланих попереджень із фактичними фіксаціями — див.
+  // `alert-outcome`. До будь-якого раннього виходу: вирок не має залежати від
+  // того, чи будемо слати щось нове.
+  alertOutcomes.resolve(threats, Date.now());
   const official = await fetchOfficialAlerts();
   const now = Date.now();
 
@@ -3815,6 +3886,21 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     const sub = forgetStale(raw, now);
     const point = pointOf(sub, now);
     if (!point) continue;
+    // Чи зайшла ціль у радіус тривоги — і чи людину ДО цього попередили.
+    // Рахується до рішення цього обходу: попередження, надіслане вже після
+    // наближення, — запізніле, і число має це бачити.
+    alertOutcomes.approach(
+      {
+        chatId: sub.chatId,
+        lat: point.lat,
+        lon: point.lon,
+        radiusKm: concernRadiusKm(sub.radiusKm),
+        lastAlertAt: sub.lastAlertAt > 0 ? sub.lastAlertAt : null,
+        quiet: isNight(hour) && sub.night === "silent",
+      },
+      threats,
+      now,
+    );
 
     /*
      * За кордоном офіційна фаза — «невідомо», а не «ще не оголошена».
@@ -4151,6 +4237,16 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
             placeAlerts: markPlaceAlerted(fresh.placeAlerts, place, at),
           });
         } else if (decision) {
+          const at0 = pointOf(sub, at);
+          if (at0) {
+            alertOutcomes.record({
+              chatId: sub.chatId,
+              lat: at0.lat,
+              lon: at0.lon,
+              radiusKm: concernRadiusKm(sub.radiusKm),
+              at,
+            });
+          }
           const marked = markAlerted(
             {
               ...sub,
@@ -4198,6 +4294,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
     );
   }
 
+  await saveQuality(Date.now());
   return {
     checked: considered.length,
     sent: report.sent,
@@ -4208,6 +4305,44 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
 function startAlertScheduler(): void {
   if (alertTimer) return;
   if (!process.env["TELEGRAM_BOT_TOKEN"]) return;
+  /*
+   * Зміна тривог у потоці Нептуна будить обхід офіційних тривог ОДРАЗУ, а не на
+   * наступному кроці (до ~55 с: 30 с кроку + 25 с кешу).
+   *
+   * Що будить людину, не змінюється: початок і відбій тривоги, як і раніше,
+   * — за офіційним джерелом (`ubilling`), лише запитаним свіжо. Підміна
+   * джерела, яке будить уночі, — окреме рішення з окремою перевіркою; тут
+   * змінюється тільки КОЛИ ми дивимось.
+   *
+   * Той самий замок, що й у кроку: два обходи поверх одного дали б два
+   * сповіщення про той самий перехід. Якщо крок саме йде — позначаємо, і
+   * позаплановий обхід стартує одразу після нього. Секунда згладжування
+   * збирає пачку кадрів в один обхід.
+   */
+  let kickPending = false;
+  let kickTimer: ReturnType<typeof setTimeout> | null = null;
+  const runKick = () => {
+    kickTimer = null;
+    if (alertSweepRunning) {
+      kickPending = true;
+      return;
+    }
+    alertSweepRunning = true;
+    officialAlertSweep({ fresh: true })
+      .catch((e) => console.error("event alert sweep failed", e))
+      .finally(() => {
+        alertSweepRunning = false;
+        if (kickPending) {
+          kickPending = false;
+          kick();
+        }
+      });
+  };
+  const kick = () => {
+    if (kickTimer) return;
+    kickTimer = setTimeout(runKick, 1_000);
+    (kickTimer as unknown as { unref?: () => void }).unref?.();
+  };
   const tick = () => {
     // Перекриття обходів дало б два сповіщення про ту саму ціль: довгий обхід
     // не має запускати наступний поверх себе.
@@ -4217,11 +4352,18 @@ function startAlertScheduler(): void {
       .catch((e) => console.error("alert sweep failed", e))
       .finally(() => {
         alertSweepRunning = false;
+        // Зміна тривог прийшла, поки йшов крок, — дивимось на неї одразу.
+        if (kickPending) {
+          kickPending = false;
+          kick();
+        }
       });
   };
   const warmup = setTimeout(tick, 30_000);
   (warmup as unknown as { unref?: () => void }).unref?.();
   alertTimer = setInterval(tick, ALERT_TICK_EVERY_MS);
+
+  onStreamAlerts(kick);
   (alertTimer as unknown as { unref?: () => void }).unref?.();
 }
 startAlertScheduler();

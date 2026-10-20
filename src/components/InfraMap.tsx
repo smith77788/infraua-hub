@@ -40,7 +40,8 @@ import { swarmForecast } from "@/lib/swarm-forecast";
 import { forecastCone } from "@/lib/trajectory";
 import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
-import { fixedAtMs } from "@/lib/position-age";
+import { fixedAtMs, nowRadiusKm } from "@/lib/position-age";
+import { driftSector, spreadFor } from "@/lib/drift-sector";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -59,6 +60,10 @@ import {
   radiusIsStated,
 } from "@/lib/threat-quality";
 import { useThreatMotion } from "./use-threat-motion";
+import { TYPE_STYLE } from "@/lib/threat-glyphs";
+import type { LaunchView } from "@/lib/infra.functions";
+import { advance } from "@/lib/dead-reckoning";
+import { bearingDeg } from "@/lib/threat-eta";
 
 interface Props {
   facilities: Facility[];
@@ -75,6 +80,8 @@ interface Props {
    */
   alertLevels?: AlertLevels | null;
   threats: Threat[];
+  /** Пуски ще на тій території — за повідомленнями каналів (`launch-sightings`). */
+  launches?: LaunchView[];
   frontline: FrontlineArea[];
   showFrontline: boolean;
   fires: FirePoint[];
@@ -199,52 +206,6 @@ const CITY_CENTERS = Object.values(OBLASTS)
 const COMPASS = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"];
 const compass = (d: number) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45) % 8];
 
-// Силует + колір за типом цілі. Кольори узгоджені зі звичною семантикою:
-// БпЛА — жовтий, реактивний БпЛА — помаранчевий, ракети/балістика — червоне.
-const TYPE_STYLE: Record<ThreatType, { color: string; glyph: string; label: string }> = {
-  // Силует дельтакрилого БпЛА (Shahed-136), а не абстрактна стрілка: широке
-  // дельтакрило, осьова фюзеляжна лінія і задня риска — штовхальний гвинт. Так
-  // ціль упізнається як дрон з першого погляду, як на картах конкурентів.
-  shahed: {
-    color: "#ffd23f",
-    glyph:
-      '<path d="M12 2.5 L20 19.5 L12 15.5 L4 19.5 Z"/><path d="M12 5.5 L12 15"/><path d="M9 19 L15 19"/>',
-    label: "Ударний БпЛА",
-  },
-  reactive: {
-    color: "#ff8c1a",
-    glyph: '<path d="M12 2l6 18-6-3.6L6 20z"/><path d="M12 5v11"/>',
-    label: "Реактивний БпЛА",
-  },
-  cruise: {
-    color: "#ff6a2a",
-    glyph: '<path d="M3 12h13l5-2-5-2H3z"/><path d="M7 12l-2 4M11 12l-2 4"/>',
-    label: "Крилата ракета",
-  },
-  missile: {
-    color: "#ff4d4d",
-    glyph: '<path d="M12 2c3.2 4 3.2 9 0 20-3.2-11-3.2-16 0-20z"/><path d="M9 16l-3 5M15 16l3 5"/>',
-    label: "Ракета",
-  },
-  ballistic: {
-    color: "#ff2d2d",
-    glyph: '<path d="M12 1c3.4 4.5 3.4 10 0 22-3.4-12-3.4-17.5 0-22z"/>',
-    label: "Балістика",
-  },
-  kab: { color: "#ffb020", glyph: '<path d="M12 3v11M8 14h8l-4 7z"/>', label: "КАБ" },
-  recon: {
-    color: "#22d3ee",
-    glyph: '<path d="M12 4l8 8-8 8-8-8z"/><circle cx="12" cy="12" r="2"/>',
-    label: "Розвід. БпЛА",
-  },
-  aircraft: { color: "#38bdf8", glyph: '<path d="M2 12l20-6-7 18-3-8z"/>', label: "Авіація" },
-  unknown: {
-    color: "#ffb020",
-    glyph: '<path d="M12 3l7 16-7-3.6L5 19z"/>',
-    label: "Повітряна ціль",
-  },
-};
-
 // Колір і значок рівня верифікації (анти-фейк) для попапа цілі.
 const VERIFICATION_COLOR: Record<VerificationLevel, string> = {
   official: "#34d399", // офіційне джерело — зелений
@@ -297,7 +258,7 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   const key = `${type}|${fresh}|${rot ?? "x"}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
-  const { color, glyph } = TYPE_STYLE[type];
+  const { color, glyph, code } = TYPE_STYLE[type];
   const { opacity, size } = FRESH_TONE[fresh];
   const g = Math.round(size * 0.74);
   const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
@@ -305,7 +266,7 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   // за курсом дивиться саме форма цілі.
   const svgTransform = rot != null ? ` style="transform:rotate(${rot}deg)"` : "";
   const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg></div>`;
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg><span class="air-tgt__code">${code}</span></div>`;
   const icon = L.divIcon({
     html,
     className: "threat-pin",
@@ -639,8 +600,115 @@ function ForecastCone({ threats }: { threats: Threat[] }) {
   );
 }
 
+/*
+ * Куди дивиться дуга пусків — у бік України. Центр країни, а не ціль: куди
+ * саме летить серія, з повідомлення про пуск не видно, і дуга це й каже —
+ * «десь тут уже можуть бути», а не «летять на Київ».
+ */
+const UA_CENTER = { lat: 49.0, lon: 31.4 };
+
+function launchArc(l: LaunchView): [number, number][] {
+  const toUa = bearingDeg(l, UA_CENTER);
+  const pts: [number, number][] = [];
+  for (let d = -60; d <= 60; d += 5) {
+    const p = advance(l.lat, l.lon, toUa + d, l.reachKm);
+    pts.push([p.lat, p.lon]);
+  }
+  return pts;
+}
+
+function groupWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m100 >= 11 && m100 <= 14) return "груп";
+  if (m10 === 1) return "група";
+  if (m10 >= 2 && m10 <= 4) return "групи";
+  return "груп";
+}
+
+function launchIcon(type: ThreatType): L.DivIcon {
+  const { color, glyph } = TYPE_STYLE[type];
+  return L.divIcon({
+    className: "threat-pin",
+    html:
+      `<div style="width:30px;height:30px;border-radius:50%;border:2px dashed ${color};` +
+      `display:flex;align-items:center;justify-content:center;background:rgba(10,14,20,.75)">` +
+      `<svg viewBox="0 0 24 24" width="18" height="18" fill="${color}" stroke="#0a0e14" stroke-width="1.2">${glyph}</svg></div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15],
+  });
+}
+
+/**
+ * Пуски — ще на тій території. Позначка району (пунктирне кільце: «район», не
+ * точка) і дуга в бік України: як далеко перші з серії могли долетіти зараз.
+ */
+function LaunchLayer({ launches }: { launches: LaunchView[] }) {
+  if (launches.length === 0) return null;
+  return (
+    <>
+      {launches.map((l) => {
+        const color = TYPE_STYLE[l.type].color;
+        const ago = Math.max(0, Math.round((Date.now() - l.lastAt) / 60_000));
+        return (
+          <Fragment key={`launch-${l.key}`}>
+            {l.reachKm > 0 ? (
+              <Polyline
+                positions={launchArc(l)}
+                pathOptions={{ color, weight: 2, opacity: 0.7, dashArray: "6 6" }}
+              />
+            ) : null}
+            <Marker position={[l.lat, l.lon]} icon={launchIcon(l.type)} zIndexOffset={900}>
+              <Popup maxWidth={240} autoPanPadding={[8, 8]}>
+                <div className="space-y-1 font-sans text-xs">
+                  <p className="font-semibold" style={{ color }}>
+                    Пуски: {TYPE_STYLE[l.type].label.toLowerCase()}
+                    {l.groups ? ` · ${l.groups} ${groupWord(l.groups)}` : ""}
+                  </p>
+                  <p className="opacity-80">Район: {l.label} — центр пункту, не точка пуску</p>
+                  <p className="opacity-70">
+                    Остання згадка {ago} хв тому · повідомлень: {l.mentions}
+                  </p>
+                  {l.reachKm > 0 ? (
+                    <p className="opacity-70">
+                      Перші з серії могли пролетіти ~{l.reachKm} км
+                      {l.toBorderMin === 0
+                        ? " — уже могли перетнути кордон"
+                        : l.toBorderMin !== null
+                          ? ` · до кордону ~${l.toBorderMin} хв`
+                          : ""}
+                    </p>
+                  ) : (
+                    <p className="opacity-60">Тип не названо — як далеко долетіли, не оцінюємо</p>
+                  )}
+                  <p className="opacity-60 text-[11px] leading-snug">
+                    За повідомленнями каналів спостереження; напрямок польоту з них не видно — дуга
+                    показує лише відстань.
+                  </p>
+                </div>
+              </Popup>
+            </Marker>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 function ThreatLayer({ threats }: { threats: Threat[] }) {
   const map = useMap();
+  /*
+   * Ціль, яку людина торкнулась. Лише для неї малюємо розкид позиції й вектор
+   * курсу.
+   *
+   * Доти кожна позначка несла коло невизначеності й пунктир курсу постійно, і
+   * в наліт карта тонула в ореолах. Порівняння з Нептуном (знімок
+   * користувача): там — лише чіткий силует, повернутий за курсом, і карта
+   * читається за секунду. Розкид при цьому не зникає: він на дотик — у самій
+   * позначці (коло/«крапля») і словами в картці.
+   */
+  const [selected, setSelected] = useState<string | null>(null);
   const [zoom, setZoom] = useState(map.getZoom());
   const [bounds, setBounds] = useState<L.LatLngBounds>(map.getBounds());
   useMapEvents({
@@ -753,24 +821,41 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         const projected = projKm > 0;
         const radiusKm = displayRadiusKm(q) + projKm;
         const courseObserved = courseIsObserved(q);
+        const ringStyle = {
+          color: style.color,
+          weight: 1,
+          opacity: fresh === "stale" ? 0.18 : 0.35,
+          fillColor: style.color,
+          fillOpacity: fresh === "stale" ? 0.03 : 0.07,
+          // Заявлений джерелом радіус — суцільний контур; наше
+          // консервативне припущення, коли джерело промовчало, —
+          // пунктир. Різницю видно, не читаючи попап. Протягнута позиція
+          // — теж пунктир: центр кола сам є оцінкою.
+          ...(radiusIsStated(q) && !projected ? {} : { dashArray: "3 6" }),
+        };
+        /*
+         * Курс відомий і ціль протягнуто — «крапля» від місця фіксації вперед
+         * по курсу, а не коло довкола оцінки: позаду себе ціль опинитись не
+         * могла (`drift-sector`). Без курсу — коло, як і було.
+         */
+        const sector =
+          hasCourse && projected
+            ? driftSector({
+                lat: t.fixLat,
+                lon: t.fixLon,
+                courseDeg: t.heading as number,
+                spreadDeg: spreadFor(courseObserved || t.projBasis === "measured"),
+                driftKm: Math.max(projKm, nowRadiusKm(t, Date.now()).driftKm),
+                statedKm: displayRadiusKm(q),
+              })
+            : null;
         return (
           <Fragment key={t.id}>
-            <Circle
-              center={[t.lat, t.lon]}
-              radius={radiusKm * 1000}
-              pathOptions={{
-                color: style.color,
-                weight: 1,
-                opacity: fresh === "stale" ? 0.18 : 0.35,
-                fillColor: style.color,
-                fillOpacity: fresh === "stale" ? 0.03 : 0.07,
-                // Заявлений джерелом радіус — суцільний контур; наше
-                // консервативне припущення, коли джерело промовчало, —
-                // пунктир. Різницю видно, не читаючи попап. Протягнута позиція
-                // — теж пунктир: центр кола сам є оцінкою.
-                ...(radiusIsStated(q) && !projected ? {} : { dashArray: "3 6" }),
-              }}
-            />
+            {selected !== t.id ? null : sector ? (
+              <Polygon positions={sector} pathOptions={ringStyle} />
+            ) : (
+              <Circle center={[t.lat, t.lon]} radius={radiusKm * 1000} pathOptions={ringStyle} />
+            )}
             {observed.length >= 2 ? (
               <Polyline
                 positions={observed}
@@ -781,7 +866,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 }}
               />
             ) : null}
-            {vecEnd ? (
+            {vecEnd && selected === t.id ? (
               <Polyline
                 positions={[[t.lat, t.lon], vecEnd]}
                 pathOptions={{
@@ -800,6 +885,10 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               position={[t.lat, t.lon]}
               icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
+              eventHandlers={{
+                popupopen: () => setSelected(t.id),
+                popupclose: () => setSelected((cur) => (cur === t.id ? null : cur)),
+              }}
             >
               <Popup maxWidth={220} autoPanPadding={[8, 8]}>
                 {/*
@@ -832,8 +921,13 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   </p>
                   {projected ? (
                     <p className="opacity-60 text-[11px] leading-snug">
-                      ◇ позицію протягнуто за курсом на ~{projKm.toFixed(1)} км від останнього
-                      сигналу — оцінка, не факт
+                      ◇ позицію протягнуто за{" "}
+                      {t.projBasis === "measured"
+                        ? "заміряним курсом"
+                        : t.projBasis === "presumed"
+                          ? "припущеним курсом (на зниженій швидкості)"
+                          : "курсом"}{" "}
+                      на ~{projKm.toFixed(1)} км від останнього сигналу — оцінка, не факт
                     </p>
                   ) : null}
                   {t.sea ? <p className="opacity-70">Над морем</p> : null}
@@ -960,6 +1054,7 @@ export default function InfraMap({
   zones,
   alertLevels = null,
   threats,
+  launches = [],
   frontline,
   showFrontline,
   fires,
@@ -1230,6 +1325,7 @@ export default function InfraMap({
 
       {/* Повітряні цілі (OSINT) — з кластеризацією за масштабом */}
       <ForecastCone threats={threats} />
+      <LaunchLayer launches={launches} />
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />

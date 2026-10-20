@@ -23,7 +23,14 @@ import {
 } from "./air";
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
-import { ensureNeptunStream, liveThreats } from "./neptun-stream";
+import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
+import { applyJetType, jetMentions, parseChannelPage, type ChannelMessage } from "./jet-sightings";
+import {
+  launchReach,
+  launchSightings,
+  type LaunchReach,
+  type LaunchSighting,
+} from "./launch-sightings";
 import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
@@ -672,6 +679,15 @@ interface ThreatsPayload {
   fetchedAt: string;
   degraded: boolean;
   source?: "neptun" | "detoyshahed";
+  /** Пуски за повідомленнями каналів — ще на тій території (`launch-sightings`). */
+  launches?: LaunchView[];
+}
+
+export type LaunchView = LaunchSighting & LaunchReach;
+
+/** Пуски з того самого фонового кешу повідомлень, що й реактивні дрони. */
+export function currentLaunches(now = Date.now()): LaunchView[] {
+  return launchSightings(jetMessages, now).map((s) => ({ ...s, ...launchReach(s, now) }));
 }
 
 /**
@@ -685,7 +701,85 @@ interface ThreatsPayload {
  * воно й робило канал окремою правдою.
  */
 let neptunCache: { at: number; threats: Threat[] } | null = null;
+
+/*
+ * Звірка потоку з REST-знімком — див. `reconcileNeptunStream`. Хвилина — бо
+ * ціль, яку джерело прибрало, а `remove` загубився, не має висіти довше, а
+ * частіше смикати REST при живому потоці нема потреби.
+ */
+const RECONCILE_EVERY_MS = 60_000;
+let reconcileAt = 0;
+let reconcileInflight = false;
+
+function reconcileInBackground(now: number): void {
+  if (reconcileInflight || now - reconcileAt < RECONCILE_EVERY_MS) return;
+  reconcileInflight = true;
+  reconcileAt = now;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  fetchNeptunThreats(controller.signal)
+    .then((rest) => {
+      // `null` — джерело не відповіло як слід. Порожнім знімком НЕ звіряємо:
+      // він стер би всю живу картину через один збій.
+      if (rest) reconcileNeptunStream(rest, now);
+    })
+    .catch(() => {})
+    .finally(() => {
+      clearTimeout(timer);
+      reconcileInflight = false;
+    });
+}
+/*
+ * Свіжі повідомлення каналів спостереження — щоб відрізнити реактивний дрон
+ * від поршневого (`jet-sightings`): Нептун у доступних нам відповідях цього
+ * не каже. Оновлюється у фоні не частіше за 90 с — ~40 превʼю каналів на
+ * кожен запит карти були б зайвим навантаженням і на нас, і на t.me.
+ */
+const JET_REFRESH_MS = 90_000;
+let jetMessages: ChannelMessage[] = [];
+let jetAt = 0;
+let jetInflight = false;
+
+function refreshJetSightings(now: number): void {
+  if (jetInflight || now - jetAt < JET_REFRESH_MS) return;
+  jetInflight = true;
+  jetAt = now;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  Promise.allSettled(
+    TG_CHANNELS.map((ch) =>
+      fetch(`https://t.me/s/${encodeURIComponent(ch)}`, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
+      }).then((r) => (r.ok ? r.text() : "")),
+    ),
+  )
+    .then((pages) => {
+      const all: ChannelMessage[] = [];
+      for (const p of pages)
+        if (p.status === "fulfilled" && p.value) all.push(...parseChannelPage(p.value));
+      // Порожній результат (мережа лягла) не стирає попередні згадки: вони й
+      // так застаріють за вікном `JET_WINDOW_MS`.
+      if (all.length) jetMessages = all;
+    })
+    .catch(() => {})
+    .finally(() => {
+      clearTimeout(timer);
+      jetInflight = false;
+    });
+}
+
+/** Реактивні дрони — за свіжими згадками каналів; решту цілей не чіпає. */
+function withJetTypes(threats: Threat[], now: number): Threat[] {
+  refreshJetSightings(now);
+  return applyJetType(threats, jetMentions(jetMessages, now));
+}
+
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
+  return withJetTypes(await neptunThreatsRaw(maxAgeMs), Date.now());
+}
+
+async function neptunThreatsRaw(maxAgeMs: number): Promise<Threat[]> {
   const now = Date.now();
 
   /*
@@ -701,6 +795,7 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
   ensureNeptunStream();
   const live = liveThreats();
   if (live) {
+    reconcileInBackground(now);
     // Дзеркалимо у модульний кеш, щоб фолбек мав останню відому картину.
     neptunCache = { at: now, threats: live };
     return live;
@@ -919,6 +1014,7 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
           fetchedAt: new Date().toISOString(),
           degraded: false,
           source: "neptun",
+          launches: currentLaunches(now),
         } satisfies ThreatsPayload;
       }
     } catch {

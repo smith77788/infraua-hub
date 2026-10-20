@@ -1,4 +1,6 @@
 import type { Threat } from "./air";
+import { parseAlertLevels, type AlertLevels } from "./alert-levels";
+import { DriftAccuracy, type DriftAccuracyState } from "./drift-accuracy";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 
 /**
@@ -32,18 +34,44 @@ const STREAM_URL = "wss://neptun.in.ua/api/v1/stream";
 const FRESH_MS = 45_000;
 
 /*
- * Запобіжник проти пропущеного `remove`. За стабільного зʼєднання ціль зникає
- * саме через `remove`; але якщо його загубили в розрив до перепідключення (а
- * снапшот ще не прийшов) — ціль, якої ми не бачили 10 хв, тихо прибираємо. Поріг
- * навмисно щедрий: рій, що баражує над морем, оновлюється рідко, і його не можна
- * зняти передчасно.
+ * Хто вирішує, що ціль зникла, — ДЖЕРЕЛО, а не наш годинник.
+ *
+ * Доти тут стояло «ціль, від якої ми 10 хв не отримували `upsert`, — прибрати».
+ * Заміряно на живому потоці (2026-10-20, 02:10): Нептун показував 39 цілей, наш
+ * прод — 29. Бракувало РІВНО тих, що не оновлювались понад 10 хвилин (12–19
+ * хв), тоді як усі наявні оновлювались свіжіше. Нептун не повторює ціль, про
+ * яку канали мовчать, — він просто тримає її на карті, поки сам не пришле
+ * `remove`. Тож наш запобіжник різав саме тихі цілі, а в масований наліт тихих
+ * більшість: звідси «у Нептуна майже всі, у нас малий відсоток».
+ *
+ * Тепер членство звіряється з повним REST-знімком того самого джерела
+ * (`reconcileNeptunStream`, раз на хвилину): чого немає в знімку — того немає й
+ * у нас, що є — те лишається, хай скільки воно мовчить. Це закриває і втрачений
+ * `remove`, заради якого стояв старий запобіжник, — тільки правильно.
+ *
+ * Годинник лишається останнім рубежем, коли REST недоступний, і рахує вже час
+ * САМОГО джерела (`lastSeen`), а не наш прийом. Поріг навмисно щедрий: у тому ж
+ * знімку Нептун тримав ціль, не оновлювану 41 хвилину.
  */
-const STALE_TRACK_MS = 10 * 60_000;
+const SOURCE_STALE_MS = 60 * 60_000;
+
+/*
+ * Вікно, в якому свіжа подія потоку важить більше за REST-знімок. Знімок може
+ * відставати на кілька секунд (у замірі — на 9 подій), і без цього вікна ми б
+ * стирали ціль, яку потік щойно додав, а знімок ще не встиг побачити.
+ */
+const RECONCILE_GRACE_MS = 90_000;
 
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 
-type Entry = { threat: Threat; at: number };
+/*
+ * `streamAt` — коли ціль востаннє торкнув саме ПОТІК (0 — лише REST-звірка).
+ * Вікно звірки захищає тільки події потоку: запис, який дописала сама звірка,
+ * не має боронитися від наступної звірки, інакше ціль, що зникла з REST,
+ * висіла б іще дві хвилини.
+ */
+type Entry = { threat: Threat; streamAt: number };
 
 let live = new Map<string, Entry>();
 let ws: WebSocket | null = null;
@@ -52,6 +80,52 @@ let gotSnapshot = false;
 let lastMessageAt = 0;
 let backoff = BACKOFF_MIN_MS;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let lastReconcile: { at: number; added: number; removed: number } | null = null;
+/*
+ * Цілі, які ПОТІК щойно прибрав. REST відстає на секунди, і без цього звірка
+ * повертала б щойно прибрану ціль назад — привид до наступної звірки.
+ */
+const tombstones = new Map<string, number>();
+
+/*
+ * Тривоги з потоку.
+ *
+ * Потік пушить кадр `alerts` на конекті й на кожній зміні: `data` має РІВНО
+ * форму `/api/v1/alerts` (знято з живого потоку 2026-10-20), тож розбирає його
+ * та сама `parseAlertLevels`, що й REST, — одна правда, не дві. Різниця лише в
+ * часі: REST ми опитували раз на обхід (до ~55 с від зміни до реакції), а
+ * кадр приходить у момент зміни.
+ */
+let streamAlerts: { levels: AlertLevels; version: string } | null = null;
+const alertListeners = new Set<(levels: AlertLevels) => void>();
+
+/** Підписатися на ЗМІНУ тривог у потоці. Повертає відписку. */
+export function onStreamAlerts(cb: (levels: AlertLevels) => void): () => void {
+  alertListeners.add(cb);
+  return () => alertListeners.delete(cb);
+}
+
+/**
+ * Останні рівні тривог із потоку, АБО `null`, коли потоку не можна довіряти
+ * (не підключений, ще без снапшоту, замовк) чи кадру тривог іще не було. `null`
+ * — сигнал іти на REST, а не «тривог немає».
+ */
+export function streamAlertLevels(): AlertLevels | null {
+  if (!streamAlerts || !gotSnapshot) return null;
+  if (Date.now() - lastMessageAt > FRESH_MS) return null;
+  return streamAlerts.levels;
+}
+
+function bury(id: string, at: number): void {
+  live.delete(id);
+  tombstones.set(id, at);
+}
+/*
+ * Кожна нова фіксація цілі — вимір точності нашої моделі руху (див.
+ * `drift-accuracy`). Потік бачить КОЖНУ фіксацію першим, тож міряти тут — і
+ * повна вибірка, і нуль додаткових запитів.
+ */
+const accuracy = new DriftAccuracy();
 
 function canConnect(): boolean {
   // Тільки на сервері й тільки де є глобальний WebSocket (Node ≥ 22 на Railway).
@@ -116,6 +190,8 @@ function connect(): void {
     connecting = false;
     if (ws === socket) ws = null;
     gotSnapshot = false;
+    // Тривоги з мертвого зʼєднання — не поточні: до нового кадру йдемо на REST.
+    streamAlerts = null;
     scheduleReconnect();
   };
 }
@@ -131,9 +207,11 @@ function handle(msg: { type?: string; data?: unknown }): void {
       const next = new Map<string, Entry>();
       for (const t of arr) {
         const mapped = mapNeptunThreat(t);
-        if (mapped) next.set(mapped.id, { threat: mapped, at: now });
+        if (mapped) next.set(mapped.id, { threat: mapped, streamAt: now });
       }
       live = next;
+      // Повний стан джерела сам каже, що є, — старі надгробки йому не указ.
+      tombstones.clear();
       gotSnapshot = true;
       return;
     }
@@ -143,16 +221,42 @@ function handle(msg: { type?: string; data?: unknown }): void {
       const mapped = mapNeptunThreat(t);
       // `mapNeptunThreat` → null, коли ціль стала неактивною / вийшла за межі:
       // тоді прибираємо її, а не лишаємо застиглою активною.
-      if (mapped) live.set(mapped.id, { threat: mapped, at: now });
-      else live.delete(t.id);
+      if (mapped) {
+        const prev = live.get(mapped.id);
+        if (prev) accuracy.observe(prev.threat, mapped);
+        tombstones.delete(mapped.id);
+        live.set(mapped.id, { threat: mapped, streamAt: now });
+      } else bury(t.id, now);
       return;
     }
     case "remove": {
       const id = (msg.data as { id?: string } | undefined)?.id;
-      if (typeof id === "string") live.delete(id);
+      if (typeof id === "string") bury(id, now);
       return;
     }
-    // heartbeat / alerts / інше — lastMessageAt уже оновлено, більше нічого.
+    case "alerts": {
+      const levels = parseAlertLevels(msg.data);
+      // Битий кадр — не «тривог немає»: лишаємо попередній стан.
+      if (!levels) return;
+      const d = msg.data as { version?: unknown };
+      const version =
+        typeof d.version === "number" || typeof d.version === "string"
+          ? String(d.version)
+          : `${levels.updatedAt}|${levels.oblasts.length}|${levels.raions.length}`;
+      const changed = streamAlerts?.version !== version;
+      streamAlerts = { levels, version };
+      if (changed) {
+        for (const cb of alertListeners) {
+          try {
+            cb(levels);
+          } catch {
+            // Помилка слухача не має рвати потік цілей.
+          }
+        }
+      }
+      return;
+    }
+    // heartbeat / інше — lastMessageAt уже оновлено, більше нічого.
     default:
       return;
   }
@@ -184,7 +288,8 @@ export function liveThreats(): Threat[] | null {
   if (now - lastMessageAt > FRESH_MS) return null;
   const out: Threat[] = [];
   for (const [id, e] of live) {
-    if (now - e.at > STALE_TRACK_MS) {
+    const seen = Date.parse(e.threat.lastSeen ?? "");
+    if (Number.isFinite(seen) && now - seen > SOURCE_STALE_MS) {
       live.delete(id);
       continue;
     }
@@ -193,12 +298,58 @@ export function liveThreats(): Threat[] | null {
   return out;
 }
 
+/**
+ * Звірка з повним REST-знімком джерела: знімок каже, ЯКІ цілі є, потік — де
+ * вони зараз.
+ *
+ * `startedAt` — коли запит знімка вирушив. Події потоку, свіжіші за
+ * `startedAt − RECONCILE_GRACE_MS`, знімок не перебиває: вони або новіші за
+ * нього, або він їх іще не бачив.
+ */
+export function reconcileNeptunStream(rest: Threat[], startedAt: number): void {
+  if (!gotSnapshot) return;
+  const cutoff = startedAt - RECONCILE_GRACE_MS;
+  const restIds = new Set(rest.map((t) => t.id));
+  let added = 0;
+  let removed = 0;
+  for (const [id, e] of live) {
+    if (!restIds.has(id) && e.streamAt < cutoff) {
+      live.delete(id);
+      removed++;
+    }
+  }
+  for (const [id, at] of tombstones) if (at < cutoff) tombstones.delete(id);
+  for (const t of rest) {
+    if (tombstones.has(t.id)) continue;
+    const e = live.get(t.id);
+    if (!e) added++;
+    if (!e || e.streamAt < cutoff) {
+      if (e) accuracy.observe(e.threat, t);
+      live.set(t.id, { threat: t, streamAt: e?.streamAt ?? 0 });
+    }
+  }
+  lastReconcile = { at: startedAt, added, removed };
+}
+
+/** Стан заміру точності руху — щоб пережив редеплой (пише/читає server.ts). */
+export function driftAccuracyState(): DriftAccuracyState {
+  return accuracy.toState();
+}
+
+export function restoreDriftAccuracy(raw: unknown): void {
+  accuracy.restore(raw);
+}
+
 /** Діагностика стану мосту (для health-ендпойнта / адмін-панелі). */
 export function neptunStreamStatus(): {
   connected: boolean;
   fresh: boolean;
   tracks: number;
   ageMs: number | null;
+  /** Остання звірка з REST: коли (с тому) і скільки цілей вона повернула/прибрала. */
+  reconcile: { agoSec: number; added: number; removed: number } | null;
+  /** Заміряна похибка моделі руху проти нерухомої позначки — за типом курсу. */
+  driftAccuracy: ReturnType<DriftAccuracy["summary"]>;
 } {
   const connected = ws !== null && gotSnapshot;
   const ageMs = lastMessageAt ? Date.now() - lastMessageAt : null;
@@ -207,5 +358,13 @@ export function neptunStreamStatus(): {
     fresh: connected && ageMs !== null && ageMs <= FRESH_MS,
     tracks: live.size,
     ageMs,
+    reconcile: lastReconcile
+      ? {
+          agoSec: Math.round((Date.now() - lastReconcile.at) / 1000),
+          added: lastReconcile.added,
+          removed: lastReconcile.removed,
+        }
+      : null,
+    driftAccuracy: accuracy.summary(),
   };
 }

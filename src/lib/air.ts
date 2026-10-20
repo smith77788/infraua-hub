@@ -22,6 +22,7 @@ export function mercToLatLon(x: number, y: number): [number, number] {
 export type ThreatType =
   | "shahed" // ударний БпЛА (Shahed/Герань)
   | "reactive" // реактивний БпЛА
+  | "fpv" // FPV-дрон: малий, ближнього радіуса, біля фронту — не «Шахед»
   | "cruise" // крилата ракета
   | "missile" // ракета (загальне / С-300 / зен.)
   | "ballistic" // балістика (Іскандер/Кинджал)
@@ -54,6 +55,8 @@ const TYPE_PATTERNS: [ThreatType, RegExp][] = [
       "i",
     ),
   ],
+  // FPV — раніше за загальний «дрон»: «FPV-дрон» інакше ставав «шахедом».
+  ["fpv", new RegExp(`fpv|${NB}фпв${NA}`, "i")],
   ["reactive", /реактивн[а-яії]*\s*бпла|🏍/i],
   ["shahed", /шахед|shahed|герань|geran|мопед|бпла|дрон|uav|drone|🛵/i],
 ];
@@ -69,6 +72,7 @@ export function classifyThreatType(text: string): ThreatType {
 const THREAT_TYPES: ReadonlySet<string> = new Set<ThreatType>([
   "shahed",
   "reactive",
+  "fpv",
   "cruise",
   "missile",
   "ballistic",
@@ -104,6 +108,7 @@ const TYPE_SEVERITY: Record<ThreatType, number> = {
   kab: 5,
   reactive: 4,
   shahed: 3,
+  fpv: 2.5,
   aircraft: 2,
   recon: 1,
   unknown: 0,

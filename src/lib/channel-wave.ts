@@ -326,6 +326,7 @@ export const WAVE_ABANDON_MS = 12 * 60 * 60 * 1000;
 const TYPE_PLURAL: Record<ThreatType, string> = {
   shahed: "шахеди",
   reactive: "реактивні шахеди",
+  fpv: "FPV-дрони",
   cruise: "крилаті",
   missile: "ракети",
   ballistic: "балістика",

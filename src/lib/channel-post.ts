@@ -157,6 +157,7 @@ function loudCity(
 const TYPE_EMOJI: Record<ThreatType, string> = {
   shahed: "🛸",
   reactive: "🛸",
+  fpv: "🚁",
   cruise: "🚀",
   missile: "🚀",
   ballistic: "🎯",
@@ -203,7 +204,10 @@ function headlineKind(
   if (isRocketish(confirmed)) return "rocket";
   if (confirmed.has("kab")) return "kab";
   if (isRocketish(types) || types.has("kab")) return "rocket_unconfirmed";
-  if (types.has("shahed") || types.has("reactive")) return shaheds >= 8 ? "swarm" : "few";
+  // FPV — теж дрони в небі: пост лише з ними не має читатись як «спокійно».
+  // У «рій» вони не рахуються: рій — це про шахедів.
+  if (types.has("shahed") || types.has("reactive") || types.has("fpv"))
+    return shaheds >= 8 ? "swarm" : "few";
   return "calm";
 }
 

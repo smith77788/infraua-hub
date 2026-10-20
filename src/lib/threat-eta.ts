@@ -63,6 +63,7 @@ export const SPEED_RANGE_KMH: Record<ThreatType, [slow: number, fast: number]> =
   kab: [700, 1000],
   aircraft: [700, 900],
   reactive: [500, 600],
+  fpv: [60, 150],
   shahed: [185, 600],
   recon: [100, 200],
   unknown: [120, 600],
@@ -89,6 +90,7 @@ export const SPEED_KMH: Record<ThreatType, number> = {
   kab: 900,
   aircraft: 800,
   reactive: 550,
+  fpv: 100,
   shahed: 185, // поршнева «Герань» — найчастіший випадок
   recon: 120,
   unknown: 200,
