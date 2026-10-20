@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import type { Threat } from "./air";
+import { classifyThreatType, type Threat } from "./air";
 import { applyJetType, JET_WINDOW_MS, jetMentions, parseChannelPage } from "./jet-sightings";
 
 const NOW = Date.parse("2026-10-20T13:30:00Z");
@@ -113,5 +113,75 @@ describe("FPV — окремий тип, а не «шахед»", () => {
       explanationShort: "FPV-дрон — Херсон.",
     });
     expect(t!.type).toBe("fpv");
+  });
+});
+
+describe("«реактивний» без слова БпЛА — справжні дописи каналів", () => {
+  /*
+   * Усі рядки нижче — дослівні дописи наших же каналів за 19–20.10.2026.
+   * Заміряно: із 32 згадок «реактивн» попередній вираз ловив 24, а ці 8
+   * пропускав. Саме вони й називають пункт, тобто саме за ними `applyJetType`
+   * і мав би піднімати ціль у реактивні.
+   */
+  const REAL = [
+    "Один звичайний вздовж ДЕРЖАВНОГО кордону І один реактивний в напрямку Рокитне",
+    "Костопіль 1 реактивний Жадень 1 звичайний",
+    "Реактивний повернув в напрямку Костопіль-Головин",
+    "Найближчий реактивний на Житомирщині поки не до нас",
+    "Наступні 2 реактивні на півночі Житомирщини курсом на Рівненщину",
+    "новий реактивний залітає на північ Житомирщини",
+  ];
+
+  it("кожен такий допис тепер розпізнається як реактивний", () => {
+    for (const text of REAL) expect(classifyThreatType(text)).toBe("reactive");
+  });
+
+  it("форма зі словом БпЛА працює як раніше", () => {
+    expect(classifyThreatType("⚠️Реактивний БпЛА на півночі н.п. Березне Рівненщина")).toBe(
+      "reactive",
+    );
+  });
+
+  it("реактивна артилерія — не наш клас цілі й не підіймає дрон", () => {
+    // Інакше згадка про РСЗВ піднімала б у реактивні сусідній дрон за
+    // назвою пункту, тобто вкорочувала б час підльоту на підставі чужої події.
+    expect(classifyThreatType("Обстріл з реактивної артилерії по Куп'янську")).not.toBe("reactive");
+    expect(classifyThreatType("Зафіксовано реактивний снаряд")).not.toBe("reactive");
+  });
+
+  it("«звичайний» лишається звичайним", () => {
+    expect(classifyThreatType("1 звичайний керований на Острівськ")).not.toBe("reactive");
+  });
+
+  it("пункт із пропущеного раніше допису справді піднімає ціль", () => {
+    const now = Date.now();
+    const msgs = [{ at: now - 60_000, text: "Костопіль 1 реактивний Жадень 1 звичайний" }];
+    const threats = [
+      {
+        id: "1",
+        name: "Костопіль",
+        lat: 50.88,
+        lon: 26.45,
+        source: "n",
+        count: 1,
+        since: "",
+        expires: "",
+        type: "shahed" as const,
+      },
+      {
+        id: "2",
+        name: "Львів",
+        lat: 49.84,
+        lon: 24.03,
+        source: "n",
+        count: 1,
+        since: "",
+        expires: "",
+        type: "shahed" as const,
+      },
+    ];
+    const out = applyJetType(threats, jetMentions(msgs, now));
+    expect(out[0]!.type).toBe("reactive");
+    expect(out[1]!.type).toBe("shahed"); // чужий пункт не чіпаємо
   });
 });
