@@ -343,7 +343,10 @@
   border-radius: 3px;
   background: var(--air, #ff9900);
   color: #0a0e14;
-  font: 700 8px/10px "JetBrains Mono", ui-monospace, monospace;
+  font:
+    700 8px/10px "JetBrains Mono",
+    ui-monospace,
+    monospace;
   letter-spacing: -0.02em;
   pointer-events: none;
 }

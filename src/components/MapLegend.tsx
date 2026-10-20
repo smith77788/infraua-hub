@@ -93,7 +93,7 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
           повірить позначці більше, ніж варто.
         */}
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-          Яскравість = свіжість (свіжі пульсують). Тип визначається з тексту OSINT-каналів; «—» —
+          Яскравість = свіжість (свіжі пульсують). Тип визначається з тексту OSINT-каналів; «?» —
           тип невідомий. Літера в кутку позначки — тип цілі.
         </p>
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">

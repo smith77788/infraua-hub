@@ -77,8 +77,7 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   // Розвідник (Орлан/ZALA): довгі прямі крила і хвіст — «літачок», а не дельта.
   recon: {
     color: "#22d3ee",
-    glyph:
-      '<path d="M11 3.5h2v16h-2z"/><path d="M2 8.5h20v2.4H2z"/><path d="M7.5 18h9v2.2h-9z"/>',
+    glyph: '<path d="M11 3.5h2v16h-2z"/><path d="M2 8.5h20v2.4H2z"/><path d="M7.5 18h9v2.2h-9z"/>',
     label: "Розвідувальний БпЛА",
     code: "РЗ",
   },
