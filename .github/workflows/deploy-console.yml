@@ -1,0 +1,80 @@
+# Викатити КОНСОЛЬ руками, коли тригер Railway не спрацював.
+#
+# Навіщо це поряд із deploy-platform.yml: консоль на Railway має власний
+# GitHub-тригер і зазвичай деплоїться сама. Зазвичай — але не завжди. Заміряно
+# 20.10.2026: сім зелених комітів, конфігурація збірки незмінна, залежності не
+# чіпані — і прод вісімдесят хвилин стояв на старому коміті, бо тригер просто
+# не спрацював. Подивитися, ЧОМУ, можна лише в дашборді Railway; викатити
+# звідти ж — теж. Цей workflow дає другий шлях, не чекаючи на дашборд.
+#
+# Вручну, і тільку вручну (`workflow_dispatch`). Автоматичного тригера тут
+# немає СВІДОМО: разом із власним тригером Railway це давало б два деплої на
+# один пуш, тобто два перезапуски й зайву плату.
+#
+# Потрібне:
+#   • секрет RAILWAY_TOKEN — проєктний токен Railway (той самий, що для
+#     платформи, якщо він має доступ до сервісу консолі);
+#   • назва сервісу консолі — її треба ВВЕСТИ при запуску або задати змінною
+#     RAILWAY_CONSOLE_SERVICE. Усталеної назви тут немає навмисно: вгадувати
+#     ім'я чужого сервісу означало б або промахнутись, або — гірше — влучити в
+#     інший сервіс того ж проєкту.
+
+name: Deploy console (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Назва сервісу консолі в Railway (якщо не задано змінну RAILWAY_CONSOLE_SERVICE)"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-console
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Не деплоїмо зламане: ті самі перевірки, що й у CI. Дешевше впасти тут,
+      # ніж викотити консоль, на яку люди дивляться під тривогою.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Check
+        run: bun run check
+
+      - name: Guard — чи є токен і назва сервісу?
+        id: guard
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE: ${{ inputs.service || vars.RAILWAY_CONSOLE_SERVICE }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN не заданий у секретах репозиторію (Settings → Secrets → Actions)."
+            exit 1
+          fi
+          if [ -z "$SERVICE" ]; then
+            echo "::error::Назва сервісу консолі не задана. Введіть її полем 'service' при запуску або задайте змінну RAILWAY_CONSOLE_SERVICE."
+            exit 1
+          fi
+          echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE: ${{ steps.guard.outputs.service }}
+        run: |
+          npm install -g @railway/cli
+          # --ci не тримає лог відкритим вічно, --service обирає саме консоль.
+          railway up --ci --service "$SERVICE"
+
+      - name: Що перевірити після деплою
+        run: |
+          echo "Коли деплой завершиться:"
+          echo "  curl -s https://<ваш-домен>/api/build   → short має дорівнювати ${{ github.sha }}"
+          echo "  curl -s https://<ваш-домен>/api/health  → boots.sameBuildRestarts відрізнить деплой від падіння"
