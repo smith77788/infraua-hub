@@ -2,23 +2,13 @@ import { useState } from "react";
 import CollapsiblePanel from "./CollapsiblePanel";
 import { LEVEL_COLOR } from "@/lib/alert-levels";
 import { HelpCircle, X } from "lucide-react";
+import { LEGEND_ORDER, TYPE_STYLE } from "@/lib/threat-glyphs";
 
 /*
  * Легенда карти. На карті багато шарів і типів позначок (типізовані повітряні
  * цілі, лінія фронту, пожежі, обʼєкти під загрозою) — без легенди читати їх
  * важко. Компактна, згортається; типово згорнута, щоб не заважати.
  */
-
-const AIR_TYPES: { color: string; label: string }[] = [
-  { color: "#ffd23f", label: "Ударний БпЛА" },
-  { color: "#ff8c1a", label: "Реактивний БпЛА" },
-  { color: "#ff6a2a", label: "Крилата ракета" },
-  { color: "#ff4d4d", label: "Ракета" },
-  { color: "#ff2d2d", label: "Балістика" },
-  { color: "#ffb020", label: "КАБ" },
-  { color: "#22d3ee", label: "Розвід. БпЛА" },
-  { color: "#38bdf8", label: "Авіація" },
-];
 
 function Swatch({ color, shape = "tri" }: { color: string; shape?: "tri" | "dot" | "line" }) {
   if (shape === "line")
@@ -72,11 +62,30 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         Повітряні цілі (за типом)
       </p>
       <div className="mb-2 grid grid-cols-1 gap-1">
-        {AIR_TYPES.map((t) => (
-          <div key={t.label} className="flex items-center gap-2 text-[11px]">
-            <Swatch color={t.color} /> {t.label}
-          </div>
-        ))}
+        {LEGEND_ORDER.map((type) => {
+          const t = TYPE_STYLE[type];
+          return (
+            <div key={type} className="flex items-center gap-2 text-[11px]">
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill={t.color}
+                stroke="#0a0e14"
+                strokeWidth="1.1"
+                className="shrink-0"
+                dangerouslySetInnerHTML={{ __html: t.glyph }}
+              />
+              <span
+                className="min-w-[22px] rounded-[3px] px-0.5 text-center font-mono text-[8px] font-bold leading-[11px] text-background"
+                style={{ background: t.color }}
+              >
+                {t.code}
+              </span>
+              {t.label}
+            </div>
+          );
+        })}
         {/*
           Легенда мусить пояснювати те, чого не видно з вигляду. Коло довкола
           цілі й густота пунктиру — не оформлення, а два різні твердження про
@@ -85,7 +94,7 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         */}
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
           Яскравість = свіжість (свіжі пульсують). Тип визначається з тексту OSINT-каналів; «—» —
-          тип невідомий.
+          тип невідомий. Літера в кутку позначки — тип цілі.
         </p>
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
           <b className="text-foreground">Коло довкола цілі</b> — розкид позиції, як його називає

@@ -60,6 +60,7 @@ import {
   radiusIsStated,
 } from "@/lib/threat-quality";
 import { useThreatMotion } from "./use-threat-motion";
+import { TYPE_STYLE } from "@/lib/threat-glyphs";
 
 interface Props {
   facilities: Facility[];
@@ -200,52 +201,6 @@ const CITY_CENTERS = Object.values(OBLASTS)
 const COMPASS = ["Пн", "ПнСх", "Сх", "ПдСх", "Пд", "ПдЗх", "Зх", "ПнЗх"];
 const compass = (d: number) => COMPASS[Math.round((((d % 360) + 360) % 360) / 45) % 8];
 
-// Силует + колір за типом цілі. Кольори узгоджені зі звичною семантикою:
-// БпЛА — жовтий, реактивний БпЛА — помаранчевий, ракети/балістика — червоне.
-const TYPE_STYLE: Record<ThreatType, { color: string; glyph: string; label: string }> = {
-  // Силует дельтакрилого БпЛА (Shahed-136), а не абстрактна стрілка: широке
-  // дельтакрило, осьова фюзеляжна лінія і задня риска — штовхальний гвинт. Так
-  // ціль упізнається як дрон з першого погляду, як на картах конкурентів.
-  shahed: {
-    color: "#ffd23f",
-    glyph:
-      '<path d="M12 2.5 L20 19.5 L12 15.5 L4 19.5 Z"/><path d="M12 5.5 L12 15"/><path d="M9 19 L15 19"/>',
-    label: "Ударний БпЛА",
-  },
-  reactive: {
-    color: "#ff8c1a",
-    glyph: '<path d="M12 2l6 18-6-3.6L6 20z"/><path d="M12 5v11"/>',
-    label: "Реактивний БпЛА",
-  },
-  cruise: {
-    color: "#ff6a2a",
-    glyph: '<path d="M3 12h13l5-2-5-2H3z"/><path d="M7 12l-2 4M11 12l-2 4"/>',
-    label: "Крилата ракета",
-  },
-  missile: {
-    color: "#ff4d4d",
-    glyph: '<path d="M12 2c3.2 4 3.2 9 0 20-3.2-11-3.2-16 0-20z"/><path d="M9 16l-3 5M15 16l3 5"/>',
-    label: "Ракета",
-  },
-  ballistic: {
-    color: "#ff2d2d",
-    glyph: '<path d="M12 1c3.4 4.5 3.4 10 0 22-3.4-12-3.4-17.5 0-22z"/>',
-    label: "Балістика",
-  },
-  kab: { color: "#ffb020", glyph: '<path d="M12 3v11M8 14h8l-4 7z"/>', label: "КАБ" },
-  recon: {
-    color: "#22d3ee",
-    glyph: '<path d="M12 4l8 8-8 8-8-8z"/><circle cx="12" cy="12" r="2"/>',
-    label: "Розвід. БпЛА",
-  },
-  aircraft: { color: "#38bdf8", glyph: '<path d="M2 12l20-6-7 18-3-8z"/>', label: "Авіація" },
-  unknown: {
-    color: "#ffb020",
-    glyph: '<path d="M12 3l7 16-7-3.6L5 19z"/>',
-    label: "Повітряна ціль",
-  },
-};
-
 // Колір і значок рівня верифікації (анти-фейк) для попапа цілі.
 const VERIFICATION_COLOR: Record<VerificationLevel, string> = {
   official: "#34d399", // офіційне джерело — зелений
@@ -298,7 +253,7 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   const key = `${type}|${fresh}|${rot ?? "x"}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
-  const { color, glyph } = TYPE_STYLE[type];
+  const { color, glyph, code } = TYPE_STYLE[type];
   const { opacity, size } = FRESH_TONE[fresh];
   const g = Math.round(size * 0.74);
   const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
@@ -306,7 +261,7 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   // за курсом дивиться саме форма цілі.
   const svgTransform = rot != null ? ` style="transform:rotate(${rot}deg)"` : "";
   const html = `<div class="air-tgt${pulse}" style="--air:${color};width:${size}px;height:${size}px;opacity:${opacity}">
-<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg></div>`;
+<svg viewBox="0 0 24 24" width="${g}" height="${g}" fill="${color}" stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"${svgTransform}>${glyph}</svg><span class="air-tgt__code">${code}</span></div>`;
   const icon = L.divIcon({
     html,
     className: "threat-pin",
