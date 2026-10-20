@@ -61,6 +61,9 @@ import {
 } from "@/lib/threat-quality";
 import { useThreatMotion } from "./use-threat-motion";
 import { TYPE_STYLE } from "@/lib/threat-glyphs";
+import type { LaunchView } from "@/lib/infra.functions";
+import { advance } from "@/lib/dead-reckoning";
+import { bearingDeg } from "@/lib/threat-eta";
 
 interface Props {
   facilities: Facility[];
@@ -77,6 +80,8 @@ interface Props {
    */
   alertLevels?: AlertLevels | null;
   threats: Threat[];
+  /** Пуски ще на тій території — за повідомленнями каналів (`launch-sightings`). */
+  launches?: LaunchView[];
   frontline: FrontlineArea[];
   showFrontline: boolean;
   fires: FirePoint[];
@@ -595,6 +600,102 @@ function ForecastCone({ threats }: { threats: Threat[] }) {
   );
 }
 
+/*
+ * Куди дивиться дуга пусків — у бік України. Центр країни, а не ціль: куди
+ * саме летить серія, з повідомлення про пуск не видно, і дуга це й каже —
+ * «десь тут уже можуть бути», а не «летять на Київ».
+ */
+const UA_CENTER = { lat: 49.0, lon: 31.4 };
+
+function launchArc(l: LaunchView): [number, number][] {
+  const toUa = bearingDeg(l, UA_CENTER);
+  const pts: [number, number][] = [];
+  for (let d = -60; d <= 60; d += 5) {
+    const p = advance(l.lat, l.lon, toUa + d, l.reachKm);
+    pts.push([p.lat, p.lon]);
+  }
+  return pts;
+}
+
+function groupWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m100 >= 11 && m100 <= 14) return "груп";
+  if (m10 === 1) return "група";
+  if (m10 >= 2 && m10 <= 4) return "групи";
+  return "груп";
+}
+
+function launchIcon(type: ThreatType): L.DivIcon {
+  const { color, glyph } = TYPE_STYLE[type];
+  return L.divIcon({
+    className: "threat-pin",
+    html:
+      `<div style="width:30px;height:30px;border-radius:50%;border:2px dashed ${color};` +
+      `display:flex;align-items:center;justify-content:center;background:rgba(10,14,20,.75)">` +
+      `<svg viewBox="0 0 24 24" width="18" height="18" fill="${color}" stroke="#0a0e14" stroke-width="1.2">${glyph}</svg></div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15],
+  });
+}
+
+/**
+ * Пуски — ще на тій території. Позначка району (пунктирне кільце: «район», не
+ * точка) і дуга в бік України: як далеко перші з серії могли долетіти зараз.
+ */
+function LaunchLayer({ launches }: { launches: LaunchView[] }) {
+  if (launches.length === 0) return null;
+  return (
+    <>
+      {launches.map((l) => {
+        const color = TYPE_STYLE[l.type].color;
+        const ago = Math.max(0, Math.round((Date.now() - l.lastAt) / 60_000));
+        return (
+          <Fragment key={`launch-${l.key}`}>
+            {l.reachKm > 0 ? (
+              <Polyline
+                positions={launchArc(l)}
+                pathOptions={{ color, weight: 2, opacity: 0.7, dashArray: "6 6" }}
+              />
+            ) : null}
+            <Marker position={[l.lat, l.lon]} icon={launchIcon(l.type)} zIndexOffset={900}>
+              <Popup maxWidth={240} autoPanPadding={[8, 8]}>
+                <div className="space-y-1 font-sans text-xs">
+                  <p className="font-semibold" style={{ color }}>
+                    Пуски: {TYPE_STYLE[l.type].label.toLowerCase()}
+                    {l.groups ? ` · ${l.groups} ${groupWord(l.groups)}` : ""}
+                  </p>
+                  <p className="opacity-80">Район: {l.label} — центр пункту, не точка пуску</p>
+                  <p className="opacity-70">
+                    Остання згадка {ago} хв тому · повідомлень: {l.mentions}
+                  </p>
+                  {l.reachKm > 0 ? (
+                    <p className="opacity-70">
+                      Перші з серії могли пролетіти ~{l.reachKm} км
+                      {l.toBorderMin === 0
+                        ? " — уже могли перетнути кордон"
+                        : l.toBorderMin !== null
+                          ? ` · до кордону ~${l.toBorderMin} хв`
+                          : ""}
+                    </p>
+                  ) : (
+                    <p className="opacity-60">Тип не названо — як далеко долетіли, не оцінюємо</p>
+                  )}
+                  <p className="opacity-60 text-[11px] leading-snug">
+                    За повідомленнями каналів спостереження; напрямок польоту з них не видно — дуга
+                    показує лише відстань.
+                  </p>
+                </div>
+              </Popup>
+            </Marker>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 function ThreatLayer({ threats }: { threats: Threat[] }) {
   const map = useMap();
   /*
@@ -953,6 +1054,7 @@ export default function InfraMap({
   zones,
   alertLevels = null,
   threats,
+  launches = [],
   frontline,
   showFrontline,
   fires,
@@ -1223,6 +1325,7 @@ export default function InfraMap({
 
       {/* Повітряні цілі (OSINT) — з кластеризацією за масштабом */}
       <ForecastCone threats={threats} />
+      <LaunchLayer launches={launches} />
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />

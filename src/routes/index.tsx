@@ -515,6 +515,8 @@ function Console() {
 
   const effectiveAir = airPayload ?? cachedAir?.data;
   const threats = useMemo(() => effectiveAir?.threats ?? [], [effectiveAir]);
+  // Пуски — ще на тій території: звідки й куди вже могло долетіти.
+  const launches = useMemo(() => effectiveAir?.launches ?? [], [effectiveAir]);
   const online = useOnline();
   const airConn = useMemo(
     () =>
@@ -1543,6 +1545,8 @@ function Console() {
                     zones={zones}
                     alertLevels={alertLevels}
                     threats={mapThreats}
+                    // У перегляді історії пуски «зараз» не мають сенсу — лише наживо.
+                    launches={raidCursor === null ? launches : []}
                     frontline={frontline}
                     showFrontline={showFrontline}
                     fires={fires}

@@ -25,6 +25,12 @@ import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
 import { applyJetType, jetMentions, parseChannelPage, type ChannelMessage } from "./jet-sightings";
+import {
+  launchReach,
+  launchSightings,
+  type LaunchReach,
+  type LaunchSighting,
+} from "./launch-sightings";
 import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
@@ -673,6 +679,15 @@ interface ThreatsPayload {
   fetchedAt: string;
   degraded: boolean;
   source?: "neptun" | "detoyshahed";
+  /** Пуски за повідомленнями каналів — ще на тій території (`launch-sightings`). */
+  launches?: LaunchView[];
+}
+
+export type LaunchView = LaunchSighting & LaunchReach;
+
+/** Пуски з того самого фонового кешу повідомлень, що й реактивні дрони. */
+export function currentLaunches(now = Date.now()): LaunchView[] {
+  return launchSightings(jetMessages, now).map((s) => ({ ...s, ...launchReach(s, now) }));
 }
 
 /**
@@ -999,6 +1014,7 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
           fetchedAt: new Date().toISOString(),
           degraded: false,
           source: "neptun",
+          launches: currentLaunches(now),
         } satisfies ThreatsPayload;
       }
     } catch {
