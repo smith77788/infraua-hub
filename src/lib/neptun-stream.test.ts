@@ -5,7 +5,9 @@ import {
   ensureNeptunStream,
   liveThreats,
   neptunStreamStatus,
+  onStreamAlerts,
   reconcileNeptunStream,
+  streamAlertLevels,
 } from "./neptun-stream";
 
 /**
@@ -168,9 +170,51 @@ describe("neptun-stream міст", () => {
     expect(liveThreats()!.map((t) => t.id)).toEqual([]);
   });
 
+  it("кадр тривог з потоку читається тим самим розбором, що й REST, і будить слухачів", () => {
+    // Форма — зі справжнього кадру потоку (2026-10-20).
+    const frame = {
+      type: "alerts",
+      data: {
+        version: 1792461654,
+        updatedAt: "2026-10-20T02:00:54Z",
+        raions: [
+          {
+            key: "бахмутський",
+            name: "Бахмутський район",
+            oblast: "Донецька область",
+            since: "2026-10-20T00:18:36Z",
+            level: "red",
+            reasons: ["Ракетна загроза (червоний рівень)"],
+          },
+        ],
+        oblasts: [],
+      },
+    };
+    let calls = 0;
+    const off = onStreamAlerts(() => calls++);
+    FakeWS.last!.emit({ type: "heartbeat" });
+    FakeWS.last!.emit(frame);
+    expect(streamAlertLevels()!.raions[0]!.level).toBe("red");
+    expect(calls).toBe(1);
+    // Той самий `version` — не зміна: слухачів не будимо вдруге.
+    FakeWS.last!.emit(frame);
+    expect(calls).toBe(1);
+    FakeWS.last!.emit({ ...frame, data: { ...frame.data, version: 1792461700, raions: [] } });
+    expect(calls).toBe(2);
+    expect(streamAlertLevels()!.raions).toHaveLength(0);
+    off();
+  });
+
+  it("битий кадр тривог не стирає попередній стан і не читається як «тривог немає»", () => {
+    FakeWS.last!.emit({ type: "alerts", data: { щось: 1 } });
+    expect(streamAlertLevels()).not.toBeNull();
+  });
+
   it("розрив планує перепідключення без падіння процесу", () => {
     expect(() => FakeWS.last!.close()).not.toThrow();
     // після close стан більше не «живий» до нового снапшоту
     expect(liveThreats()).toBeNull();
+    // і тривоги з мертвого зʼєднання не видаються за поточні
+    expect(streamAlertLevels()).toBeNull();
   });
 });

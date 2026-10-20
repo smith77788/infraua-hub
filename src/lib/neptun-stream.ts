@@ -1,4 +1,5 @@
 import type { Threat } from "./air";
+import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { DriftAccuracy, type DriftAccuracyState } from "./drift-accuracy";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 
@@ -86,6 +87,35 @@ let lastReconcile: { at: number; added: number; removed: number } | null = null;
  */
 const tombstones = new Map<string, number>();
 
+/*
+ * Тривоги з потоку.
+ *
+ * Потік пушить кадр `alerts` на конекті й на кожній зміні: `data` має РІВНО
+ * форму `/api/v1/alerts` (знято з живого потоку 2026-10-20), тож розбирає його
+ * та сама `parseAlertLevels`, що й REST, — одна правда, не дві. Різниця лише в
+ * часі: REST ми опитували раз на обхід (до ~55 с від зміни до реакції), а
+ * кадр приходить у момент зміни.
+ */
+let streamAlerts: { levels: AlertLevels; version: string } | null = null;
+const alertListeners = new Set<(levels: AlertLevels) => void>();
+
+/** Підписатися на ЗМІНУ тривог у потоці. Повертає відписку. */
+export function onStreamAlerts(cb: (levels: AlertLevels) => void): () => void {
+  alertListeners.add(cb);
+  return () => alertListeners.delete(cb);
+}
+
+/**
+ * Останні рівні тривог із потоку, АБО `null`, коли потоку не можна довіряти
+ * (не підключений, ще без снапшоту, замовк) чи кадру тривог іще не було. `null`
+ * — сигнал іти на REST, а не «тривог немає».
+ */
+export function streamAlertLevels(): AlertLevels | null {
+  if (!streamAlerts || !gotSnapshot) return null;
+  if (Date.now() - lastMessageAt > FRESH_MS) return null;
+  return streamAlerts.levels;
+}
+
 function bury(id: string, at: number): void {
   live.delete(id);
   tombstones.set(id, at);
@@ -160,6 +190,8 @@ function connect(): void {
     connecting = false;
     if (ws === socket) ws = null;
     gotSnapshot = false;
+    // Тривоги з мертвого зʼєднання — не поточні: до нового кадру йдемо на REST.
+    streamAlerts = null;
     scheduleReconnect();
   };
 }
@@ -202,7 +234,29 @@ function handle(msg: { type?: string; data?: unknown }): void {
       if (typeof id === "string") bury(id, now);
       return;
     }
-    // heartbeat / alerts / інше — lastMessageAt уже оновлено, більше нічого.
+    case "alerts": {
+      const levels = parseAlertLevels(msg.data);
+      // Битий кадр — не «тривог немає»: лишаємо попередній стан.
+      if (!levels) return;
+      const d = msg.data as { version?: unknown };
+      const version =
+        typeof d.version === "number" || typeof d.version === "string"
+          ? String(d.version)
+          : `${levels.updatedAt}|${levels.oblasts.length}|${levels.raions.length}`;
+      const changed = streamAlerts?.version !== version;
+      streamAlerts = { levels, version };
+      if (changed) {
+        for (const cb of alertListeners) {
+          try {
+            cb(levels);
+          } catch {
+            // Помилка слухача не має рвати потік цілей.
+          }
+        }
+      }
+      return;
+    }
+    // heartbeat / інше — lastMessageAt уже оновлено, більше нічого.
     default:
       return;
   }

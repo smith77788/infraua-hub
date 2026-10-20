@@ -66,6 +66,7 @@ import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { concernRadiusKm } from "./lib/advisory";
 import { AlertOutcomes } from "./lib/alert-outcome";
+import { onStreamAlerts, streamAlertLevels } from "./lib/neptun-stream";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
 import {
   isInUkraine,
@@ -846,6 +847,13 @@ let alertZonesCache: { at: number; polygons: AlertRing[] } | null = null;
 let alertLevelsCache: { at: number; levels: AlertLevels | null } | null = null;
 async function fetchAlertLevels(maxAgeMs = 25_000): Promise<AlertLevels | null> {
   const now = Date.now();
+  // Поки живий потік Нептуна — рівні з нього: той самий формат і те саме
+  // джерело, лише в момент зміни, а не з кроком опитування.
+  const live = streamAlertLevels();
+  if (live) {
+    alertLevelsCache = { at: now, levels: live };
+    return live;
+  }
   if (alertLevelsCache && now - alertLevelsCache.at < maxAgeMs) return alertLevelsCache.levels;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
@@ -3347,10 +3355,12 @@ async function hydrateAlertMemory(now: number): Promise<void> {
   alertSweepSeen = { ...alertSweepSeen, restored: true };
 }
 
-async function officialAlertSweep(): Promise<void> {
+async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   if (!token) return;
-  const active = await fetchOfficialAlerts();
+  // `fresh` — обхід, розбуджений зміною тривог у потоці: кеш тут зайвий, бо
+  // він і є причиною, через яку ми б побачили зміну на крок пізніше.
+  const active = await fetchOfficialAlerts(opts.fresh ? 0 : undefined);
   if (active === null) return; // джерело мовчить — станів не вигадуємо
 
   const now = Date.now();
@@ -4289,6 +4299,44 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
 function startAlertScheduler(): void {
   if (alertTimer) return;
   if (!process.env["TELEGRAM_BOT_TOKEN"]) return;
+  /*
+   * Зміна тривог у потоці Нептуна будить обхід офіційних тривог ОДРАЗУ, а не на
+   * наступному кроці (до ~55 с: 30 с кроку + 25 с кешу).
+   *
+   * Що будить людину, не змінюється: початок і відбій тривоги, як і раніше,
+   * — за офіційним джерелом (`ubilling`), лише запитаним свіжо. Підміна
+   * джерела, яке будить уночі, — окреме рішення з окремою перевіркою; тут
+   * змінюється тільки КОЛИ ми дивимось.
+   *
+   * Той самий замок, що й у кроку: два обходи поверх одного дали б два
+   * сповіщення про той самий перехід. Якщо крок саме йде — позначаємо, і
+   * позаплановий обхід стартує одразу після нього. Секунда згладжування
+   * збирає пачку кадрів в один обхід.
+   */
+  let kickPending = false;
+  let kickTimer: ReturnType<typeof setTimeout> | null = null;
+  const runKick = () => {
+    kickTimer = null;
+    if (alertSweepRunning) {
+      kickPending = true;
+      return;
+    }
+    alertSweepRunning = true;
+    officialAlertSweep({ fresh: true })
+      .catch((e) => console.error("event alert sweep failed", e))
+      .finally(() => {
+        alertSweepRunning = false;
+        if (kickPending) {
+          kickPending = false;
+          kick();
+        }
+      });
+  };
+  const kick = () => {
+    if (kickTimer) return;
+    kickTimer = setTimeout(runKick, 1_000);
+    (kickTimer as unknown as { unref?: () => void }).unref?.();
+  };
   const tick = () => {
     // Перекриття обходів дало б два сповіщення про ту саму ціль: довгий обхід
     // не має запускати наступний поверх себе.
@@ -4298,11 +4346,18 @@ function startAlertScheduler(): void {
       .catch((e) => console.error("alert sweep failed", e))
       .finally(() => {
         alertSweepRunning = false;
+        // Зміна тривог прийшла, поки йшов крок, — дивимось на неї одразу.
+        if (kickPending) {
+          kickPending = false;
+          kick();
+        }
       });
   };
   const warmup = setTimeout(tick, 30_000);
   (warmup as unknown as { unref?: () => void }).unref?.();
   alertTimer = setInterval(tick, ALERT_TICK_EVERY_MS);
+
+  onStreamAlerts(kick);
   (alertTimer as unknown as { unref?: () => void }).unref?.();
 }
 startAlertScheduler();
