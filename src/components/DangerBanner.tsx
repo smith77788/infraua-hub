@@ -36,6 +36,14 @@ export default function DangerBanner({ notice }: { notice: DangerNotice }) {
             <span className="ml-1.5 opacity-90">{notice.reasons.join(" · ")}</span>
           ) : null}
           <span className="ml-1.5 opacity-60">— оголошено офіційно</span>
+          {/*
+           * Число цілей поруч із попередженням, а не лише на карті: саме
+           * розрив між «оголошено» і «у фіді нуль» людина читає як «тихо»,
+           * коли бачить порожню карту й не має із чим її зіставити.
+           */}
+          {notice.hereCount !== null ? (
+            <span className="ml-1.5 opacity-60">· цілей у фіді тут: {notice.hereCount}</span>
+          ) : null}
         </div>
       </div>
       {notice.blindTo ? (

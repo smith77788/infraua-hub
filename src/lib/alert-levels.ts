@@ -23,6 +23,8 @@
  * не лише колір.
  */
 
+import { OBLASTS } from "./alerts";
+
 export type AlertLevel = "red" | "yellow";
 
 export interface AlertArea {
@@ -95,12 +97,59 @@ export function parseAlertLevels(body: unknown): AlertLevels | null {
 }
 
 /** Нормалізація назви області: джерела пишуть «Київська обл.» і «Київська область». */
-export function oblastKey(name: string): string {
+/**
+ * Службові слова прибрано — але про синоніми цей крок ще нічого не знає.
+ */
+function bareKey(name: string): string {
   return name
     .toLowerCase()
     .replace(/\s*(область|обл\.?|region)\s*$/u, "")
     .replace(/^м\.\s*/u, "")
     .trim();
+}
+
+/**
+ * Народна назва області → офіційна.
+ *
+ * У системі дві рівноправні назви однієї області: офіційна («Рівненська
+ * область») — так говорить джерело рівнів (`neptun`), і народна
+ * («Рівненщина») — так `oblastOf` підписує ціль і так це читає людина.
+ *
+ * Міст між ними вже існував — `shortOblastName` в `official-alerts.ts`, його
+ * написали, коли на цьому ж спіткнулась звірка відбою. Але він стоїть
+ * усередині ОДНОГО джерела. Рівні небезпеки додали пізніше й з іншого
+ * джерела — і бридж до них просто не доїхав.
+ *
+ * Ціна заміряна, а не уявна: попередження про небезпеку в консолі й розсилка
+ * про підвищення рівня в боті були написані, протестовані на офіційних назвах
+ * і НЕ працювали в продукті — у людини зі збереженою точкою `levelForOblast`
+ * повертав `null` завжди, бо на вхід йому йшла народна назва.
+ *
+ * Тому тепер мостом служить сам реєстр областей, а не ще одна таблиця поруч:
+ * там офіційна назва — ключ, народна — поле `name`, і розійтися їм ніде.
+ */
+const OBLAST_ALIASES: ReadonlyMap<string, string> = (() => {
+  const canon = new Set<string>();
+  for (const official of Object.keys(OBLASTS)) canon.add(bareKey(official));
+  const m = new Map<string, string>();
+  for (const [official, o] of Object.entries(OBLASTS)) {
+    const key = bareKey(official);
+    const alias = bareKey(o.name);
+    // Народна назва не має права перебити чиюсь офіційну.
+    if (alias !== key && !canon.has(alias)) m.set(alias, key);
+  }
+  return m;
+})();
+
+/**
+ * Ключ області — однаковий, якою з двох назв її не назвали.
+ *
+ * Невідому назву лишаємо як є: вигадати їй область означало б приписати
+ * тривогу не тому регіону.
+ */
+export function oblastKey(name: string): string {
+  const bare = bareKey(name);
+  return OBLAST_ALIASES.get(bare) ?? bare;
 }
 
 /**

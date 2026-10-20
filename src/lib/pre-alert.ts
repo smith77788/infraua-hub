@@ -22,12 +22,26 @@
  * Не обіцянкою «ми швидші», а заміряним фактом по кожному конкретному разу.
  */
 
+import { oblastKey } from "./alert-levels";
+
 /** Стан офіційної тривоги над точкою на момент нашого попередження. */
 export type AlertPhase = "pre" | "official" | "unknown";
 
+/**
+ * Порівнюємо за ключем області, а не за рядком.
+ *
+ * Це запобіжник, а не виправлення збою: наразі обидві сторони короткі
+ * («Рівненщина»), бо `parseOfficialAlerts` зводить назви джерела через
+ * `shortOblastName`. Але та згортка живе в одному конкретному джерелі, і
+ * сусідній шлях — рівні небезпеки з `neptun` — саме на цьому й поламався:
+ * там назви лишились офіційними, і порівняння не збіглося ні разу (див.
+ * `oblastKey` в `alert-levels.ts`). Тож тут порівняння від форми назви більше
+ * не залежить.
+ */
 export function alertPhase(official: readonly string[] | null, oblast: string): AlertPhase {
   if (official === null) return "unknown";
-  return official.includes(oblast) ? "official" : "pre";
+  const key = oblastKey(oblast);
+  return official.some((o) => oblastKey(o) === key) ? "official" : "pre";
 }
 
 /** Скільки хвилин ми випередили офіційне оголошення. */

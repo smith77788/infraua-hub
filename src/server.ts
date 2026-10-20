@@ -3417,7 +3417,11 @@ async function officialAlertSweep(): Promise<void> {
     for (const sub of subs) {
       if (sub.muted || sub.officialAlerts === false) continue;
       const mine = placesFromLegacy(sub.point, sub.places, now).filter(
-        (p) => oblastOf(p.lat, p.lon) === t.oblast,
+        // Обидві назви короткі (`parseOfficialAlerts` зводить їх через
+        // `shortOblastName`), тож тут `oblastKey` — запобіжник на той випадок,
+        // коли перелік тривог почне приходити з іншого джерела, як уже
+        // сталося з рівнями небезпеки.
+        (p) => oblastKey(oblastOf(p.lat, p.lon)) === oblastKey(t.oblast),
       );
       if (mine.length === 0) continue;
       const text =

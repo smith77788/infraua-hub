@@ -11,12 +11,17 @@ const levels = (level: string, reason: string, oblast = "Сумська обла
     updatedAt: "",
   })!;
 
-const threat = (type: ThreatType): Threat =>
+// Координати мають значення: модуль рахує цілі саме в області людини.
+const SUMY = { lat: 50.91, lon: 34.8 };
+const RIVNE = { lat: 50.62, lon: 26.25 };
+const ZHYTOMYR = { lat: 50.25, lon: 28.66 };
+
+const threat = (type: ThreatType, at: { lat: number; lon: number } = SUMY): Threat =>
   ({
     id: "1",
     name: "x",
-    lat: 50,
-    lon: 30,
+    lat: at.lat,
+    lon: at.lon,
     source: "s",
     count: 1,
     since: "",
@@ -84,9 +89,49 @@ describe("dangerNotice", () => {
     expect(n.blindTo).toBeNull();
   });
 
-  it("дронова загроза не тягне застереження: цей клас фід покриває", () => {
-    const n = dangerNotice(levels("yellow", DRONE), [], "Сумська область");
+  it("дронова загроза з дроном у цій же області — застереження не потрібне", () => {
+    // Інакше застереження лунало б завжди й перестало б щось означати.
+    const n = dangerNotice(levels("yellow", DRONE), [threat("shahed")], "Сумська область");
     expect(n.level).toBe("watch");
+    expect(n.blindTo).toBeNull();
+    expect(n.hereCount).toBe(1);
+  });
+
+  it("ГОЛОВНЕ-2: оголошено, а цілей у цій області нуль — називає сліпоту МІСЦЯ", () => {
+    /*
+     * Удар по Рівному 19.10.2026, 11:40. Офіційно — дронова загроза, клас, який
+     * фід ніби покриває. Місцевий канал вів ціль вулицями міста 16 хвилин. У
+     * фіді в Рівненській області за весь цей час — нуль цілей; найближча була в
+     * Житомирській.
+     *
+     * Доти перевірка класу проходила успішно і модуль не казав нічого: цілі ж
+     * були. Просто не тут.
+     */
+    const n = dangerNotice(
+      levels("yellow", DRONE, "Рівненська область"),
+      [threat("reactive", ZHYTOMYR)],
+      "Рівненщина",
+    );
+    expect(n.level).toBe("watch");
+    expect(n.hereCount).toBe(0);
+    expect(n.blindTo).not.toBeNull();
+    expect(n.blindTo).toContain("НЕ означає, що тихо");
+  });
+
+  it("ціль у своїй області знімає застереження і за народною назвою", () => {
+    // Якби ключ області не зводився до спільного, рахувалось би завжди нуль.
+    const n = dangerNotice(
+      levels("yellow", DRONE, "Рівненська область"),
+      [threat("reactive", RIVNE)],
+      "Рівненщина",
+    );
+    expect(n.hereCount).toBe(1);
+    expect(n.blindTo).toBeNull();
+  });
+
+  it("без відомої області цілі тут не рахуємо — твердженню нема підмета", () => {
+    const n = dangerNotice(levels("yellow", DRONE), [], null);
+    expect(n.hereCount).toBeNull();
     expect(n.blindTo).toBeNull();
   });
 
