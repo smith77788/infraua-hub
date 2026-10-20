@@ -10,9 +10,31 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-COPY package.json bun.lock ./
-RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts \
- && npm install --no-save typescript@^5.9.3 @types/node @types/express @types/cors @types/uuid
+# ОДИН install, і саме з dev-залежностями.
+#
+# Було: спершу `--omit=dev`, тобто дерево без typescript і @types, а потім
+# другий `npm install --no-save` цими ж пакетами поверх обрізаного дерева.
+# ЩО ВІДОМО ТОЧНО: збірка platform-api впала 20.10.2026 на кроці «Build image»
+# (00:36) з «Cannot read properties of null (reading 'edgesOut')» від
+# npm 10.8.2. Це падіння його побудовника дерева залежностей.
+#
+# ЧОГО НЕ ВДАЛОСЯ ДОВЕСТИ: що винен саме другий install. Прогін тієї самої
+# пари команд на npm 10.9.4 тут пройшов успішно, тож відтворити падіння поза
+# образом `node:20-alpine` не вийшло. Тому це не «знайдена причина», а
+# прибраний підозрюваний — єдина нетривіальна операція над деревом у цьому
+# кроці.
+#
+# ЧОМУ ЗМІНА ПРАВИЛЬНА НЕЗАЛЕЖНО ВІД ЦЬОГО: доставляти ці пакети окремо не
+# було потреби взагалі. typescript, @types/node, @types/express, @types/cors і
+# @types/uuid усі вже оголошені в кореневому package.json як devDependencies —
+# другий install дублював те, що й так є. Перевірено прогоном: один install
+# дає tsc 5.9.3 і всі чотири @types.
+#
+# `bun.lock` звідси прибрано свідомо: npm його не читає, тож як ключ кешу шару
+# він обіцяв відтворюваність, якої не давав. npm резолвить із діапазонів у
+# package.json, і це лишається правдою — просто тепер видимою.
+COPY package.json ./
+RUN npm install --no-audit --no-fund --ignore-scripts
 
 COPY platform ./platform
 RUN node platform/build.mjs
