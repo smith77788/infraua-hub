@@ -129,14 +129,26 @@ function bareKey(name: string): string {
  * там офіційна назва — ключ, народна — поле `name`, і розійтися їм ніде.
  */
 const OBLAST_ALIASES: ReadonlyMap<string, string> = (() => {
-  const canon = new Set<string>();
-  for (const official of Object.keys(OBLASTS)) canon.add(bareKey(official));
+  /*
+   * Канонічне значення — одне на КОД регіону, а не на назву.
+   *
+   * Спершу тут канонічною вважалась кожна назва-ключ реєстру, а народна
+   * прив’язувалась до неї. Це ламалось, щойно в регіону виявилось два
+   * офіційні написання: «АР Крим» і «Автономна Республіка Крим» обидва ставали
+   * канонічними й не зводились одне до одного. Код регіону такої двозначності
+   * не має — він і є тим, що робить назви однією областю.
+   */
+  const canonOf = new Map<string, string>(); // код → канонічний ключ
+  for (const [official, o] of Object.entries(OBLASTS)) {
+    if (!canonOf.has(o.code)) canonOf.set(o.code, bareKey(official));
+  }
   const m = new Map<string, string>();
   for (const [official, o] of Object.entries(OBLASTS)) {
-    const key = bareKey(official);
-    const alias = bareKey(o.name);
-    // Народна назва не має права перебити чиюсь офіційну.
-    if (alias !== key && !canon.has(alias)) m.set(alias, key);
+    const key = canonOf.get(o.code)!;
+    for (const spelling of [official, o.name]) {
+      const alias = bareKey(spelling);
+      if (alias !== key) m.set(alias, key);
+    }
   }
   return m;
 })();
