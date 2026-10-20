@@ -26,10 +26,16 @@ describe("situationSvg", () => {
     ]);
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).toContain("</svg>");
-    // Рахуємо саме позначки, а не кола: силует дрона є і в легенді, тож
-    // рахуємо ПОВЕРНУТІ силуети (позначка), а не сам контур. Ракета — ромб.
-    expect((svg.match(/rotate\(\d+\) scale\([\d.]+\)/g) ?? []).length).toBe(1);
-    expect((svg.match(/L-?\d+(\.\d+)?,\d+(\.\d+)? Z" fill="#ff4d4d"/g) ?? []).length).toBe(1);
+    // Рахуємо саме позначки: силует дрона є і в легенді, тож рахуємо
+    // ПОВЕРНУТІ за курсом силуети. Ракета без курсу — кружок кольору типу:
+    // силует, що дивиться на північ, читався б як «летить на північ».
+    expect(
+      (svg.match(/rotate\(\d+\) scale\([\d.]+\) translate\(-12 -12\)" fill="#ffd23f"/g) ?? [])
+        .length,
+    ).toBe(1);
+    expect(
+      (svg.match(/<circle cx="[\d.]+" cy="[\d.]+" r="[\d.]+" fill="#ff4d4d"/g) ?? []).length,
+    ).toBe(1);
   });
 
   it("коло невизначеності росте разом із заявленим розкидом", () => {
@@ -78,8 +84,18 @@ describe("situationSvg", () => {
     ]);
     // Напівпрозора заливка з контуром: відмінна від суцільного заміряного,
     // але не губиться на темному тлі, як порожній тонкий контур.
-    expect(presumed).toContain('fill-opacity="0.3"');
-    expect(presumed).toContain("бліда — курс припущений");
+    expect(presumed).toContain('fill-opacity="0.35"');
+    expect(presumed).toContain("курс припущений");
+  });
+
+  it("легенда називає типи, що є на картинці, — і лише їх", () => {
+    const svg = situationSvg([
+      threat({ lat: 49, lon: 32, type: "reactive", heading: 90 }),
+      threat({ lat: 48, lon: 33, type: "cruise", heading: 270 }),
+    ]);
+    expect(svg).toContain("Реактивний БпЛА");
+    expect(svg).toContain("Крилата ракета");
+    expect(svg).not.toContain("Балістична ракета");
   });
 
   it("легенда не пояснює значків, яких немає", () => {

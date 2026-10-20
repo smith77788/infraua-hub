@@ -158,6 +158,7 @@ export function pluralUk(n: number, one: string, few: string, many: string): str
 const UK_TYPE: Record<ThreatType, [string, string, string]> = {
   shahed: ["шахед", "шахеди", "шахедів"],
   reactive: ["реактивний шахед", "реактивні шахеди", "реактивних шахедів"],
+  fpv: ["FPV-дрон", "FPV-дрони", "FPV-дронів"],
   cruise: ["крилата", "крилаті", "крилатих"],
   missile: ["ракета", "ракети", "ракет"],
   ballistic: ["балістична ціль", "балістичні цілі", "балістичних цілей"],
@@ -286,6 +287,7 @@ export const UK: Lexicon = {
 const EN_TYPE: Record<ThreatType, [string, string]> = {
   shahed: ["Shahed drone", "Shahed drones"],
   reactive: ["jet-powered Shahed", "jet-powered Shaheds"],
+  fpv: ["FPV drone", "FPV drones"],
   cruise: ["cruise missile", "cruise missiles"],
   missile: ["missile", "missiles"],
   ballistic: ["ballistic target", "ballistic targets"],

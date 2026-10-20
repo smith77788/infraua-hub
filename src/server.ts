@@ -441,6 +441,8 @@ async function health(request: Request): Promise<Response> {
       memoryRestored: sweep.restored,
     },
     neptunStream: neptunStreamStatus(),
+    // Чи знайдено шрифт картинок: без нього з постів зникав увесь текст.
+    imageFonts: await (await import("./lib/image-fonts")).fontStatus(),
     // Яка частка доставлених попереджень справдилась: ціль пролетіла в радіусі
     // тривоги людини. «Не підтвердились» — не «хибні»: див. `alert-outcome`.
     alertOutcomes: alertOutcomes.summary(),

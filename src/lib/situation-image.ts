@@ -32,6 +32,7 @@ import { type AlertLevel, LEVEL_COLOR, LEVEL_LABEL } from "./alert-levels";
 import { advance } from "./dead-reckoning";
 import { driftSector, spreadFor } from "./drift-sector";
 import { SPEED_KMH } from "./threat-eta";
+import { LEGEND_ORDER, TYPE_STYLE } from "./threat-glyphs";
 import { nowRadiusKm } from "./position-age";
 
 /**
@@ -100,6 +101,7 @@ function project(lat: number, lon: number): [number, number] {
 const COLOR: Record<ThreatType, string> = {
   shahed: "#ffd23f",
   reactive: "#ff8c1a",
+  fpv: "#a3e635",
   cruise: "#ff6a2a",
   missile: "#ff4d4d",
   ballistic: "#ff2d2d",
@@ -342,36 +344,63 @@ function markerParts(
   }
   const parts = (icon: string): MarkerParts => ({ fill, outline, drift, course, icon });
 
-  // Дрон зі СТРІЛКОЮ — лише коли курс відомий. Інакше не вигадуємо напрямок
-  // (це й була причина «курс неправильний»): малюємо нейтральну крапку.
-  if ((type === "shahed" || type === "reactive") && hasCourse) {
-    /*
-     * Припущений курс — напівпрозора заливка з контуром, а не порожній контур.
-     * Порожній тонкий контур на темному тлі губився, а таких цілей більшість;
-     * у Нептуна (знімок користувача) кожен силует суцільний і читається одразу.
-     * Відмінність від заміряного курсу лишається: той — суцільний із темною
-     * обводкою.
-     */
-    const droneFill = observed ? `fill="${color}"` : `fill="${color}" fill-opacity="0.3"`;
-    const width = observed ? 1.4 : 1.6;
-    const stroke = observed ? "#0a0e14" : color;
-    const k = Math.round(0.95 * iconScale * 100) / 100;
-    return parts(
-      `<g transform="translate(${x} ${y}) rotate(${Math.round(hint.deg)}) scale(${k})">` +
-        `<path d="${DRONE}" ${droneFill} stroke="${stroke}" stroke-width="${width}" stroke-linejoin="round"/></g>`,
-    );
+  return parts(glyphIcon(type, x, y, hasCourse ? hint.deg : null, observed, iconScale));
+}
+
+/*
+ * Типи, у силуету яких є «ніс»: їх повертаємо за курсом. FPV (квадрокоптер)
+ * симетричний — повертати нема чого.
+ */
+const NOSED: ReadonlySet<ThreatType> = new Set([
+  "shahed",
+  "reactive",
+  "cruise",
+  "missile",
+  "ballistic",
+  "kab",
+  "recon",
+  "aircraft",
+]);
+
+/**
+ * Значок цілі — силует ТИПУ, той самий, що на карті бота (`threat-glyphs`).
+ *
+ * Доти картинка каналу малювала всі дрони однаковим трикутником, а ракети й
+ * КАБ — однаковим ромбом: «Шахед» від реактивного, крилату від балістики не
+ * відрізнити. Користувач: «зроби цілі у вигляді шахедів, а не оцих жовтих
+ * трикутників, ракети — у вигляді ракет». Тепер силует — той самий, що в
+ * легенді й на карті: одна мова на всіх екранах.
+ *
+ * Курсу немає — силует НЕ повертаємо й не вигадуємо напрямок: для типу з
+ * носом малюємо кружок кольору типу (як і досі для дронів), бо силует,
+ * що дивиться на північ, читався б як «летить на північ».
+ */
+function glyphIcon(
+  type: ThreatType,
+  x: number,
+  y: number,
+  courseDeg: number | null,
+  observed: boolean,
+  iconScale: number,
+): string {
+  const { glyph } = TYPE_STYLE[type];
+  const color = COLOR[type];
+  if (courseDeg === null && NOSED.has(type)) {
+    return `<circle cx="${x}" cy="${y}" r="${Math.round(5.5 * iconScale * 10) / 10}" fill="${color}" stroke="#0a0e14" stroke-width="1.4"/>`;
   }
-  if (type === "shahed" || type === "reactive") {
-    return parts(
-      `<circle cx="${x}" cy="${y}" r="${Math.round(5.5 * iconScale * 10) / 10}" fill="${color}" stroke="#0a0e14" stroke-width="1.4"/>`,
-    );
-  }
-  // Ракети/КАБ/інше — компактна позначка-ромб, щоб не плутати з дроном.
-  const dh = Math.round(8 * iconScale * 10) / 10;
-  const dw = Math.round(6 * iconScale * 10) / 10;
-  return parts(
-    `<path d="M${x},${y - dh} L${x + dw},${y} L${x},${y + dh} L${x - dw},${y} Z" ` +
-      `fill="${color}" stroke="#0a0e14" stroke-width="1.4" stroke-linejoin="round"/>`,
+  /*
+   * Припущений курс — напівпрозора заливка з контуром кольору типу; заміряний —
+   * суцільна заливка з темною обводкою. Напрямок видно в обох, а те, що один
+   * із них здогадка, — теж.
+   */
+  const fill =
+    observed || courseDeg === null ? `fill="${color}"` : `fill="${color}" fill-opacity="0.35"`;
+  const stroke = observed || courseDeg === null ? "#0a0e14" : color;
+  const k = Math.round(1.05 * iconScale * 100) / 100;
+  const rot = courseDeg === null ? "" : ` rotate(${Math.round(courseDeg)})`;
+  return (
+    `<g transform="translate(${x} ${y})${rot} scale(${k}) translate(-12 -12)" ${fill} ` +
+    `stroke="${stroke}" stroke-width="1.3" stroke-linejoin="round">${glyph}</g>`
   );
 }
 
@@ -439,23 +468,65 @@ export function spreadNote(threats: readonly Threat[]): string | null {
   return `позиції наближені: ±${lo === hi ? lo : `${lo}–${hi}`} км за джерелом`;
 }
 
-function legend(showPresumed: boolean, uncertainty: boolean, note: string | null): string {
-  const x = PAD + 4;
-  const y = H - PAD - 56;
-  if (!uncertainty) {
-    const rows = [
-      `<g transform="translate(${x + 8} ${y + 26}) scale(0.62)">` +
-        `<path d="${DRONE}" fill="#ffd23f" stroke="#0a0e14" stroke-width="1.4" stroke-linejoin="round"/></g>` +
-        `<text x="${x + 24}" y="${y + 30}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-        `стрілка — напрямок польоту${showPresumed ? "; бліда — курс припущений" : ""}</text>`,
-    ];
-    if (note)
-      rows.push(
-        `<text x="${x}" y="${y + 52}" fill="#8fa3b5" font-family="sans-serif" font-size="12">` +
-          `${escapeXml(note)}</text>`,
-      );
-    return rows.join("");
+/** Ключ типів: силует + назва для кожного присутнього типу, стовпчиком від (x, y). */
+function typeKey(types: ReadonlySet<ThreatType>, x: number, y: number): string {
+  let out = "";
+  let i = 0;
+  for (const t of LEGEND_ORDER) {
+    if (!types.has(t)) continue;
+    const yy = y + i * 22;
+    out +=
+      `<g transform="translate(${x + 8} ${yy}) scale(0.75) translate(-12 -12)" fill="${COLOR[t]}" ` +
+      `stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round">${TYPE_STYLE[t].glyph}</g>` +
+      `<text x="${x + 24}" y="${yy + 4}" fill="#c3d0dc" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+      `${escapeXml(TYPE_STYLE[t].label)}</text>`;
+    i++;
   }
+  return out;
+}
+
+function legend(
+  showPresumed: boolean,
+  uncertainty: boolean,
+  note: string | null,
+  types: ReadonlySet<ThreatType> = new Set(),
+): string {
+  const x = PAD + 4;
+  if (!uncertainty) {
+    /*
+     * Легенда — ЩО на картинці: силует кожного присутнього типу з назвою.
+     * Без неї жовтий трикутник і помаранчевий ромб нічого не казали тому, хто
+     * бачить карту вперше, — а пост каналу саме такі люди й бачать.
+     */
+    const lines: string[] = [];
+    for (const t of LEGEND_ORDER) {
+      if (!types.has(t)) continue;
+      lines.push(`G:${t}`);
+    }
+    if (showPresumed) lines.push("T:бліда заливка — курс припущений, не спостережений");
+    if (note) lines.push(`T:${note}`);
+    const step = 22;
+    const y0 = H - PAD - step * lines.length + 6;
+    return lines
+      .map((l, i) => {
+        const y = y0 + i * step;
+        if (l.startsWith("G:")) {
+          const t = l.slice(2) as ThreatType;
+          return (
+            `<g transform="translate(${x + 8} ${y}) scale(0.75) translate(-12 -12)" fill="${COLOR[t]}" ` +
+            `stroke="#0a0e14" stroke-width="1.3" stroke-linejoin="round">${TYPE_STYLE[t].glyph}</g>` +
+            `<text x="${x + 24}" y="${y + 4}" fill="#c3d0dc" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+            `${escapeXml(TYPE_STYLE[t].label)}</text>`
+          );
+        }
+        return (
+          `<text x="${x}" y="${y + 4}" fill="#8fa3b5" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
+          `${escapeXml(l.slice(2))}</text>`
+        );
+      })
+      .join("");
+  }
+  const y = H - PAD - 56;
   const rows = [
     `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="#ffd23f" opacity="0.16"/>` +
       `<circle cx="${x + 8}" cy="${y + 4}" r="9" fill="none" stroke="#ffd23f" stroke-width="0.8" opacity="0.4"/>` +
@@ -690,7 +761,14 @@ export function situationSvg(
     layers.over +
     // Легенда лише тоді, коли є що пояснювати: підпис до значків, яких на
     // картинці немає, — це шум, а порожнє небо має читатися як порожнє.
-    (threats.length ? legend(anyPresumed, opts.uncertainty === true, spreadNote(threats)) : "") +
+    (threats.length
+      ? legend(
+          anyPresumed,
+          opts.uncertainty === true,
+          spreadNote(threats),
+          new Set(threats.map((t) => t.type ?? "unknown")),
+        )
+      : "") +
     // Масштаб і північ — щоб відстань «ціль ↔ місто» читалась у кілометрах, а
     // напрямок не доводилось вгадувати. Масштаб праворуч унизу (ліворуч —
     // легенда); той самий scaleBar, що й на зумі, псевдорадіус 300 км дає
@@ -745,6 +823,8 @@ export async function renderSituationPng(
       {
         background: "#0b0f16",
         fitTo: { mode: "width", value: W },
+        // Свій шрифт, а не «який знайдеться»: без нього весь текст зникав. Див. `image-fonts`.
+        font: await (await import("./image-fonts")).resvgFontOptions(),
       },
     )
       .render()
@@ -924,7 +1004,9 @@ export function situationSvgZoom(
    */
   const noteText = opts.uncertainty
     ? "суцільне коло — розкид за джерелом; пунктир — де ціль може бути вже зараз (уперед по курсу)"
-    : [spreadNote(visible), "стрілка — напрямок польоту"].filter(Boolean).join(" · ");
+    : [spreadNote(visible), "силует — тип цілі, ніс — напрямок польоту"]
+        .filter(Boolean)
+        .join(" · ");
   const note =
     `<text x="14" y="${zh - 14}" fill="#8fa3b5" font-family="sans-serif" font-size="12" ${TEXT_HALO}>` +
     `${escapeXml(noteText)}</text>`;
@@ -942,6 +1024,8 @@ export function situationSvgZoom(
     layers.over +
     // Назва міста — над усім: без неї карта не каже, де це.
     title +
+    // Що за силуети — у кутку: картинку бачать люди, які карти раніше не бачили.
+    typeKey(new Set(visible.map((t) => t.type ?? "unknown")), 14, 22) +
     scaleBar(14, zh - 34, pxPerKm, radiusKm) +
     northMark(ZW - 26, 24) +
     note +
@@ -959,9 +1043,11 @@ export async function renderZoomPng(
   try {
     const mod = "@resvg/resvg-js";
     const { Resvg } = (await import(/* @vite-ignore */ mod)) as typeof import("@resvg/resvg-js");
+    const font = await (await import("./image-fonts")).resvgFontOptions();
     return new Resvg(situationSvgZoom(threats, center, radiusKm, opts), {
       background: "#0b0f16",
       fitTo: { mode: "width", value: ZW },
+      font,
     })
       .render()
       .asPng();

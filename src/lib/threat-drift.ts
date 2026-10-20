@@ -62,7 +62,7 @@ export interface Drift {
 }
 
 /** Класи руху Нептуна. Наші типи зводимо до них — див. `driftClass`. */
-type DriftClass = "uav" | "recon" | "missile" | "fixed" | "unknown";
+type DriftClass = "uav" | "fpv" | "recon" | "missile" | "fixed" | "unknown";
 
 interface DriftLimits {
   /** Скільки хвилин від фіксації ще тягнемо. */
@@ -84,6 +84,7 @@ interface DriftLimits {
 const LIMITS: Record<DriftClass, DriftLimits> = {
   uav: { maxMin: 12, maxKm: 30, statedKmh: 150, presumedKmh: 50 },
   recon: { maxMin: 12, maxKm: 24, statedKmh: 120, presumedKmh: 40 },
+  fpv: { maxMin: 10, maxKm: 10, statedKmh: 60, presumedKmh: 30 },
   missile: { maxMin: 5, maxKm: 30, statedKmh: 400, presumedKmh: 400 },
   fixed: { maxMin: 4, maxKm: 10, statedKmh: 0, presumedKmh: 0 },
   unknown: { maxMin: 6, maxKm: 10, statedKmh: 80, presumedKmh: 40 },
@@ -96,6 +97,8 @@ function driftClass(type: ThreatType | undefined): DriftClass {
       return "uav";
     case "recon":
       return "recon";
+    case "fpv":
+      return "fpv";
     case "missile":
     case "cruise":
       return "missile";

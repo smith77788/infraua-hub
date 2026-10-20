@@ -25,11 +25,13 @@ export interface ThreatGlyph {
 
 export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   // Shahed-136/Герань-2: широке дельтакрило з вертикальними кілями на кінцях
-  // крил і штовхальним гвинтом позаду.
+  // крил і штовхальним гвинтом позаду. ОДИН цільний контур: окремі
+  // прямокутники кілів на малому розмірі відривались від крила й читались як
+  // «дужки» довкола трикутника (знімок картинки каналу).
   shahed: {
     color: "#ffd23f",
     glyph:
-      '<path d="M12 2 L21 16.5 L12 14.2 L3 16.5 Z"/><path d="M1.8 12.5h2.6v7.5H1.8zM19.6 12.5h2.6v7.5h-2.6z"/><path d="M9.5 16.2h5v1.8h-5z"/>',
+      '<path d="M12 1.5 L13.4 6.2 L21.8 15 L21.8 19.2 L20.4 19.2 L20.4 17.6 L13.3 16.6 L12.7 19.6 L11.3 19.6 L10.7 16.6 L3.6 17.6 L3.6 19.2 L2.2 19.2 L2.2 15 L10.6 6.2 Z"/><path d="M9.2 20.2h5.6v1.6H9.2z"/>',
     label: "Ударний БпЛА (Shahed)",
     code: "Ш",
   },
@@ -41,6 +43,15 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
       '<path d="M12 1 L14.6 11 L19.5 16 L13.4 15 L12 18.5 L10.6 15 L4.5 16 L9.4 11 Z"/><path d="M11 18.5 L12 23.5 L13 18.5 Z"/>',
     label: "Реактивний БпЛА (Shahed-238)",
     code: "РШ",
+  },
+  // FPV-дрон: квадрокоптер — Х-подібна рама і чотири гвинти. Не дельта: це
+  // інша загроза (малий радіус, біля фронту), і плутати її з «Шахедом» не можна.
+  fpv: {
+    color: "#a3e635",
+    glyph:
+      '<path d="M6.2 4.8 L12 10.6 L17.8 4.8 L19.2 6.2 L13.4 12 L19.2 17.8 L17.8 19.2 L12 13.4 L6.2 19.2 L4.8 17.8 L10.6 12 L4.8 6.2 Z"/><circle cx="5.5" cy="5.5" r="3.2"/><circle cx="18.5" cy="5.5" r="3.2"/><circle cx="5.5" cy="18.5" r="3.2"/><circle cx="18.5" cy="18.5" r="3.2"/>',
+    label: "FPV-дрон",
+    code: "FPV",
   },
   // Крилата ракета: довгий корпус, короткі прямі крила посередині, хвостове
   // оперення.
@@ -77,7 +88,8 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   // Розвідник (Орлан/ZALA): довгі прямі крила і хвіст — «літачок», а не дельта.
   recon: {
     color: "#22d3ee",
-    glyph: '<path d="M10.4 2.5h3.2v18h-3.2z"/><path d="M1.5 7.5h21v3.6h-21z"/><path d="M6.5 17.5h11v3.2h-11z"/>',
+    glyph:
+      '<path d="M10.4 2.5h3.2v18h-3.2z"/><path d="M1.5 7.5h21v3.6h-21z"/><path d="M6.5 17.5h11v3.2h-11z"/>',
     label: "Розвідувальний БпЛА",
     code: "РЗ",
   },
@@ -100,6 +112,7 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
 export const LEGEND_ORDER: ThreatType[] = [
   "shahed",
   "reactive",
+  "fpv",
   "recon",
   "cruise",
   "missile",
