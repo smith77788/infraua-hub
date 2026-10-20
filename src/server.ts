@@ -1819,7 +1819,18 @@ async function runChannelTickCore(
   // Області під тривогою — з того самого джерела, що й карта бота: канал показує
   // ту саму обстановку. Best-effort: збій зон не має завалити пост.
   const alertZones = await fetchAlertZones().catch(() => []);
-  const png = await renderSituationPng(smoothed, trackLines(smoothed), alertZones, courseForImage);
+  /*
+   * Позначки на картинці — там, де ціль ЗАРАЗ, за тією самою моделлю руху, що
+   * й карта бота (`driftPosition`). Інакше скріншот показував би, де цілі були
+   * хвилини тому, а карта — де вони тепер, і «точна копія» розходилась би на
+   * кілометри. Трек лишається спостереженим: лінія — факт, позначка — оцінка.
+   */
+  const { driftPosition } = await import("./lib/threat-drift");
+  const pictured = smoothed.map((t) => {
+    const d = driftPosition(t, now);
+    return d.km > 0 ? { ...t, lat: d.lat, lon: d.lon } : t;
+  });
+  const png = await renderSituationPng(pictured, trackLines(smoothed), alertZones, courseForImage);
   const keyboard = await channelButtons(token);
   const types = new Set<ThreatType>(smoothed.map((t) => t.type ?? "unknown"));
   const silent = shouldPostSilently(types, now);

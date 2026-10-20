@@ -832,8 +832,13 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   </p>
                   {projected ? (
                     <p className="opacity-60 text-[11px] leading-snug">
-                      ◇ позицію протягнуто за курсом на ~{projKm.toFixed(1)} км від останнього
-                      сигналу — оцінка, не факт
+                      ◇ позицію протягнуто за{" "}
+                      {t.projBasis === "measured"
+                        ? "заміряним курсом"
+                        : t.projBasis === "presumed"
+                          ? "припущеним курсом (на зниженій швидкості)"
+                          : "курсом"}{" "}
+                      на ~{projKm.toFixed(1)} км від останнього сигналу — оцінка, не факт
                     </p>
                   ) : null}
                   {t.sea ? <p className="opacity-70">Над морем</p> : null}

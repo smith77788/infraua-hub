@@ -1,6 +1,12 @@
 import { afterAll, describe, expect, it, setSystemTime } from "bun:test";
 
-import { ensureNeptunStream, liveThreats, neptunStreamStatus } from "./neptun-stream";
+import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
+import {
+  ensureNeptunStream,
+  liveThreats,
+  neptunStreamStatus,
+  reconcileNeptunStream,
+} from "./neptun-stream";
 
 /**
  * Фейковий WebSocket — ловимо створений інстанс, щоб керувати подіями руками.
@@ -108,6 +114,58 @@ describe("neptun-stream міст", () => {
     const s = neptunStreamStatus();
     expect(s.connected).toBe(true);
     expect(s.tracks).toBe(1);
+  });
+
+  it("тиха ціль НЕ зникає лише тому, що джерело її не повторює", () => {
+    /*
+     * Регресія з живого заміру: Нептун тримав на карті цілі, не оновлювані
+     * 12–41 хв, а ми їх різали через 10 хв без `upsert` — 29 цілей проти 39.
+     * Хто вирішує, що ціль зникла, — джерело.
+     */
+    const t0 = Date.now();
+    setSystemTime(new Date(t0 + 25 * 60_000));
+    FakeWS.last!.emit({ type: "heartbeat" });
+    expect(liveThreats()!.map((t) => t.id)).toEqual(["c"]);
+    setSystemTime();
+  });
+
+  it("за часом САМОГО джерела запис, старший за годину, прибирається", () => {
+    const old = new Date(Date.now() - 61 * 60_000).toISOString();
+    FakeWS.last!.emit({ type: "upsert", data: threat("old", { updatedAt: old }) });
+    expect(liveThreats()!.map((t) => t.id)).toEqual(["c"]);
+  });
+
+  it("звірка з REST: що зникло в джерелі — прибирається, чого бракувало — додається", () => {
+    const rest = [threat("d", { lat: 49.9 })]
+      .map((t) => mapNeptunThreat(t as NeptunThreat))
+      .filter((t) => t !== null);
+    // Знімок узято через 10 хв після останніх подій потоку — вони старші за вікно.
+    reconcileNeptunStream(rest, Date.now() + 10 * 60_000);
+    expect(liveThreats()!.map((t) => t.id)).toEqual(["d"]);
+    expect(neptunStreamStatus().reconcile).toMatchObject({ added: 1, removed: 1 });
+  });
+
+  it("звірка не стирає ціль, яку потік додав щойно, а знімок ще не бачив", () => {
+    FakeWS.last!.emit({ type: "upsert", data: threat("fresh") });
+    reconcileNeptunStream([], Date.now());
+    /*
+     * «fresh» щойно привіз потік — порожній знімок його не перебиває. А «d»
+     * знала лише попередня звірка: зник із нового знімка — зник і в нас, без
+     * двохвилинного привида (замір прогону показав саме такий привид).
+     */
+    expect(
+      liveThreats()!
+        .map((t) => t.id)
+        .sort(),
+    ).toEqual(["fresh"]);
+  });
+
+  it("звірка не воскрешає ціль, яку потік щойно прибрав, а REST ще тримає", () => {
+    // REST відстає на секунди: прибрана потоком ціль ще є в знімку.
+    const ghost = mapNeptunThreat(threat("fresh") as NeptunThreat)!;
+    FakeWS.last!.emit({ type: "remove", data: { id: "fresh" } });
+    reconcileNeptunStream([ghost], Date.now());
+    expect(liveThreats()!.map((t) => t.id)).toEqual([]);
   });
 
   it("розрив планує перепідключення без падіння процесу", () => {

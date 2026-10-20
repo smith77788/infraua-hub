@@ -23,7 +23,7 @@ import {
 } from "./air";
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
-import { ensureNeptunStream, liveThreats } from "./neptun-stream";
+import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
 import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
@@ -685,6 +685,34 @@ interface ThreatsPayload {
  * воно й робило канал окремою правдою.
  */
 let neptunCache: { at: number; threats: Threat[] } | null = null;
+
+/*
+ * Звірка потоку з REST-знімком — див. `reconcileNeptunStream`. Хвилина — бо
+ * ціль, яку джерело прибрало, а `remove` загубився, не має висіти довше, а
+ * частіше смикати REST при живому потоці нема потреби.
+ */
+const RECONCILE_EVERY_MS = 60_000;
+let reconcileAt = 0;
+let reconcileInflight = false;
+
+function reconcileInBackground(now: number): void {
+  if (reconcileInflight || now - reconcileAt < RECONCILE_EVERY_MS) return;
+  reconcileInflight = true;
+  reconcileAt = now;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  fetchNeptunThreats(controller.signal)
+    .then((rest) => {
+      // `null` — джерело не відповіло як слід. Порожнім знімком НЕ звіряємо:
+      // він стер би всю живу картину через один збій.
+      if (rest) reconcileNeptunStream(rest, now);
+    })
+    .catch(() => {})
+    .finally(() => {
+      clearTimeout(timer);
+      reconcileInflight = false;
+    });
+}
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
   const now = Date.now();
 
@@ -701,6 +729,7 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
   ensureNeptunStream();
   const live = liveThreats();
   if (live) {
+    reconcileInBackground(now);
     // Дзеркалимо у модульний кеш, щоб фолбек мав останню відому картину.
     neptunCache = { at: now, threats: live };
     return live;
