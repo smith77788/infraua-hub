@@ -64,6 +64,7 @@ import { TYPE_STYLE } from "@/lib/threat-glyphs";
 import type { LaunchView } from "@/lib/infra.functions";
 import { advance } from "@/lib/dead-reckoning";
 import { bearingDeg } from "@/lib/threat-eta";
+import { ageOf, FRESHNESS_THRESHOLDS, type Freshness } from "@/lib/freshness";
 
 interface Props {
   facilities: Facility[];
@@ -174,21 +175,39 @@ const ICON_PATHS: Record<CategoryId, string> = {
  * силует "unknown". Свіжість модулює розмір/яскравість/пульс: свіжий сигнал
  * світиться, давніший тьмяніє.
  */
-type Freshness = "fresh" | "recent" | "stale";
+/*
+ * Свіжість позначки — за ТИМ САМИМ порогом, що й решта проєкту.
+ *
+ * Тут була власна шкала: свої стани («recent» замість «aging») і свої пороги
+ * (10 і 30 хв) замість `FRESHNESS_THRESHOLDS.airObserved` (12 і 25). Третій
+ * спосіб сказати те саме — рівно те, проти чого §7: порівняти «recent» на
+ * карті з «старіє» в панелі неможливо, а відповідають вони одному факту.
+ *
+ * Гірше за назву були числа. Заміряно на живому фіді 20.10.2026, 10 зрізів за
+ * 6,5 хв: із 37 цілей, присутніх усі 6+ хвилин, 36 НЕ зрушились ані на
+ * пів кілометра, а частина несла `updatedAt` двадцятихвилинної давнини,
+ * лишаючись у фіді як `active`. За старою шкалою така позначка малювалась із
+ * прозорістю 0.9 — тобто майже як жива. Людина бачила впевнену позначку там,
+ * де насправді двадцять хвилин тому хтось написав про село.
+ *
+ * Причина застою не в нас: джерело веде позначку по населених пунктах, і рух
+ * зʼявляється як НОВИЙ трек у сусідньому селі, а не як зсув старого. Виправити
+ * це ззовні ми не можемо — але подавати двадцятихвилинну позначку як свіжу не
+ * маємо права.
+ */
 function freshnessOf(iso: string | undefined): Freshness {
-  if (!iso) return "stale";
-  const min = (Date.now() - new Date(iso).getTime()) / 60000;
-  if (min <= 10) return "fresh";
-  if (min <= 30) return "recent";
-  return "stale";
+  const { aging, stale } = FRESHNESS_THRESHOLDS.airObserved;
+  return ageOf(iso, aging, stale).freshness;
 }
 
 // Розміри підняті під телефон: на маленькому екрані позначка має читатися й
 // бути придатною для дотику. Свіжі — найбільші, застарілі — дрібніші й тьмяні.
+// Невідомий час — як застарілий: позначка без часу не має виглядати впевнено.
 const FRESH_TONE: Record<Freshness, { opacity: number; size: number }> = {
   fresh: { opacity: 1, size: 32 },
-  recent: { opacity: 0.9, size: 27 },
-  stale: { opacity: 0.5, size: 21 },
+  aging: { opacity: 0.62, size: 26 },
+  stale: { opacity: 0.32, size: 20 },
+  unknown: { opacity: 0.32, size: 20 },
 };
 
 /** Точка на відстані `km` за курсом `headingDeg` (0=Пн) — для вектора курсу. */
@@ -884,7 +903,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             <Marker
               position={[t.lat, t.lon]}
               icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
-              zIndexOffset={fresh === "fresh" ? 1000 : fresh === "recent" ? 500 : 0}
+              zIndexOffset={fresh === "fresh" ? 1000 : fresh === "aging" ? 500 : 0}
               eventHandlers={{
                 popupopen: () => setSelected(t.id),
                 popupclose: () => setSelected((cur) => (cur === t.id ? null : cur)),
