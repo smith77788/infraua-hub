@@ -29,7 +29,7 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   shahed: {
     color: "#ffd23f",
     glyph:
-      '<path d="M12 2.5 L20.5 16.5 L12 14.5 L3.5 16.5 Z"/><path d="M2.6 13.5h1.8v6.5H2.6zM19.6 13.5h1.8v6.5h-1.8z"/><path d="M9.5 16.2h5v1.8h-5z"/>',
+      '<path d="M12 2 L21 16.5 L12 14.2 L3 16.5 Z"/><path d="M1.8 12.5h2.6v7.5H1.8zM19.6 12.5h2.6v7.5h-2.6z"/><path d="M9.5 16.2h5v1.8h-5z"/>',
     label: "Ударний БпЛА (Shahed)",
     code: "Ш",
   },
@@ -47,14 +47,14 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   cruise: {
     color: "#ff6a2a",
     glyph:
-      '<path d="M12 1.5c1.1 0 1.4 1.6 1.4 3.5V19l1.6 2.5h-6L10.6 19V5c0-1.9.3-3.5 1.4-3.5z"/><path d="M4 10.5h16v2H4z"/>',
+      '<path d="M12 1c1.8 0 2.2 2 2.2 4.5V18l2.8 4H7l2.8-4V5.5C9.8 3 10.2 1 12 1z"/><path d="M3 9.5h18v3.4H3z"/>',
     label: "Крилата ракета",
     code: "КР",
   },
   missile: {
     color: "#ff4d4d",
     glyph:
-      '<path d="M12 2c2.6 3.4 2.8 8 1.6 14h-3.2C9.2 10 9.4 5.4 12 2z"/><path d="M10.4 14 L6 20.5 L10.6 18.5 ZM13.6 14 L18 20.5 L13.4 18.5 Z"/>',
+      '<path d="M12 1.5c3.2 3.6 3.4 8.6 2.2 15h-4.4C8.6 10.1 8.8 5.1 12 1.5z"/><path d="M10 12.5 L4.5 21 L10.4 18.5 ZM14 12.5 L19.5 21 L13.6 18.5 Z"/>',
     label: "Ракета",
     code: "Р",
   },
@@ -62,7 +62,7 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   ballistic: {
     color: "#ff2d2d",
     glyph:
-      '<path d="M12 1c2.2 3.2 2.4 8.6 1.8 15h-3.6C9.6 9.6 9.8 4.2 12 1z"/><path d="M10.4 16.5 L12 23 L13.6 16.5 Z"/>',
+      '<path d="M12 1c2.8 3.4 3 9 2.4 15.5H9.6C9 10 9.2 4.4 12 1z"/><path d="M9.8 17 L12 23.5 L14.2 17 Z"/>',
     label: "Балістична ракета",
     code: "БР",
   },
@@ -77,7 +77,7 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
   // Розвідник (Орлан/ZALA): довгі прямі крила і хвіст — «літачок», а не дельта.
   recon: {
     color: "#22d3ee",
-    glyph: '<path d="M11 3.5h2v16h-2z"/><path d="M2 8.5h20v2.4H2z"/><path d="M7.5 18h9v2.2h-9z"/>',
+    glyph: '<path d="M10.4 2.5h3.2v18h-3.2z"/><path d="M1.5 7.5h21v3.6h-21z"/><path d="M6.5 17.5h11v3.2h-11z"/>',
     label: "Розвідувальний БпЛА",
     code: "РЗ",
   },
