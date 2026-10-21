@@ -34,6 +34,8 @@ import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
 import { applyJetType, jetMentions, parseChannelPage, type ChannelMessage } from "./jet-sightings";
+import { applyChannelTracks, buildTracks, channelFixes, type ChannelTrack } from "./channel-track";
+import { type Gazetteer, loadGazetteer } from "./gazetteer";
 import {
   launchReach,
   launchSightings,
@@ -802,7 +804,39 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
 }
 
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
-  return withJetTypes(await neptunThreatsRaw(maxAgeMs), Date.now());
+  const now = Date.now();
+  return withChannelTracks(withJetTypes(await neptunThreatsRaw(maxAgeMs), now), now);
+}
+
+/*
+ * Трек із дописів каналів (`channel-track`): спостерігач веде ціль по селах
+ * щохвилини, а джерело рухає позначку рідше або не має її зовсім (#108,
+ * #116). Перераховуємо не частіше за 15 с: SSE питає кожні 1,5 с, а нові
+ * дописи приходять раз на 90 с.
+ */
+const TRACK_EVERY_MS = 15_000;
+let trackCache: { at: number; msgs: ChannelMessage[]; tracks: ChannelTrack[] } | null = null;
+let gazetteer: Gazetteer | null = null;
+let gazetteerAsked = false;
+
+function withChannelTracks(threats: Threat[], now: number): Threat[] {
+  if (!gazetteerAsked) {
+    gazetteerAsked = true;
+    void loadGazetteer().then((g) => {
+      gazetteer = g;
+    });
+  }
+  if (!gazetteer) return threats;
+  if (!trackCache || trackCache.msgs !== jetMessages || now - trackCache.at >= TRACK_EVERY_MS) {
+    // Лише українські канали спостереження: російський допис не веде НАШУ ціль.
+    const ua = jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? ""));
+    trackCache = {
+      at: now,
+      msgs: jetMessages,
+      tracks: buildTracks(channelFixes(ua, gazetteer, threats, now)),
+    };
+  }
+  return applyChannelTracks(threats, trackCache.tracks);
 }
 
 async function neptunThreatsRaw(maxAgeMs: number): Promise<Threat[]> {

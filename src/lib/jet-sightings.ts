@@ -37,6 +37,27 @@ export interface ChannelMessage {
 }
 
 /** Повідомлення з публічного превʼю t.me/s/<канал>: час + текст. */
+const NAMED: Record<string, string> = {
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  lt: "<",
+  gt: ">",
+  nbsp: " ",
+};
+
+/** HTML-сутності превʼю → символи. Невідома іменована — пробіл, як і було. */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_, e: string) => {
+    if (e[0] === "#") {
+      const code =
+        e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : " ";
+    }
+    return NAMED[e.toLowerCase()] ?? " ";
+  });
+}
+
 export function parseChannelPage(html: string): ChannelMessage[] {
   const out: ChannelMessage[] = [];
   for (const chunk of html.split('class="tgme_widget_message_wrap').slice(1)) {
@@ -45,11 +66,15 @@ export function parseChannelPage(html: string): ChannelMessage[] {
     if (!Number.isFinite(at)) continue;
     const body = chunk.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/);
     if (!body) continue;
-    const text = body[1]!
-      .replace(/<br\s*\/?>/g, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&[a-z#0-9]+;/gi, " ")
-      .replace(/\s+/g, " ")
+    /*
+     * Сутності — ДЕКОДУЄМО, а не замінюємо пробілом: інакше апостроф (`&#39;`)
+     * ставав пробілом, і «Звʼягель», «Мʼятин» приходили як «Зв ягель», «М ятин» —
+     * назви, яких немає в жодному довіднику (`channel-track`). Переноси рядків
+     * лишаємо: переліки «Рівненщина - 1 Клевань - 1 Березне» йдуть рядками.
+     */
+    const text = decodeEntities(body[1]!.replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, " "))
+      .replace(/[ \t\u00a0]+/g, " ")
+      .replace(/ *\n */g, "\n")
       .trim();
     if (text) out.push({ at, text });
   }
