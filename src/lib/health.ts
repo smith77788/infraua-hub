@@ -39,6 +39,13 @@ export interface HealthReport {
   service: string;
   /** Скільки секунд служба працює. */
   uptimeSeconds: number;
+  /**
+   * Коміт, з якого зібрано цей процес (`RAILWAY_GIT_COMMIT_SHA`, перші 7
+   * знаків). Без нього «чи потрапило в прод» вгадувалось за `uptimeSeconds`:
+   * перезапуск без нового коду й новий код виглядали однаково. Поза Railway —
+   * поля немає.
+   */
+  commit?: string;
   now: string;
   /** Результати проби зовнішніх джерел — лише коли її просили. */
   probes?: SourceProbe[];
@@ -64,10 +71,12 @@ export interface HealthReport {
 const startedAt = Date.now();
 
 export function baseReport(service = "infraua-console"): HealthReport {
+  const sha = process.env["RAILWAY_GIT_COMMIT_SHA"];
   return {
     status: "ok",
     service,
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+    ...(sha ? { commit: sha.slice(0, 7) } : {}),
     now: new Date().toISOString(),
     telegram: {
       tokenConfigured: Boolean(process.env["TELEGRAM_BOT_TOKEN"]),
