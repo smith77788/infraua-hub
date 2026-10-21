@@ -1,6 +1,15 @@
 import { createServerFn } from "@tanstack/react-start";
 
-import { roleOfSource, TG_CHANNELS } from "./osint-sources";
+import { RU_LAUNCH_SOURCES, roleOfSource, TG_CHANNELS } from "./osint-sources";
+
+const RU_CHANNELS = new Set(RU_LAUNCH_SOURCES.map((s) => s.channel));
+const RU_HOME = new Map(RU_LAUNCH_SOURCES.map((s) => [s.channel, s.home]));
+
+/** Звідки канал — для детектора пусків: російський і його «домашній» район. */
+function launchSourceOf(channel: string | undefined): { ru: boolean; home?: string | undefined } {
+  if (!channel || !RU_CHANNELS.has(channel)) return { ru: false };
+  return { ru: true, home: RU_HOME.get(channel) };
+}
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 import { formatVoltage, highestVoltage, plantOutputMw } from "./osm-tags";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
@@ -687,7 +696,10 @@ export type LaunchView = LaunchSighting & LaunchReach;
 
 /** Пуски з того самого фонового кешу повідомлень, що й реактивні дрони. */
 export function currentLaunches(now = Date.now()): LaunchView[] {
-  return launchSightings(jetMessages, now).map((s) => ({ ...s, ...launchReach(s, now) }));
+  return launchSightings(jetMessages, now, launchSourceOf).map((s) => ({
+    ...s,
+    ...launchReach(s, now),
+  }));
 }
 
 /**
@@ -746,8 +758,13 @@ function refreshJetSightings(now: number): void {
   jetAt = now;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
+  // Українські канали спостереження + російські (лише для пусків, див.
+  // `RU_LAUNCH_SOURCES`). Кожне повідомлення несе свій канал: від нього
+  // залежить і походження пуску, і те, що російський текст ніколи не робить
+  // ціль «реактивною».
+  const channels = [...TG_CHANNELS, ...RU_LAUNCH_SOURCES.map((s) => s.channel)];
   Promise.allSettled(
-    TG_CHANNELS.map((ch) =>
+    channels.map((ch) =>
       fetch(`https://t.me/s/${encodeURIComponent(ch)}`, {
         signal: controller.signal,
         headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
@@ -756,8 +773,10 @@ function refreshJetSightings(now: number): void {
   )
     .then((pages) => {
       const all: ChannelMessage[] = [];
-      for (const p of pages)
-        if (p.status === "fulfilled" && p.value) all.push(...parseChannelPage(p.value));
+      pages.forEach((p, i) => {
+        if (p.status !== "fulfilled" || !p.value) return;
+        for (const m of parseChannelPage(p.value)) all.push({ ...m, channel: channels[i]! });
+      });
       // Порожній результат (мережа лягла) не стирає попередні згадки: вони й
       // так застаріють за вікном `JET_WINDOW_MS`.
       if (all.length) jetMessages = all;
@@ -772,7 +791,14 @@ function refreshJetSightings(now: number): void {
 /** Реактивні дрони — за свіжими згадками каналів; решту цілей не чіпає. */
 function withJetTypes(threats: Threat[], now: number): Threat[] {
   refreshJetSightings(now);
-  return applyJetType(threats, jetMentions(jetMessages, now));
+  // Реактивність — лише з українських каналів спостереження.
+  return applyJetType(
+    threats,
+    jetMentions(
+      jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? "")),
+      now,
+    ),
+  );
 }
 
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {

@@ -93,3 +93,68 @@ describe("launchReach — як далеко могли долетіти", () => 
     expect(launchReach(c!, NOW).toBorderMin).toBeNull();
   });
 });
+
+describe("хибні пуски, спіймані на живих текстах російських каналів", () => {
+  // Справжні тексти (2026-10-21): kurskN1, AhtariLive. Перша версія детектора
+  // робила з них «пуск із Курська» і «пуск із Криму».
+  const KURSK_HEATING =
+    "🔥 Отопление в Курске начнут включать в течение пяти дней Сегодня в Курске стартует " +
+    "отопительный сезон. Подключать многоквартирные дома будут поэтапно. После запуска отопления";
+  const AHTARI_BRIDGE =
+    "От первых «Сапсанов» до старта строительства новой высокоскоростной магистрали, " +
+    "от Крымского моста до мощнейшего атомного ледокола.";
+
+  it("«стартует отопительный сезон… после запуска отопления» — не пуск", () => {
+    expect(launchSightings([{ at: min(5), text: KURSK_HEATING }], NOW)).toHaveLength(0);
+  });
+
+  it("«Крымского моста» — не Крим, «старт строительства» — не пуск", () => {
+    expect(launchSightings([{ at: min(5), text: AHTARI_BRIDGE }], NOW)).toHaveLength(0);
+  });
+
+  it("однина «Пуск реактивних з Орла» — справжній пуск і лишається ним", () => {
+    expect(launchSightings([OREL], NOW).map((x) => x.key)).toEqual(["orel"]);
+  });
+});
+
+describe("російські канали — лише як джерело пусків", () => {
+  const RU = (channel: string | undefined): { ru: boolean; home?: string } =>
+    channel === "AhtariLive"
+      ? { ru: true, home: "primorsko" }
+      : { ru: (channel ?? "").startsWith("ru_") };
+
+  it("місцевий канал без назви міста — його домашній район, з позначкою походження", () => {
+    const s = launchSightings(
+      [{ at: min(4), text: "Опять запуски, гул над городом, летят герани", channel: "AhtariLive" }],
+      NOW,
+      RU,
+    );
+    expect(s.map((x) => x.key)).toEqual(["primorsko"]);
+    expect(s[0]!.ruSource).toBe(true);
+    expect(s[0]!.sources).toEqual(["AhtariLive"]);
+  });
+
+  it("повідомлення про НАШІ атаки на них — не їхній пуск", () => {
+    const s = launchSightings(
+      [{ at: min(4), text: "ВСУ осуществили запуск беспилотников по Курску", channel: "ru_x" }],
+      NOW,
+      RU,
+    );
+    expect(s).toHaveLength(0);
+  });
+
+  it("місцевий канал без дієслова пуску — нічого (опасность атаки БПЛА — це не пуск)", () => {
+    const s = launchSightings(
+      [
+        {
+          at: min(4),
+          text: "Внимание: опасность атаки БПЛА, отойдите от окон",
+          channel: "AhtariLive",
+        },
+      ],
+      NOW,
+      RU,
+    );
+    expect(s).toHaveLength(0);
+  });
+});

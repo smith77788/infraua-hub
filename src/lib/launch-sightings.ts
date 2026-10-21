@@ -82,7 +82,9 @@ export const LAUNCH_SITES: readonly LaunchSite[] = [
     label: "Крим (район не уточнено)",
     lat: 45.3,
     lon: 34.4,
-    re: W("крим(?![а-яіїєґё])|криму|крым"),
+    // Лише окреме слово: «Крымского моста» не є «Крим» (хибний пуск, спійманий
+    // на живому тексті російського каналу).
+    re: W("(?:крим|криму|кримі|крым|крыму|крыма|крыме)(?![а-яіїєґё])"),
     occupied: true,
   },
   { key: "kursk", label: "Курськ", lat: 51.73, lon: 36.19, re: W("курськ|курск|курщин") },
@@ -113,7 +115,43 @@ export const LAUNCH_SITES: readonly LaunchSite[] = [
   { key: "mozdok", label: "Моздок", lat: 43.74, lon: 44.65, re: W("моздок") },
 ];
 
-const LAUNCH_VERB = W("пуск|запуск|відмічено пуск|зл[іе]т|взл[её]т|старт");
+/*
+ * Дієслово пуску — у два ступені, і це наслідок заміру, а не обережності.
+ *
+ * Перша версія брала будь-яке «пуск / запуск / старт», і на живих текстах
+ * російських каналів це дало хибні пуски: «Сегодня в Курске стартует
+ * отопительный сезон… после запуска отопления» — «пуск із Курська»; «до
+ * старта строительства… Крымского моста» — «пуск із Криму».
+ *
+ * Тепер:
+ *  - СИЛЬНІ («пуски», «пусків», «пуск КАБ», «відмічено пуски») — самі по собі:
+ *    у множині й без префікса «за» це майже завжди про зброю;
+ *  - СЛАБКІ («запуск», «зліт», «взлёт») — лише поряд зі словом-зброєю;
+ *  - «старт» прибрано зовсім.
+ */
+const STRONG_LAUNCH = W(
+  "пуск(?:и|ів|ов|ами)(?![а-яіїєґё])|пуск\\s+(?:каб|ракет|бпла|шахед)|відмічено пуск|зафіксовано пуск",
+);
+// Однина «пуск» — слабка: «Пуск реактивних з Орла» справжній, а «пуск» без
+// зброї поряд — ні. `W` не дає збігу всередині слова, тож «запуск» сюди не
+// потрапляє — для нього окремий варіант.
+const WEAK_LAUNCH = W("пуск(?![а-яіїєґё])|запуск|зл[іе]т(?![а-яіїєґё])|взл[её]т");
+const WEAPON =
+  /бпла|реактивн|шахед|shahed|герань|герани|ракет|дрон|беспилот|безпілот|мопед|міг-?31|миг-?31|ту-?(?:95|160|22)|кинджал|кинжал|калібр|калибр|бортів|борт/i;
+const LAUNCH_VERB = W("пуск|запуск|відмічено пуск|зл[іе]т|взл[её]т");
+
+/** Чи каже повідомлення про пуск зброї (див. два ступені вище). */
+export function isLaunchText(text: string): boolean {
+  if (STRONG_LAUNCH.test(text)) return true;
+  return WEAK_LAUNCH.test(text) && WEAPON.test(text);
+}
+
+/*
+ * Російські повідомлення про НАШІ атаки на них («атака ВСУ», «запуск
+ * украинских беспилотников») — не їхні пуски. Їх відкидаємо цілком: інакше
+ * «ВСУ запустили дроны по Курску» ставало б «пуском із Курська».
+ */
+const ENEMY_ATTACK = /всу|украинск|киевск|вражеск|противник|нацист/i;
 
 /** Скільки часу пуск ще цікавий: далі ці цілі вже давно в небі України. */
 export const LAUNCH_WINDOW_MS = 3 * 60 * 60_000;
@@ -134,6 +172,10 @@ export interface LaunchSighting {
   mentions: number;
   /** Район на окупованій території України — див. `LaunchSite.occupied`. */
   occupied: boolean;
+  /** Канали, що повідомили, — походження видно в картці пуску. */
+  sources: string[];
+  /** Хоч одне повідомлення — з російського каналу. */
+  ruSource: boolean;
 }
 
 /** Тип за текстом рядка: «Пуск реактивних з Орла» — без слова «БпЛА», але підтип названо. */
@@ -167,18 +209,30 @@ const CRIMEA_SPECIFIC = new Set(["chauda"]);
 export function launchSightings(
   messages: readonly ChannelMessage[],
   now: number,
+  /**
+   * Звідки канал: для російських місцевих каналів — «домашній» район. Їхні
+   * жителі пишуть «опять запуски», не називаючи власного міста.
+   */
+  sourceOf: (channel: string | undefined) => { ru: boolean; home?: string | undefined } = () => ({
+    ru: false,
+  }),
 ): LaunchSighting[] {
   const out = new Map<string, LaunchSighting>();
   for (const m of messages) {
     if (!(m.at <= now && now - m.at <= LAUNCH_WINDOW_MS)) continue;
-    if (!LAUNCH_VERB.test(m.text)) continue;
+    if (!isLaunchText(m.text)) continue;
+    const src = sourceOf(m.channel);
+    if (src.ru && ENEMY_ATTACK.test(m.text)) continue;
     // Перелік пусків часто одним повідомленням: «• Приморсько-Ахтарськ — 4
     // групи • ТО Крим — 2 групи (реактивні)» — тип і кількість беремо з того
     // самого рядка, що й район.
     const segments = m.text.split(/•|\n|;/);
-    for (const site of LAUNCH_SITES) {
-      const seg = segments.find((s) => site.re.test(s));
-      if (!seg) continue;
+    const named = LAUNCH_SITES.filter((site) => segments.some((s) => site.re.test(s)));
+    // Російський місцевий канал без назви міста — його домашній район.
+    const home = src.home ? LAUNCH_SITES.find((x) => x.key === src.home) : undefined;
+    const sites = named.length ? named : home ? [home] : [];
+    for (const site of sites) {
+      const seg = segments.find((s) => site.re.test(s)) ?? m.text;
       if (
         site.key === "crimea" &&
         LAUNCH_SITES.some((o) => CRIMEA_SPECIFIC.has(o.key) && o.re.test(seg))
@@ -200,11 +254,15 @@ export function launchSightings(
           groups: Number.isFinite(groups) ? groups : null,
           mentions: 1,
           occupied: site.occupied === true,
+          sources: m.channel ? [m.channel] : [],
+          ruSource: src.ru,
         });
       } else {
         prev.firstAt = Math.min(prev.firstAt, m.at);
         prev.lastAt = Math.max(prev.lastAt, m.at);
         prev.mentions++;
+        if (m.channel && !prev.sources.includes(m.channel)) prev.sources.push(m.channel);
+        prev.ruSource = prev.ruSource || src.ru;
         if (prev.type === "unknown") prev.type = type;
         if (Number.isFinite(groups)) prev.groups = Math.max(prev.groups ?? 0, groups);
       }

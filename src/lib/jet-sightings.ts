@@ -32,6 +32,8 @@ export const JET_WINDOW_MS = 20 * 60_000;
 export interface ChannelMessage {
   at: number;
   text: string;
+  /** Канал, звідки повідомлення, — для походження пуску (`launch-sightings`). */
+  channel?: string;
 }
 
 /** Повідомлення з публічного превʼю t.me/s/<канал>: час + текст. */

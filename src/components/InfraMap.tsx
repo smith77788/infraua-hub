@@ -689,6 +689,12 @@ function LaunchLayer({ launches }: { launches: LaunchView[] }) {
                   <p className="opacity-70">
                     Остання згадка {ago} хв тому · повідомлень: {l.mentions}
                   </p>
+                  {l.sources.length ? (
+                    <p className="opacity-70">
+                      Джерела: {l.sources.join(", ")}
+                      {l.ruSource ? " · серед них російське — перевіряйте" : ""}
+                    </p>
+                  ) : null}
                   {l.reachKm > 0 ? (
                     <p className="opacity-70">
                       Перші з серії могли пролетіти ~{l.reachKm} км
