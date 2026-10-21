@@ -750,6 +750,28 @@ function reconcileInBackground(now: number): void {
  * кожен запит карти були б зайвим навантаженням і на нас, і на t.me.
  */
 const JET_REFRESH_MS = 90_000;
+const T_ME_PARALLEL = 8;
+
+/** `Promise.allSettled` з обмеженням одночасних задач; порядок результатів — як у вхідних. */
+async function limitedAll<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number,
+): Promise<PromiseSettledResult<T>[]> {
+  const out: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      try {
+        out[i] = { status: "fulfilled", value: await tasks[i]!() };
+      } catch (reason) {
+        out[i] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return out;
+}
 let jetMessages: ChannelMessage[] = [];
 let jetAt = 0;
 let jetInflight = false;
@@ -759,19 +781,24 @@ function refreshJetSightings(now: number): void {
   jetInflight = true;
   jetAt = now;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  const timer = setTimeout(() => controller.abort(), 25_000);
   // Українські канали спостереження + російські (лише для пусків, див.
   // `RU_LAUNCH_SOURCES`). Кожне повідомлення несе свій канал: від нього
   // залежить і походження пуску, і те, що російський текст ніколи не робить
   // ціль «реактивною».
   const channels = [...TG_CHANNELS, ...RU_LAUNCH_SOURCES.map((s) => s.channel)];
-  Promise.allSettled(
-    channels.map((ch) =>
-      fetch(`https://t.me/s/${encodeURIComponent(ch)}`, {
-        signal: controller.signal,
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
-      }).then((r) => (r.ok ? r.text() : "")),
+  // Не більше `T_ME_PARALLEL` запитів до t.me водночас: каналів понад сотню, і
+  // сотня одночасних запитів щохвилини-півтори — це вже навантаження на чужий
+  // сервіс і ризик обмеження, яке вимкнуло б нам усе джерело.
+  limitedAll(
+    channels.map(
+      (ch) => () =>
+        fetch(`https://t.me/s/${encodeURIComponent(ch)}`, {
+          signal: controller.signal,
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
+        }).then((r) => (r.ok ? r.text() : "")),
     ),
+    T_ME_PARALLEL,
   )
     .then((pages) => {
       const all: ChannelMessage[] = [];
@@ -918,42 +945,47 @@ async function fetchThreatTypesByPlace(placeNames: string[]): Promise<Map<string
     .filter((n) => n.norm.length >= 4);
   if (!names.length) return out;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8_000);
-  try {
-    const pages = await Promise.allSettled(
-      TG_CHANNELS.map((ch) =>
-        fetch(`https://t.me/s/${ch}`, {
-          signal: controller.signal,
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
-        }).then((r) => (r.ok ? r.text() : "")),
-      ),
-    );
-    for (const p of pages) {
-      if (p.status !== "fulfilled" || !p.value) continue;
-      const blocks = p.value.match(
-        /<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/g,
+  /*
+   * Тексти — з того самого фонового кешу, що й реактивні та пуски
+   * (`jetMessages`), а не новим обходом ~110 каналів посеред запиту карти.
+   * Кеш порожній (щойно старт) — читаємо самі, але з обмеженням паралельності
+   * й коротким строком: краще частина типів зараз, ніж карта, що чекає.
+   */
+  const texts: string[] = jetMessages
+    .filter((m) => !RU_CHANNELS.has(m.channel ?? ""))
+    .map((m) => m.text);
+  if (!texts.length) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const pages = await limitedAll(
+        TG_CHANNELS.map(
+          (ch) => () =>
+            fetch(`https://t.me/s/${encodeURIComponent(ch)}`, {
+              signal: controller.signal,
+              headers: { "User-Agent": "Mozilla/5.0 (compatible; InfraUA/1.0)" },
+            }).then((r) => (r.ok ? r.text() : "")),
+        ),
+        T_ME_PARALLEL,
       );
-      if (!blocks) continue;
-      for (const raw of blocks) {
-        const text = raw
-          .replace(/<br\s*\/?>/g, " ")
-          .replace(/<[^>]+>/g, "")
-          .replace(/&[a-z#0-9]+;/gi, " ");
-        const type = classifyThreatType(text);
-        if (type === "unknown") continue;
-        const low = normPlace(text);
-        for (const n of names) {
-          if (low.includes(n.norm)) {
-            out.set(n.raw, moreSevereType(out.get(n.raw) ?? "unknown", type));
-          }
-        }
+      for (const p of pages)
+        if (p.status === "fulfilled" && p.value)
+          texts.push(...parseChannelPage(p.value).map((m) => m.text));
+    } catch {
+      // Best-effort: без типів позначки просто лишаться "unknown".
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  for (const text of texts) {
+    const type = classifyThreatType(text);
+    if (type === "unknown") continue;
+    const low = normPlace(text);
+    for (const n of names) {
+      if (low.includes(n.norm)) {
+        out.set(n.raw, moreSevereType(out.get(n.raw) ?? "unknown", type));
       }
     }
-  } catch {
-    // Best-effort: без типів позначки просто лишаться "unknown".
-  } finally {
-    clearTimeout(timer);
   }
   return out;
 }
