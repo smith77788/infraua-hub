@@ -2,7 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import type { Threat } from "./air";
-import { applyChannelTracks, buildTracks, channelFixes, mentionsOf } from "./channel-track";
+import {
+  applyChannelTracks,
+  buildTracks,
+  channelFixes,
+  isEndOfTarget,
+  mentionsOf,
+} from "./channel-track";
 import { Gazetteer } from "./gazetteer";
 
 const gaz = new Gazetteer(readFileSync("assets/geo/ua-places.tsv", "utf8"));
@@ -121,6 +127,18 @@ describe("трек RADAR.RIVNE — із дописів у ціль на карт
     expect(applyChannelTracks([], one)).toHaveLength(0);
   });
 
+  it("назва позначки — у називному: «над Вільнянськом» → «Вільнянськ», «М'ятин» лишається з апострофом", () => {
+    const f = channelFixes(
+      [{ at: NOW - 60_000, text: "Над Вільнянськом", channel: "c" }],
+      gaz,
+      [],
+      NOW,
+    );
+    expect(f[0]!.place.name).toBe("Вільнянськ");
+    expect(f[0]!.said).toBe("Вільнянськом");
+    expect(fixes.find((x) => x.said === "М'ятин/Глинки")!.place.name).toBe("М'ятин/Глинки");
+  });
+
   it("однойменні пункти: «Підліски» (5 в Україні) — саме рівненські, біля треку", () => {
     const p = fixes.find((f) => f.said === "Підліски")!;
     expect(p.place.admin).toBe("19");
@@ -136,5 +154,56 @@ describe("трек RADAR.RIVNE — із дописів у ціль на карт
     const out = applyChannelTracks([], buildTracks(channelFixes(near, gaz, [], NOW)));
     expect(out[0]!.heading!).toBeGreaterThan(240);
     expect(out[0]!.heading!).toBeLessThan(290);
+  });
+});
+
+describe("кінець цілі — «зникла» закриває трек", () => {
+  // Дослівно shovnebi, 22.10.2026, хвилини до 17:55 UTC.
+  const AT = Date.parse("2026-10-22T17:55:00Z");
+  const SHOV: [number, string][] = [
+    [20, "Фпв південніше Вільнянська в районі Яковлеве"],
+    [18, "над Вільнянськом в бік жд вокзалу"],
+    [17, "над Вільнянськом в бік жд вокзалу"],
+    [16, "зникла"],
+  ];
+  const m = SHOV.map(([min, text]) => ({ at: AT - min * 60_000, text, channel: "shovnebi" }));
+
+  it("коротка фраза-кінець — так; продовження розповіді — ні", () => {
+    for (const t of ["зникла", "Мінус", "мінус 1", "Збито!", "✅ Відбій", "сбит"]) {
+      expect(isEndOfTarget(t)).toBe(true);
+    }
+    for (const t of ["мінус 2, ще 3 на Київ", "зникла з радарів, але ще одна на Гощу", "Гоща"]) {
+      expect(isEndOfTarget(t)).toBe(false);
+    }
+  });
+
+  it("після «зникла» ціль із каналу не лишається на карті", () => {
+    const tracks = buildTracks(channelFixes(m, gaz, [], AT));
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]!.ended).toBe(true);
+    expect(applyChannelTracks([], tracks)).toHaveLength(0);
+  });
+
+  it("без «зникла» — та сама ціль є, підписана в називному: «Вільнянськ»", () => {
+    const out = applyChannelTracks([], buildTracks(channelFixes(m.slice(0, 3), gaz, [], AT)));
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe("Вільнянськ");
+  });
+
+  it("наступна ціль каналу після «зникла» — не продовження старої", () => {
+    const next = [
+      ...m,
+      { at: AT - 6 * 60_000, text: "далі Петропавлівка", channel: "shovnebi" },
+      { at: AT - 5 * 60_000, text: "Самарське далі", channel: "shovnebi" },
+    ];
+    const tracks = buildTracks(channelFixes(next, gaz, [], AT));
+    // Стара ціль закрита й нічого не набрала після «зникла».
+    expect(tracks[0]!.ended).toBe(true);
+    expect(tracks[0]!.fixes.map((f) => f.said)).not.toContain("Петропавлівка");
+    // Без опори «Петропавлівок» багато — точки не вгадуємо (раніше опорою
+    // ставав Вільнянськ, і обиралась запорізька замість дніпропетровської).
+    expect(tracks.slice(1).flatMap((t) => t.fixes.map((f) => f.said))).not.toContain(
+      "Петропавлівка",
+    );
   });
 });

@@ -38,7 +38,8 @@ import { bearingDeg } from "./threat-eta";
 export interface ChannelFix {
   channel: string;
   at: number;
-  kind: "position" | "course";
+  /** `end` — канал сказав, що ціль зникла / збита: трек закрито. */
+  kind: "position" | "course" | "end";
   place: GeoPlace;
   /** Назва так, як її написав канал. */
   said: string;
@@ -59,6 +60,24 @@ const POSITION_CUE =
   /(?:^|[\s,.:;(])(?:далі|дали|повз|біля|возле|над|в районі|у районі|в районе|в передмісті|у передмісті|поблизу|через)\s+(.+)$/i;
 const COURSE_CUE =
   /(?:^|[\s,.:;(])(?:відвернув на|повернув на|розвернувся на|маневр на|курсом на|курс на|в напрямку|у напрямку|в направлении|в бік|у бік|в сторону|→|->)\s*(.+)$/i;
+
+/**
+ * Кінець цілі: короткий допис «зникла», «мінус», «збито», «відбій». Лише
+ * короткий — «мінус 2, ще 3 на Київ» продовжує розповідь, а не закриває її.
+ * Заміряно на shovnebi, 22.10: «над Вільнянськом» → «зникла» о 17:39, а ціль
+ * трималась на карті ще 17 хв і до неї причепився інший FPV за 25 км.
+ */
+const END_CUE =
+  /^(?:зникл[аио]?|зник|пропал[аио]?|мінус|минус|збит[аоиі]й?|збили|знищен[аоиі]й?|уничтожен[аоы]?|сбит[аоы]?|ціль втрачена|втратили|відбій|отбой)(?=$|[\s!.,)])/i;
+
+/** Допис закриває трек: коротка фраза-кінець, без назв і продовження. */
+export function isEndOfTarget(text: string): boolean {
+  const line = text
+    .replace(/[^\p{L}\p{N}\s'’ʼ-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return line.split(" ").length <= 3 && END_CUE.test(line);
+}
 
 /** Службові слова, що не заважають «допису лише з назв». */
 const FILLER = new Set([
@@ -176,6 +195,13 @@ export function channelFixes(
   const lastByChannel = new Map<string, ChannelFix>();
   const out: ChannelFix[] = [];
   for (const m of fresh) {
+    const prevFix = lastByChannel.get(m.channel!);
+    if (prevFix && isEndOfTarget(m.text)) {
+      out.push({ ...prevFix, at: m.at, kind: "end", said: m.text.trim() });
+      // Наступна ціль каналу може бути будь-де — стара точка вже не опора.
+      lastByChannel.delete(m.channel!);
+      continue;
+    }
     const ms = mentionsOf(m.text, gaz);
     if (!ms.length) continue;
     const type = classifyThreatType(m.text);
@@ -201,7 +227,12 @@ export function channelFixes(
         channel: m.channel!,
         at: m.at,
         kind: "position",
-        place: { name: near.map((p) => p.said).join("/"), lat, lon, admin: near[0]!.place.admin },
+        place: {
+          name: near.map((p) => shownName(p)).join("/"),
+          lat,
+          lon,
+          admin: near[0]!.place.admin,
+        },
         said: near.map((p) => p.said).join("/"),
         type,
       };
@@ -212,12 +243,23 @@ export function channelFixes(
   return out;
 }
 
+/**
+ * Назва для позначки. Як у дописі — лише коли це вже називний відмінок
+ * («М'ятин»: у довіднику GeoNames він «Мятин», без апострофа). Інакше — з
+ * довідника: допис «над Вільнянськом» дає позначку «Вільнянськ».
+ */
+function shownName(p: { place: GeoPlace; said: string }): string {
+  return normName(p.said) === normName(p.place.name) ? p.said : p.place.name;
+}
+
 export interface ChannelTrack {
   channel: string;
   fixes: ChannelFix[];
   /** Останній названий курс, якщо був після останньої позиції. */
   course: ChannelFix | null;
   type: ThreatType;
+  /** Канал сказав «зникла» / «збито»: на карті трек уже не веде нічого. */
+  ended: boolean;
 }
 
 /** Точки одного каналу, зшиті в треки за правдоподібністю польоту між ними. */
@@ -226,6 +268,11 @@ export function buildTracks(fixes: readonly ChannelFix[]): ChannelTrack[] {
   const open = new Map<string, ChannelTrack>();
   for (const f of [...fixes].sort((a, b) => a.at - b.at)) {
     const t = open.get(f.channel);
+    if (f.kind === "end") {
+      if (t) t.ended = true;
+      open.delete(f.channel);
+      continue;
+    }
     if (f.kind === "course") {
       if (t) t.course = f;
       continue;
@@ -242,7 +289,13 @@ export function buildTracks(fixes: readonly ChannelFix[]): ChannelTrack[] {
       t.course = null;
       if (t.type === "unknown") t.type = f.type;
     } else {
-      const nt: ChannelTrack = { channel: f.channel, fixes: [f], course: null, type: f.type };
+      const nt: ChannelTrack = {
+        channel: f.channel,
+        fixes: [f],
+        course: null,
+        type: f.type,
+        ended: false,
+      };
       tracks.push(nt);
       open.set(f.channel, nt);
     }
@@ -269,6 +322,7 @@ export function applyChannelTracks(
   const out = threats.map((t) => ({ ...t }));
   const DRONES = new Set<ThreatType>(["shahed", "reactive", "unknown", "recon"]);
   for (const tr of tracks) {
+    if (tr.ended) continue;
     const last = tr.fixes[tr.fixes.length - 1]!;
     // Курс — від найближчої попередньої точки, що вже за ≥ 3 км: сусідні дописи
     // часто називають села за кілометр одне від одного («Мʼятин» → «Глинки»),
@@ -308,7 +362,7 @@ export function applyChannelTracks(
       if (Number.isFinite(sinceMs) && sinceMs > last.at) continue; // джерело свіжіше
       best.lat = last.place.lat;
       best.lon = last.place.lon;
-      best.name = last.said;
+      best.name = last.place.name;
       best.since = lastIso;
       best.lastSeen = lastIso;
       if (heading !== null) best.heading = heading;
@@ -331,7 +385,7 @@ export function applyChannelTracks(
     if (tr.fixes.length < 2) continue;
     out.push({
       id: `ch:${tr.channel}:${tr.fixes[0]!.at}`,
-      name: last.said,
+      name: last.place.name,
       lat: last.place.lat,
       lon: last.place.lon,
       source: tr.channel,
