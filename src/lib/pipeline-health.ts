@@ -34,6 +34,36 @@ export const DEPLOY_GRACE_MS = 30 * 60 * 1000;
 
 export type CiConclusion = "success" | "failure" | "pending" | "unknown";
 
+export interface CheckRun {
+  name?: string;
+  status?: string;
+  conclusion?: string | null;
+}
+
+/**
+ * Чи це перевірка коду, а не доставка. Job-и деплою (`deploy` у
+ * deploy-platform.yml і deploy-console.yml) теж приходять у `check-runs`, але
+ * їхнє падіння — не «винен код»: 22.10 deploy-platform упав на «Invalid
+ * RAILWAY_TOKEN» (токени анульовано інцидентом Railway), CI на тому ж коміті
+ * був зелений, а власник отримав «Перевірка червона… лагодити треба код… лок
+ * не збігається з package.json». Тобто протилежну дію до потрібної.
+ */
+export function isCodeCheck(run: CheckRun): boolean {
+  return !/^deploy\b/i.test(run.name ?? "");
+}
+
+/** Зведення перевірок коду на коміті. Деплой сюди не входить — див. `isCodeCheck`. */
+export function ciConclusionOf(all: readonly CheckRun[]): CiConclusion {
+  const runs = all.filter(isCodeCheck);
+  if (runs.length === 0) return "unknown";
+  if (runs.some((r) => r.conclusion === "failure" || r.conclusion === "timed_out")) {
+    return "failure";
+  }
+  // «Ще йде» — не «впала»: інакше кожен пуш піднімав би тривогу.
+  if (runs.some((r) => r.status !== "completed")) return "pending";
+  return runs.some((r) => r.conclusion === "success") ? "success" : "unknown";
+}
+
 export interface PipelineFacts {
   /** Коміт, з якого зібрана ЦЯ збірка. `null` — оточення не сказало. */
   deployedSha: string | null;

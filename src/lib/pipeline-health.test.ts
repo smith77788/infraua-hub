@@ -8,6 +8,7 @@ import {
   renderPipelineAlert,
   renderPipelineRecovered,
   type PipelineFacts,
+  ciConclusionOf,
 } from "./pipeline-health";
 
 const NOW = Date.UTC(2026, 8, 16, 12, 0, 0);
@@ -138,5 +139,33 @@ describe("тексти", () => {
   it("час відставання читається людиною", () => {
     const f = facts({ headSha: "bbbbbbb", headAt: NOW - 26 * 60 * 60 * 1000 });
     expect(renderPipelineAlert(assessPipeline(f, NOW), f)).toContain("1 д 2 год");
+  });
+});
+
+describe("ciConclusionOf — перевірка коду, а не доставки", () => {
+  // Дослівно check-runs коміту b2c7057 (22.10): впав лише деплой платформи —
+  // «Invalid RAILWAY_TOKEN». Сторож сказав «Перевірка червона… лагодити треба
+  // код», хоча код був зелений.
+  const B2C7057 = [
+    { name: "check", status: "completed", conclusion: "success" },
+    { name: "deploy", status: "completed", conclusion: "failure" },
+    { name: "backend", status: "completed", conclusion: "success" },
+  ];
+
+  it("впалий деплой — не червоний код", () => {
+    expect(ciConclusionOf(B2C7057)).toBe("success");
+  });
+
+  it("впала сама перевірка — червоно, як і було", () => {
+    expect(
+      ciConclusionOf([
+        ...B2C7057.slice(1),
+        { name: "check", status: "completed", conclusion: "failure" },
+      ]),
+    ).toBe("failure");
+  });
+
+  it("лише деплой і нічого більше — не знаємо, а не «гаразд»", () => {
+    expect(ciConclusionOf([B2C7057[1]!])).toBe("unknown");
   });
 });

@@ -51,6 +51,8 @@ import { renderErrorPage } from "./lib/error-page";
 import { buildStamp, renderBuild } from "./lib/build-info";
 import {
   assessPipeline,
+  ciConclusionOf,
+  type CheckRun,
   pipelineLine,
   pipelineNotice,
   renderPipelineAlert,
@@ -4776,17 +4778,8 @@ async function fetchCiConclusion(sha: string): Promise<CiConclusion> {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return "unknown";
-    const body = (await res.json()) as {
-      check_runs?: { status?: string; conclusion?: string | null }[];
-    };
-    const runs = body.check_runs ?? [];
-    if (runs.length === 0) return "unknown";
-    if (runs.some((r) => r.conclusion === "failure" || r.conclusion === "timed_out")) {
-      return "failure";
-    }
-    // «Ще йде» — не «впала»: інакше кожен пуш піднімав би тривогу.
-    if (runs.some((r) => r.status !== "completed")) return "pending";
-    return runs.some((r) => r.conclusion === "success") ? "success" : "unknown";
+    const body = (await res.json()) as { check_runs?: CheckRun[] };
+    return ciConclusionOf(body.check_runs ?? []);
   } catch {
     return "unknown";
   }
