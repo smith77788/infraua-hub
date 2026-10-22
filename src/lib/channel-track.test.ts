@@ -137,6 +137,24 @@ describe("трек RADAR.RIVNE — із дописів у ціль на карт
     expect(f[0]!.place.name).toBe("Вільнянськ");
     expect(f[0]!.said).toBe("Вільнянськом");
     expect(fixes.find((x) => x.said === "М'ятин/Глинки")!.place.name).toBe("М'ятин/Глинки");
+    // GeoNames: «Дубровіца»; канал пише правильно — лишаємо як у дописі.
+    const near: Threat = {
+      id: "n3",
+      name: "Дубровиця",
+      lat: 51.55,
+      lon: 26.6,
+      source: "neptun.in.ua",
+      count: 1,
+      since: "",
+      expires: "",
+    };
+    const d = channelFixes(
+      [{ at: NOW - 60_000, text: "Дубровиця", channel: "c" }],
+      gaz,
+      [near],
+      NOW,
+    );
+    expect(d[0]!.place.name).toBe("Дубровиця");
   });
 
   it("однойменні пункти: «Підліски» (5 в Україні) — саме рівненські, біля треку", () => {

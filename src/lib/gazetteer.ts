@@ -114,6 +114,11 @@ export class Gazetteer {
    * Пункти з такою назвою (будь-яким відмінком). Порожньо — у довіднику немає.
    * `phrase` — вже нормалізована (`normName`), одне чи кілька слів.
    */
+  /** Лише точний збіг форми — без відмінкових основ. */
+  named(phrase: string): readonly GeoPlace[] {
+    return this.exact.get(phrase) ?? [];
+  }
+
   find(phrase: string): GeoPlace[] {
     const hit = this.exact.get(phrase);
     if (hit) return hit;

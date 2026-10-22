@@ -228,7 +228,7 @@ export function channelFixes(
         at: m.at,
         kind: "position",
         place: {
-          name: near.map((p) => shownName(p)).join("/"),
+          name: near.map((p) => shownName(p, gaz)).join("/"),
           lat,
           lon,
           admin: near[0]!.place.admin,
@@ -244,12 +244,13 @@ export function channelFixes(
 }
 
 /**
- * Назва для позначки. Як у дописі — лише коли це вже називний відмінок
- * («М'ятин»: у довіднику GeoNames він «Мятин», без апострофа). Інакше — з
- * довідника: допис «над Вільнянськом» дає позначку «Вільнянськ».
+ * Назва для позначки. Як у дописі — коли це точна форма цього пункту в
+ * довіднику, тобто вже називний відмінок: GeoNames місцями пише назви
+ * криво («Мятин» без апострофа, «Дубровіца» замість «Дубровиця»), а канал —
+ * так, як кажуть. Інакше — з довідника: «над Вільнянськом» → «Вільнянськ».
  */
-function shownName(p: { place: GeoPlace; said: string }): string {
-  return normName(p.said) === normName(p.place.name) ? p.said : p.place.name;
+function shownName(p: { place: GeoPlace; said: string }, gaz: Gazetteer): string {
+  return gaz.named(normName(p.said)).includes(p.place) ? p.said : p.place.name;
 }
 
 export interface ChannelTrack {
