@@ -630,7 +630,7 @@ function launchArc(l: LaunchView): [number, number][] {
   const toUa = bearingDeg(l, UA_CENTER);
   const pts: [number, number][] = [];
   for (let d = -60; d <= 60; d += 5) {
-    const p = advance(l.lat, l.lon, toUa + d, l.reachKm);
+    const p = advance(l.lat, l.lon, toUa + d, l.arcKm);
     pts.push([p.lat, p.lon]);
   }
   return pts;
@@ -672,7 +672,7 @@ function LaunchLayer({ launches }: { launches: LaunchView[] }) {
         const ago = Math.max(0, Math.round((Date.now() - l.lastAt) / 60_000));
         return (
           <Fragment key={`launch-${l.key}`}>
-            {l.reachKm > 0 ? (
+            {l.arcKm > 0 ? (
               <Polyline
                 positions={launchArc(l)}
                 pathOptions={{ color, weight: 2, opacity: 0.7, dashArray: "6 6" }}
@@ -695,14 +695,17 @@ function LaunchLayer({ launches }: { launches: LaunchView[] }) {
                       {l.ruSource ? " · серед них російське — перевіряйте" : ""}
                     </p>
                   ) : null}
-                  {l.reachKm > 0 ? (
+                  {l.arcKm > 0 ? (
                     <p className="opacity-70">
-                      Перші з серії могли пролетіти ~{l.reachKm} км
-                      {l.toBorderMin === 0
-                        ? " — уже могли перетнути кордон"
-                        : l.toBorderMin !== null
-                          ? ` · до кордону ~${l.toBorderMin} хв`
-                          : ""}
+                      Перші з серії могли пролетіти ~{l.arcKm} км
+                      {l.toBorderMin !== null ? ` · до кордону ~${l.toBorderMin} хв` : ""}
+                    </p>
+                  ) : l.reachKm > 0 ? (
+                    <p className="opacity-70">
+                      {l.occupied
+                        ? "Пуск з окупованої території — цілі вже над Україною"
+                        : "Перші з серії вже могли перетнути кордон"}
+                      : далі їх ведуть позначки цілей на карті
                     </p>
                   ) : (
                     <p className="opacity-60">Тип не названо — як далеко долетіли, не оцінюємо</p>

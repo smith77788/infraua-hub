@@ -91,6 +91,19 @@ describe("launchReach — як далеко могли долетіти", () => 
     );
     expect(c!.occupied).toBe(true);
     expect(launchReach(c!, NOW).toBorderMin).toBeNull();
+    // З окупованої території кордону немає — дуги теж.
+    expect(launchReach(c!, NOW).arcKm).toBe(0);
+  });
+
+  it("дуга живе, лише поки серія летить до кордону — далі не росте на всю карту", () => {
+    // 22.10 на проді: Орел, шахеди, 175 хв — радіус 539 км через пів України.
+    const [o] = launchSightings([{ at: min(175), text: "Відмічено пуски шахедів: Орел" }], NOW);
+    expect(launchReach(o!, NOW).reachKm).toBeGreaterThan(500);
+    expect(launchReach(o!, NOW).arcKm).toBe(0);
+    // Той самий пуск через 20 хв — ще до кордону: дуга є й дорівнює пролетові.
+    const early = launchReach(o!, o!.firstAt + 20 * 60_000);
+    expect(early.toBorderMin).toBeGreaterThan(0);
+    expect(early.arcKm).toBe(early.reachKm);
   });
 });
 

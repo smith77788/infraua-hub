@@ -284,6 +284,15 @@ export interface LaunchReach {
   /** Хвилин до кордону України; 0 — уже могли перетнути; `null` — швидкість невідома. */
   toBorderMin: number | null;
   borderKm: number;
+  /**
+   * Радіус дуги на карті, км; 0 — дуги немає. Дуга живе, лише поки серія ще
+   * летить ДО кордону. Далі цілі вже в Україні, і їх ведуть позначки на карті,
+   * а дуга, що росла б і далі, накрила б пів країни: 22.10 на проді Брянськ
+   * (балістика) мав радіус 4755 км, Орел — 539, і жовті дуги перетинали всю
+   * карту ще годину після того, як серія долетіла. З окупованої території
+   * (Крим) кордону немає — і дуги теж.
+   */
+  arcKm: number;
 }
 
 /**
@@ -294,10 +303,11 @@ export interface LaunchReach {
 export function launchReach(s: LaunchSighting, now: number): LaunchReach {
   const b = Math.round(borderKm(s));
   if (s.type === "unknown" || s.type === "aircraft")
-    return { reachKm: 0, toBorderMin: null, borderKm: b };
+    return { reachKm: 0, toBorderMin: null, borderKm: b, arcKm: 0 };
   const v = SPEED_KMH[s.type];
   const hours = Math.max(0, now - s.firstAt) / 3_600_000;
   const reachKm = Math.round(v * hours);
   const toBorderMin = s.occupied ? null : Math.max(0, Math.round(((b - reachKm) / v) * 60));
-  return { reachKm, toBorderMin, borderKm: b };
+  const arcKm = !s.occupied && reachKm < b ? reachKm : 0;
+  return { reachKm, toBorderMin, borderKm: b, arcKm };
 }
