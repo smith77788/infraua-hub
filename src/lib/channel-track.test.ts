@@ -225,3 +225,81 @@ describe("кінець цілі — «зникла» закриває трек",
     );
   });
 });
+
+describe("списки агрегаторів і підтвердження кількома каналами (дослівно, 23.10.2026)", () => {
+  const AT = Date.parse("2026-10-23T00:30:00Z");
+  // sectorv666 і Ukrainian_Intelligence — той самий список.
+  const LIST =
+    "Рівненщина : реактивний на Млинів\n\nЧернігівщина : реактивний на Славутич\n\nЖитомирщина : звичайний біля Ружина (100м)";
+
+  it("рядок — окрема ціль: область із заголовка, тип із рядка", () => {
+    const f = channelFixes([{ at: AT - 60_000, text: LIST, channel: "a" }], gaz, [], AT);
+    const ruzhyn = f.find((x) => x.kind === "position")!;
+    expect(ruzhyn.place.name).toBe("Ружин");
+    // Житомирщина, а не «Ружино» на Миколаївщині.
+    expect(ruzhyn.place.lat).toBeGreaterThan(49.5);
+    expect(ruzhyn.type).toBe("shahed"); // «звичайний», хоч допис і про реактивні
+    const courses = f.filter((x) => x.kind === "course");
+    expect(courses.map((x) => x.type)).toEqual(["reactive", "reactive"]);
+  });
+
+  it("одна точка від двох каналів — ціль; від одного — ні", () => {
+    const one = buildTracks(
+      channelFixes([{ at: AT - 60_000, text: LIST, channel: "a" }], gaz, [], AT),
+    );
+    expect(applyChannelTracks([], one)).toHaveLength(0);
+    const two = buildTracks(
+      channelFixes(
+        [
+          { at: AT - 120_000, text: LIST, channel: "sectorv666" },
+          { at: AT - 60_000, text: LIST, channel: "Ukrainian_Intelligence" },
+        ],
+        gaz,
+        [],
+        AT,
+      ),
+    );
+    const out = applyChannelTracks([], two);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ name: "Ружин", type: "shahed" });
+    expect(out[0]!.sources).toEqual(
+      expect.arrayContaining(["sectorv666", "Ukrainian_Intelligence"]),
+    );
+  });
+
+  it("«пройшов Городню» → «після Ріпок» — дві точки, трек (UkraineRadar_24_7)", () => {
+    const msgs = [
+      {
+        at: AT - 9 * 60_000,
+        text: "⚠️ Реактивний на Чернігівщині пройшов Городню, далі курсом на Ріпки.",
+        channel: "UkraineRadar_24_7",
+      },
+      {
+        at: AT - 2 * 60_000,
+        text: "⚠️ Реактивний на Чернігівщині після Ріпок змінив курс, тепер на Славутич.",
+        channel: "UkraineRadar_24_7",
+      },
+    ];
+    const tracks = buildTracks(channelFixes(msgs, gaz, [], AT));
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]!.fixes.map((f) => f.place.name)).toEqual(["Городня", "Ріпки"]);
+    const [t] = applyChannelTracks([], tracks);
+    expect(t).toMatchObject({ type: "reactive", name: "Ріпки" });
+  });
+
+  it("«Чернігівщина - чисто» — стан області, а не село Чисте", () => {
+    expect(mentionsOf("Чернігівщина - чисто", gaz)).toHaveLength(0);
+    expect(mentionsOf("Поки тихо", gaz)).toHaveLength(0);
+  });
+
+  it("дві цілі одного каналу в різних областях не рвуть треки одна одній", () => {
+    const msgs = [
+      { at: AT - 8 * 60_000, text: "Гоща", channel: "c" },
+      { at: AT - 7 * 60_000, text: "Чернігівщина: Ріпки", channel: "c" },
+      { at: AT - 5 * 60_000, text: "Далі Бабин", channel: "c" },
+      { at: AT - 4 * 60_000, text: "Чернігівщина: Любеч", channel: "c" },
+    ];
+    const tracks = buildTracks(channelFixes(msgs, gaz, [], AT));
+    expect(tracks.map((t) => t.fixes.length)).toEqual([2, 2]);
+  });
+});

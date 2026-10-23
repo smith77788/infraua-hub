@@ -1,7 +1,8 @@
-import { classifyThreatType, type Threat, type ThreatType } from "./air";
+import { classifyThreatType, moreSevereType, type Threat, type ThreatType } from "./air";
 import { type Gazetteer, type GeoPlace, normName } from "./gazetteer";
 import { distanceKm } from "./infra-types";
 import type { ChannelMessage } from "./jet-sightings";
+import { oblastAdminIn } from "./oblast";
 import { bearingDeg } from "./threat-eta";
 
 /**
@@ -44,6 +45,8 @@ export interface ChannelFix {
   /** Назва так, як її написав канал. */
   said: string;
   type: ThreatType;
+  /** Рядок допису — щоб курс із того ж рядка йшов до своєї цілі. */
+  line?: number;
 }
 
 /** Скільки свіжою має бути точка: далі — це вже історія, а не де ціль. */
@@ -56,10 +59,23 @@ const MAX_LINK_KMH = 900;
 /** Точку каналу приписуємо цілі Нептуна, якщо вона не далі за це. */
 export const MATCH_TARGET_KM = 45;
 
+/*
+ * «Пройшов Городню», «після Ріпок», «минув X» — теж місце: ціль уже там.
+ * Заміряно 23.10 на UkraineRadar_24_7: «Реактивний на Чернігівщині пройшов
+ * Городню, далі курсом на Ріпки» → «після Ріпок змінив курс, тепер на
+ * Славутич» — реактивний, якого не мали ні Нептун, ні ми, бо обидві точки
+ * трималися на цих словах.
+ */
 const POSITION_CUE =
-  /(?:^|[\s,.:;(])(?:далі|дали|повз|біля|возле|над|в районі|у районі|в районе|в передмісті|у передмісті|поблизу|через)\s+(.+)$/i;
+  /(?:^|[\s,.:;(])(?:далі|дали|повз|біля|возле|над|в районі|у районі|в районе|в передмісті|у передмісті|поблизу|через|пройшов|пролетів|минув|після|прошел|пролетел|после)\s+(.+)$/i;
+/*
+ * «Реактивний на Млинів», «2х БпЛА на Чернігів», «шахед на Гощу» — теж курс:
+ * так пишуть списки агрегаторів (sectorv666, Ukrainian_Intelligence, 23.10).
+ * Голе «на X» без назви апарата перед ним курсом не вважаємо: «на Полтавщині»,
+ * «на місто», «на удар».
+ */
 const COURSE_CUE =
-  /(?:^|[\s,.:;(])(?:відвернув на|повернув на|розвернувся на|маневр на|курсом на|курс на|в напрямку|у напрямку|в направлении|в бік|у бік|в сторону|→|->)\s*(.+)$/i;
+  /(?:^|[\s,.:;(])(?:відвернув на|повернув на|розвернувся на|маневр на|курсом на|курс на|в напрямку|у напрямку|в направлении|в бік|у бік|в сторону|(?:реактив|бпла|шахед|мопед|дрон|герань|бандерол|звичайн|ціл)[\p{L}]*\s+на|→|->)\s*(.+)$/iu;
 
 /**
  * Кінець цілі: короткий допис «зникла», «мінус», «збито», «відбій». Лише
@@ -78,6 +94,10 @@ export function isEndOfTarget(text: string): boolean {
     .trim();
   return line.split(" ").length <= 3 && END_CUE.test(line);
 }
+
+/** Рядок — стан області, а не назва пункту («чисто», «тихо», «відбій»). */
+const STATUS_WORDS =
+  /^(?:поки |все |вже |наразі )?(?:чисто|тихо|спокиино|спокоино|пусто|видбии|отбои|увага|уважно|загроза|без загроз|чисте небо)[\s.!]*$/u;
 
 /** Службові слова, що не заважають «допису лише з назв». */
 const FILLER = new Set([
@@ -123,28 +143,66 @@ interface Mention {
   kind: "position" | "course";
   places: GeoPlace[];
   said: string;
+  /** Номер рядка допису: рядок — одна ціль у списках агрегаторів. */
+  line: number;
+  /** Тип, названий у самому рядку («звичайний біля Ружина»), або `unknown`. */
+  lineType: ThreatType;
 }
 
-/** Що каже допис: позиції й курси з кандидатами-пунктами (ще без вибору). */
+/**
+ * Тип рядка. «Звичайний» у каналах спостереження — це протиставлення
+ * реактивному: «Житомирщина: звичайний біля Ружина» під рядками про
+ * реактивні — поршневий шахед.
+ */
+function typeOfLine(line: string): ThreatType {
+  if (/(?<![а-яіїєґ])звичайн/i.test(line)) return "shahed";
+  return classifyThreatType(line);
+}
+
+/**
+ * Що каже допис: позиції й курси з кандидатами-пунктами (ще без вибору).
+ *
+ * Якщо в рядку чи в заголовку над ним названо область («Житомирщина: …»,
+ * «на Полтавщині»), кандидатів звужено до неї — коли там хоч один є.
+ */
 export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
   const out: Mention[] = [];
-  for (const raw of text.split(/\n|•|;/)) {
+  let header: string | null = null;
+  text.split(/\n|•|;/).forEach((raw, lineNo) => {
     const line = raw.trim();
-    if (!line) continue;
-    const course = line.match(COURSE_CUE);
-    if (course) {
-      const p = leadingPlace(words(course[1]!), gaz);
-      if (p) out.push({ kind: "course", places: p.places, said: p.said });
-    }
-    const pos = line.match(POSITION_CUE);
+    if (!line) return;
+    // «Чернігівщина: Городня», «Рівненщина - Клевань»: заголовок відрізаємо,
+    // інакше рядок «лише з назв» не впізнається через назву області.
+    const head = raw.trim().match(/^((?:[^\s:–—-]+)(?:\s+област[ьи])?)\s*[:–—-]\s*(.+)$/u);
+    const own = oblastAdminIn(line, gaz);
+    const body = head && oblastAdminIn(head[1]!, gaz) ? head[2]!.trim() : line;
+    // Заголовок діє на наступні рядки, поки не прийде інший.
+    if (own) header = own;
+    const admin = own ?? header;
+    const lineType = typeOfLine(line);
+    const push = (kind: Mention["kind"], p: { places: GeoPlace[]; said: string }) => {
+      const inRegion = admin ? p.places.filter((x) => x.admin === admin) : [];
+      out.push({
+        kind,
+        places: inRegion.length ? inRegion : p.places,
+        said: p.said,
+        line: lineNo,
+        lineType,
+      });
+    };
+    const course = firstPlaceAfter(body, COURSE_CUE, gaz);
+    if (course) push("course", course);
+    const pos = firstPlaceAfter(body, POSITION_CUE, gaz);
     if (pos) {
-      const p = leadingPlace(words(pos[1]!), gaz);
-      if (p) out.push({ kind: "position", places: p.places, said: p.said });
-      continue;
+      push("position", pos);
+      return;
     }
-    if (course) continue;
+    if (course || COURSE_CUE.test(body)) return;
+    // Стан, а не місце: «Чернігівщина - чисто» давало село Чисте й хибну ціль
+    // (sectorv666, 23.10).
+    if (STATUS_WORDS.test(normName(body))) return;
     // Допис лише з назв: «Гоща», «Самостріли/Бокшин», «Мʼятин/Глинки».
-    const parts = line.split("/").map((x) => {
+    const parts = body.split("/").map((x) => {
       const w = words(x);
       const keep = w.norm.map((n) => !FILLER.has(n));
       return { orig: w.orig.filter((_, i) => keep[i]), norm: w.norm.filter((_, i) => keep[i]) };
@@ -154,12 +212,31 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
         const p = leadingPlace(w, gaz);
         return p && p.used === w.norm.length ? p : null;
       });
-      if (found.every((f) => f !== null)) {
-        for (const f of found) out.push({ kind: "position", places: f!.places, said: f!.said });
-      }
+      if (found.every((f) => f !== null)) for (const f of found) push("position", f!);
     }
-  }
+  });
   return out;
+}
+
+/**
+ * Перший пункт після сигнального слова — шукаючи далі, якщо перше збігання
+ * пункту не дало: у «Реактивний на Чернігівщині пройшов Городню, далі курсом
+ * на Ріпки» найлівіше «на» — перед областю, а курс — у кінці.
+ */
+function firstPlaceAfter(
+  text: string,
+  cue: RegExp,
+  gaz: Gazetteer,
+): { places: GeoPlace[]; said: string } | null {
+  let rest = text;
+  for (let i = 0; i < 6; i++) {
+    const m = rest.match(cue);
+    if (!m) return null;
+    const p = leadingPlace(words(m[1]!), gaz);
+    if (p) return p;
+    rest = m[1]!;
+  }
+  return null;
 }
 
 function nearestTo(places: GeoPlace[], anchors: { lat: number; lon: number }[]): GeoPlace | null {
@@ -192,34 +269,62 @@ export function channelFixes(
   const fresh = messages
     .filter((m) => m.channel && m.at <= now && now - m.at <= FIX_WINDOW_MS)
     .sort((a, b) => a.at - b.at);
-  const lastByChannel = new Map<string, ChannelFix>();
+  // Свіжі точки каналу — опори для вибору однойменних. Не одна остання:
+  // агрегатор веде кілька цілей одночасно, у різних областях.
+  const recent = new Map<string, ChannelFix[]>();
   const out: ChannelFix[] = [];
   for (const m of fresh) {
-    const prevFix = lastByChannel.get(m.channel!);
-    if (prevFix && isEndOfTarget(m.text)) {
-      out.push({ ...prevFix, at: m.at, kind: "end", said: m.text.trim() });
-      // Наступна ціль каналу може бути будь-де — стара точка вже не опора.
-      lastByChannel.delete(m.channel!);
+    const mine = (recent.get(m.channel!) ?? []).filter((f) => m.at - f.at <= MAX_LINK_GAP_MS);
+    recent.set(m.channel!, mine);
+    const last = mine[mine.length - 1];
+    if (last && isEndOfTarget(m.text)) {
+      out.push({ ...last, at: m.at, kind: "end", said: m.text.trim() });
+      // Наступна ціль каналу може бути будь-де — точки закритої вже не опора.
+      // Чистимо всі, а не останню: інакше опорою лишається її попередня
+      // точка, і «далі Петропавлівка» знову бере запорізьку (тест нижче).
+      mine.length = 0;
       continue;
     }
     const ms = mentionsOf(m.text, gaz);
     if (!ms.length) continue;
-    const type = classifyThreatType(m.text);
-    // «Самостріли/Бокшин» — дві назви одного місця: точка — між ними.
-    const positions: { place: GeoPlace; said: string }[] = [];
-    for (const x of ms) {
-      const prev = lastByChannel.get(m.channel!);
-      const anchors = [
-        ...(prev && m.at - prev.at <= MAX_LINK_GAP_MS ? [prev.place] : []),
-        ...positions.map((p) => p.place),
-        ...threats,
-      ];
-      const place = nearestTo(x.places, anchors);
-      if (!place) continue;
-      if (x.kind === "position") positions.push({ place, said: x.said });
-      else out.push({ channel: m.channel!, at: m.at, kind: "course", place, said: x.said, type });
-    }
-    if (positions.length) {
+    const msgType = classifyThreatType(m.text);
+    const lines = [...new Set(ms.map((x) => x.line))];
+    for (const lineNo of lines) {
+      const lm = ms.filter((x) => x.line === lineNo);
+      // Тип — з рядка; з усього допису — лише коли рядок один: у списку
+      // «реактивний на Млинів / звичайний біля Ружина» тип допису змішаний.
+      const named = lm[0]!.lineType;
+      const type = named !== "unknown" ? named : lines.length === 1 ? msgType : "unknown";
+      // «Самостріли/Бокшин» — дві назви одного місця: точка — між ними.
+      const positions: { place: GeoPlace; said: string }[] = [];
+      for (const x of lm) {
+        // Однозначний пункт із того ж рядка теж опора: «пройшов Городню, далі
+        // курсом на Ріпки» — Городень на Чернігівщині дві, за 130 км, а Ріпки
+        // там одні, і Городня поруч із ними — саме та.
+        const sameLine = lm
+          .filter((o) => o !== x && o.places.length === 1)
+          .map((o) => o.places[0]!);
+        const anchors = [
+          ...mine.map((f) => f.place),
+          ...positions.map((p) => p.place),
+          ...sameLine,
+          ...threats,
+        ];
+        const place = nearestTo(x.places, anchors);
+        if (!place) continue;
+        if (x.kind === "position") positions.push({ place, said: x.said });
+        else
+          out.push({
+            channel: m.channel!,
+            at: m.at,
+            kind: "course",
+            place,
+            said: x.said,
+            type,
+            line: lineNo,
+          });
+      }
+      if (!positions.length) continue;
       const near = positions.filter((p) => distanceKm(p.place, positions[0]!.place) <= 25);
       const lat = near.reduce((s, p) => s + p.place.lat, 0) / near.length;
       const lon = near.reduce((s, p) => s + p.place.lon, 0) / near.length;
@@ -235,9 +340,10 @@ export function channelFixes(
         },
         said: near.map((p) => p.said).join("/"),
         type,
+        line: lineNo,
       };
       out.push(fix);
-      lastByChannel.set(m.channel!, fix);
+      mine.push(fix);
     }
   }
   return out;
@@ -263,43 +369,69 @@ export interface ChannelTrack {
   ended: boolean;
 }
 
-/** Точки одного каналу, зшиті в треки за правдоподібністю польоту між ними. */
+/**
+ * Точки одного каналу, зшиті в треки за правдоподібністю польоту між ними.
+ *
+ * Відкритих треків у каналу може бути кілька: агрегатор веде цілі в різних
+ * областях одним дописом («Рівненщина: реактивний на Млинів / Чернігівщина:
+ * реактивний на Славутич»). З одним треком на канал кожна така точка рвала
+ * трек сусідньої цілі. Точка йде до найближчого треку, до якого політ
+ * правдоподібний; немає такого — новий трек.
+ */
 export function buildTracks(fixes: readonly ChannelFix[]): ChannelTrack[] {
   const tracks: ChannelTrack[] = [];
-  const open = new Map<string, ChannelTrack>();
-  for (const f of [...fixes].sort((a, b) => a.at - b.at)) {
-    const t = open.get(f.channel);
+  const open = new Map<string, ChannelTrack[]>();
+  const lastAt = (t: ChannelTrack) => t.fixes[t.fixes.length - 1]!.at;
+  // Позиції раніше за курси того самого допису: курс іде до своєї цілі.
+  const order = (f: ChannelFix) => (f.kind === "position" ? 0 : f.kind === "course" ? 1 : 2);
+  const sorted = [...fixes].sort((a, b) => a.at - b.at || order(a) - order(b));
+  const byLine = new Map<string, ChannelTrack>();
+  for (const f of sorted) {
+    const mine = (open.get(f.channel) ?? []).filter((t) => f.at - lastAt(t) <= MAX_LINK_GAP_MS);
+    open.set(f.channel, mine);
     if (f.kind === "end") {
-      if (t) t.ended = true;
-      open.delete(f.channel);
+      // «Зникла» — про ту ціль, про яку канал писав останньою.
+      const t = mine.reduce<ChannelTrack | null>(
+        (x, y) => (!x || lastAt(y) > lastAt(x) ? y : x),
+        null,
+      );
+      if (t) {
+        t.ended = true;
+        mine.splice(mine.indexOf(t), 1);
+      }
       continue;
     }
     if (f.kind === "course") {
+      const own = byLine.get(`${f.channel}:${f.at}:${f.line ?? -1}`);
+      const t =
+        own ??
+        mine
+          .filter((x) => distanceKm(x.fixes[x.fixes.length - 1]!.place, f.place) <= 200)
+          .reduce<ChannelTrack | null>((x, y) => (!x || lastAt(y) > lastAt(x) ? y : x), null);
       if (t) t.course = f;
       continue;
     }
-    const last = t?.fixes[t.fixes.length - 1];
-    const ok =
-      t &&
-      last &&
-      f.at - last.at <= MAX_LINK_GAP_MS &&
-      distanceKm(last.place, f.place) / Math.max((f.at - last.at) / 3_600_000, 1 / 60) <=
-        MAX_LINK_KMH;
-    if (t && ok) {
-      t.fixes.push(f);
-      t.course = null;
-      if (t.type === "unknown") t.type = f.type;
-    } else {
-      const nt: ChannelTrack = {
-        channel: f.channel,
-        fixes: [f],
-        course: null,
-        type: f.type,
-        ended: false,
-      };
-      tracks.push(nt);
-      open.set(f.channel, nt);
+    let best: ChannelTrack | null = null;
+    let bestKm = Number.POSITIVE_INFINITY;
+    for (const t of mine) {
+      const last = t.fixes[t.fixes.length - 1]!;
+      const km = distanceKm(last.place, f.place);
+      const hours = Math.max((f.at - last.at) / 3_600_000, 1 / 60);
+      if (km / hours <= MAX_LINK_KMH && km < bestKm) {
+        best = t;
+        bestKm = km;
+      }
     }
+    if (best) {
+      best.fixes.push(f);
+      best.course = null;
+      if (best.type === "unknown") best.type = f.type;
+    } else {
+      best = { channel: f.channel, fixes: [f], course: null, type: f.type, ended: false };
+      tracks.push(best);
+      mine.push(best);
+    }
+    byLine.set(`${f.channel}:${f.at}:${f.line ?? -1}`, best);
   }
   return tracks;
 }
@@ -321,6 +453,7 @@ export function applyChannelTracks(
   tracks: readonly ChannelTrack[],
 ): Threat[] {
   const out = threats.map((t) => ({ ...t }));
+  const singles: ChannelTrack[] = [];
   const DRONES = new Set<ThreatType>(["shahed", "reactive", "banderol", "unknown", "recon"]);
   for (const tr of tracks) {
     if (tr.ended) continue;
@@ -383,7 +516,10 @@ export function applyChannelTracks(
       best.sources = [...new Set([...(best.sources ?? []), best.source, tr.channel])];
       continue;
     }
-    if (tr.fixes.length < 2) continue;
+    if (tr.fixes.length < 2) {
+      singles.push(tr);
+      continue;
+    }
     out.push({
       id: `ch:${tr.channel}:${tr.fixes[0]!.at}`,
       name: last.place.name,
@@ -406,6 +542,69 @@ export function applyChannelTracks(
         speedKmh: null,
       },
       trail,
+    });
+  }
+  out.push(...corroborated(singles, out));
+  return out;
+}
+
+/** Одна точка від різних каналів — одна ціль, якщо вони так близько в часі й просторі. */
+const CORROBORATE_KM = 20;
+const CORROBORATE_MS = 10 * 60_000;
+
+/**
+ * Одна точка каналу цілі не створює — але одна й та сама точка від ДВОХ
+ * різних каналів уже створює. Саме так рахує підтвердження й Нептун
+ * («Підтверджень: 3»).
+ *
+ * Заміряно 23.10: «🏍 Реактивний БпЛА на Полтавщині, повз Полтаву курс
+ * західний» (kpszsu) і «Реактивний на Полтавщині тепер …» (UkraineRadar_24_7)
+ * — реактивний, якого на карті не було ні в Нептуна, ні в нас: кожен канал
+ * дав по одній точці, а одиночну точку ми свідомо відкидаємо.
+ *
+ * Копії одного агрегатора в різних каналах тут теж рахуються як окремі —
+ * відрізнити їх за текстом надійно не вдається. Тому поріг — два канали, а не
+ * один, і лише для місць, де жодної цілі поруч немає.
+ */
+function corroborated(singles: readonly ChannelTrack[], existing: readonly Threat[]): Threat[] {
+  const out: Threat[] = [];
+  const used = new Set<ChannelTrack>();
+  const sorted = [...singles].sort((a, b) => b.fixes[0]!.at - a.fixes[0]!.at);
+  for (const s of sorted) {
+    if (used.has(s)) continue;
+    const f = s.fixes[0]!;
+    const group = sorted.filter(
+      (o) =>
+        !used.has(o) &&
+        Math.abs(o.fixes[0]!.at - f.at) <= CORROBORATE_MS &&
+        distanceKm(o.fixes[0]!.place, f.place) <= CORROBORATE_KM,
+    );
+    const channels = [...new Set(group.map((g) => g.channel))];
+    if (channels.length < 2) continue;
+    if ([...existing, ...out].some((t) => distanceKm(t, f.place) <= MATCH_TARGET_KM)) continue;
+    for (const g of group) used.add(g);
+    const latest = group.reduce((a, b) => (b.fixes[0]!.at > a.fixes[0]!.at ? b : a)).fixes[0]!;
+    const first = Math.min(...group.map((g) => g.fixes[0]!.at));
+    const iso = new Date(latest.at).toISOString();
+    out.push({
+      id: `cc:${latest.place.lat.toFixed(2)}:${latest.place.lon.toFixed(2)}:${first}`,
+      name: latest.place.name,
+      lat: latest.place.lat,
+      lon: latest.place.lon,
+      source: channels[0]!,
+      sources: channels,
+      count: 1,
+      since: iso,
+      expires: "",
+      lastSeen: iso,
+      type: group.map((g) => g.type).reduce(moreSevereType),
+      quality: {
+        uncertaintyKm: 10,
+        position: "approx",
+        lifecycle: "uncertain",
+        presumptiveCourse: true,
+        speedKmh: null,
+      },
     });
   }
   return out;

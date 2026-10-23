@@ -90,6 +90,7 @@ function stemsOfName(key: string): string[] {
 export class Gazetteer {
   private exact = new Map<string, GeoPlace[]>();
   private stems = new Map<string, GeoPlace[]>();
+  private all: GeoPlace[] = [];
   readonly size: number;
 
   constructor(tsv: string) {
@@ -101,6 +102,7 @@ export class Gazetteer {
       const lo = Number(lon);
       if (!name || !keys || !Number.isFinite(la) || !Number.isFinite(lo)) continue;
       const place: GeoPlace = { name, lat: la, lon: lo, admin: admin ?? "" };
+      this.all.push(place);
       n++;
       for (const k of keys.split("|")) {
         push(this.exact, k, place);
@@ -125,7 +127,41 @@ export class Gazetteer {
     const words = phrase.split(" ");
     const last = words[words.length - 1]!;
     const stem = [...words.slice(0, -1), stemOf(last)].join(" ");
-    return this.stems.get(stem) ?? this.exact.get(stem) ?? [];
+    /*
+     * Обидва списки, а не перший непорожній: «біля Ружина» має основу «ружин»,
+     * і під нею в основах лише «Ружино» (Миколаївщина), а самі два Ружини
+     * (Житомирщина, Волинь) — точною назвою «ружин». Перший варіант коду
+     * віддавав тільки «Ружино» — однозначно й неправильно (23.10, sectorv666).
+     */
+    const a = this.stems.get(stem) ?? [];
+    const b = this.exact.get(stem) ?? [];
+    const both = b.length === 0 ? a : a.length === 0 ? b : [...new Set([...a, ...b])];
+    if (both.length) return both;
+    /*
+     * Родовий множини з випадним голосним: «після Ріпок» (Ріпки), «в районі
+     * Росішек» (Росішки), «біля Глинок». Основа такої назви — «рипк», а у
+     * відмінку «рипок» — повернути «к» на місце (23.10, UkraineRadar_24_7).
+     */
+    const fleeting = last.match(/^(.{2,})[ое]к$/);
+    if (fleeting) {
+      const alt = [...words.slice(0, -1), `${fleeting[1]}к`].join(" ");
+      return this.stems.get(alt) ?? this.exact.get(alt) ?? [];
+    }
+    return [];
+  }
+
+  /** Код області пункту, найближчого до точки, — для «Житомирщина» → код. */
+  adminNear(lat: number, lon: number): string | null {
+    let best: GeoPlace | null = null;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (const p of this.all) {
+      const d = (p.lat - lat) ** 2 + ((p.lon - lon) * Math.cos((lat * Math.PI) / 180)) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best?.admin || null;
   }
 }
 
