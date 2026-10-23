@@ -252,6 +252,7 @@ const threatIconCache = new Map<string, L.DivIcon>();
 const ROTATABLE: Partial<Record<ThreatType, boolean>> = {
   shahed: true,
   reactive: true,
+  banderol: true,
   missile: true,
   cruise: true,
   ballistic: true,

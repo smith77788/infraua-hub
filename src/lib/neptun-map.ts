@@ -48,7 +48,10 @@ export function mapNeptunType(type: string | undefined, text: string): ThreatTyp
   if (/missile|rocket|raket/.test(t)) return "missile";
   if (/kab/.test(t)) return "kab";
   if (/recon|rozvid/.test(t)) return "recon";
-  if (/aircraft|jet|avia/.test(t)) return "aircraft";
+  // `jet` у Нептуна — підтип РЕАКТИВНОГО БпЛА (`{jet:"реактивний"}` у його
+  // клієнті), а не літак: інакше реактивний «шахед» ставав би «авіацією».
+  if (/^jet$|jet[_-]?(?:uav|drone)/.test(t)) return "reactive";
+  if (/aircraft|avia/.test(t)) return "aircraft";
   // FPV — окремо й раніше за загальний «дрон»: Нептун має для нього власний тип.
   if (/fpv/.test(t)) return "fpv";
   if (/uav|drone|bpla|shahed/.test(t)) return "shahed";

@@ -321,7 +321,7 @@ export function applyChannelTracks(
   tracks: readonly ChannelTrack[],
 ): Threat[] {
   const out = threats.map((t) => ({ ...t }));
-  const DRONES = new Set<ThreatType>(["shahed", "reactive", "unknown", "recon"]);
+  const DRONES = new Set<ThreatType>(["shahed", "reactive", "banderol", "unknown", "recon"]);
   for (const tr of tracks) {
     if (tr.ended) continue;
     const last = tr.fixes[tr.fixes.length - 1]!;

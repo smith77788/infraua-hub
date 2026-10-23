@@ -17,7 +17,13 @@ import { SPEED_RANGE_KMH } from "./threat-eta";
  */
 
 // Повільні типи з прямим курсом, які можна протягувати. Решта — ні.
-const PROJECTABLE: ReadonlySet<ThreatType> = new Set(["shahed", "reactive", "recon", "unknown"]);
+const PROJECTABLE: ReadonlySet<ThreatType> = new Set([
+  "shahed",
+  "reactive",
+  "banderol",
+  "recon",
+  "unknown",
+]);
 
 /**
  * Стеля протягування без нового реального оновлення. Далі позицію заморожуємо:

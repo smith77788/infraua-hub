@@ -101,6 +101,7 @@ function project(lat: number, lon: number): [number, number] {
 const COLOR: Record<ThreatType, string> = {
   shahed: "#ffd23f",
   reactive: "#ff8c1a",
+  banderol: "#f472b6",
   fpv: "#a3e635",
   cruise: "#ff6a2a",
   missile: "#ff4d4d",
@@ -354,6 +355,7 @@ function markerParts(
 const NOSED: ReadonlySet<ThreatType> = new Set([
   "shahed",
   "reactive",
+  "banderol",
   "cruise",
   "missile",
   "ballistic",

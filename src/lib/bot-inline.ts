@@ -70,6 +70,7 @@ export function parseInlineQuery(update: unknown): InlineQuery | null {
 const TYPE_LABEL: Record<ThreatType, string> = {
   shahed: "шахеди",
   reactive: "реактивні шахеди",
+  banderol: "«Бандеролі»",
   fpv: "FPV-дрони",
   cruise: "крилаті ракети",
   missile: "ракети",

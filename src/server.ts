@@ -67,6 +67,7 @@ import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { concernRadiusKm } from "./lib/advisory";
+import { SpeedLedger } from "./lib/speed-ledger";
 import { AlertOutcomes } from "./lib/alert-outcome";
 import { onStreamAlerts, streamAlertLevels } from "./lib/neptun-stream";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
@@ -455,6 +456,10 @@ async function health(request: Request): Promise<Response> {
     // Яка частка доставлених попереджень справдилась: ціль пролетіла в радіусі
     // тривоги людини. «Не підтвердились» — не «хибні»: див. `alert-outcome`.
     alertOutcomes: alertOutcomes.summary(),
+    // Заміряна джерелом швидкість за нашим типом (реактивність і «Бандероль» —
+    // з каналів) поруч із довідковою: так видно, чи довідка бреше. Див.
+    // `speed-ledger`.
+    measuredSpeed: speedLedger.summary(Date.now()),
     unknownSources: unknownChannelReport(),
     // Без проби запису: /api/health смикають часто, а проба — це файлова
     // операція на кожен виклик. Глибша діагностика вже є в /api/subscribers/stats.
@@ -3831,6 +3836,8 @@ function alertCandidates(subs: readonly Subscriber[], threats: readonly Threat[]
  * якого залежить, чи когось розбудять.
  */
 let alertOutcomes = new AlertOutcomes();
+// Заміряні швидкості за НАШИМ типом — див. `speed-ledger`.
+let speedLedger = new SpeedLedger();
 let qualityLoaded = false;
 let qualitySavedAt = 0;
 const QUALITY_MARKER = "quality-ledger";
@@ -3842,8 +3849,9 @@ async function hydrateQuality(): Promise<void> {
   const raw = await readMarker(QUALITY_MARKER);
   if (!raw) return;
   try {
-    const parsed = JSON.parse(raw) as { outcomes?: unknown; drift?: unknown };
+    const parsed = JSON.parse(raw) as { outcomes?: unknown; drift?: unknown; speeds?: unknown };
     alertOutcomes = AlertOutcomes.fromState(parsed.outcomes);
+    speedLedger = SpeedLedger.fromState(parsed.speeds, Date.now());
     const { restoreDriftAccuracy } = await import("./lib/neptun-stream");
     restoreDriftAccuracy(parsed.drift);
   } catch {
@@ -3857,7 +3865,11 @@ async function saveQuality(now: number): Promise<void> {
   const { driftAccuracyState } = await import("./lib/neptun-stream");
   await writeMarker(
     QUALITY_MARKER,
-    JSON.stringify({ outcomes: alertOutcomes.toState(), drift: driftAccuracyState() }),
+    JSON.stringify({
+      outcomes: alertOutcomes.toState(),
+      drift: driftAccuracyState(),
+      speeds: speedLedger.toState(),
+    }),
   );
 }
 
@@ -3881,6 +3893,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
   // `alert-outcome`. До будь-якого раннього виходу: вирок не має залежати від
   // того, чи будемо слати щось нове.
   alertOutcomes.resolve(threats, Date.now());
+  speedLedger.observe(threats, Date.now());
   const official = await fetchOfficialAlerts();
   const now = Date.now();
 

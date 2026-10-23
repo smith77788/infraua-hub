@@ -94,6 +94,8 @@ const BY_TYPE: Record<ThreatType, SafetyAdvice> = {
   kab: KAB,
   shahed: SHAHED,
   reactive: SHAHED,
+  // «Бандероль» — крилата ракета: та сама порада, що й для крилатих.
+  banderol: CRUISE,
   // Окремої перевіреної поради для FPV тут немає — загальна, а не вигадана.
   fpv: GENERIC,
   aircraft: GENERIC,
@@ -117,6 +119,7 @@ const SEVERITY: ThreatType[] = [
   "kab",
   "missile",
   "cruise",
+  "banderol",
   "reactive",
   "shahed",
   "fpv",

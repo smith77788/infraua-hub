@@ -44,6 +44,15 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
     label: "Реактивний БпЛА (Shahed-238)",
     code: "РШ",
   },
+  // S8000 «Бандероль»: тонкий корпус малої крилатої ракети, стрілоподібні
+  // крила й реактивний струмінь — швидкість реактивного дрона, клас ракети.
+  banderol: {
+    color: "#f472b6",
+    glyph:
+      '<path d="M12 1.5c1.4 0 1.8 1.6 1.8 3.6V17l2.2 3.2H8l2.2-3.2V5.1c0-2 .4-3.6 1.8-3.6z"/><path d="M5.5 11.5 L12 8.6 L18.5 11.5 L18.5 13.3 L12 11.6 L5.5 13.3 Z"/><path d="M11 20.5 L12 23.5 L13 20.5 Z"/>',
+    label: "Крилата ракета «Бандероль» (S8000)",
+    code: "Б",
+  },
   // FPV-дрон: квадрокоптер — Х-подібна рама і чотири гвинти. Не дельта: це
   // інша загроза (малий радіус, біля фронту), і плутати її з «Шахедом» не можна.
   fpv: {
@@ -112,6 +121,7 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
 export const LEGEND_ORDER: ThreatType[] = [
   "shahed",
   "reactive",
+  "banderol",
   "fpv",
   "recon",
   "cruise",

@@ -117,6 +117,7 @@ function TypeLabel(t: string | undefined | null): string {
       shahed: "Shahed/БпЛА",
       recon: "Розвід. БпЛА",
       reactive: "Реактивний БпЛА",
+      banderol: "«Бандероль» (крилата)",
       cruise: "Крилата ракета",
       missile: "Ракета",
       ballistic: "Балістика",

@@ -157,6 +157,7 @@ function loudCity(
 const TYPE_EMOJI: Record<ThreatType, string> = {
   shahed: "🛸",
   reactive: "🛸",
+  banderol: "🚀",
   fpv: "🚁",
   cruise: "🚀",
   missile: "🚀",
@@ -180,7 +181,9 @@ function seedFrom(s: string): number {
 }
 
 function isRocketish(types: ReadonlySet<ThreatType>): boolean {
-  return types.has("missile") || types.has("ballistic") || types.has("cruise");
+  return (
+    types.has("missile") || types.has("ballistic") || types.has("cruise") || types.has("banderol")
+  );
 }
 /**
  * Заголовок поста.

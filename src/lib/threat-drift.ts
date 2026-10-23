@@ -115,6 +115,7 @@ function driftClass(type: ThreatType | undefined): DriftClass {
     case "shahed":
       return "uav";
     case "reactive":
+    case "banderol": // крилата, але летить як реактивний дрон: ~500 км/год
       return "jet";
     case "recon":
       return "recon";

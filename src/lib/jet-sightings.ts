@@ -1,4 +1,4 @@
-import { classifyThreatType, type Threat } from "./air";
+import { classifyThreatType, type Threat, type ThreatType } from "./air";
 
 /**
  * Реактивний дрон чи поршневий — з текстів каналів, бо Нептун цього не каже.
@@ -104,9 +104,18 @@ function stemOf(place: string): string | null {
 
 /** Нормалізовані тексти свіжих повідомлень про РЕАКТИВНІ дрони. */
 export function jetMentions(messages: readonly ChannelMessage[], now: number): string[] {
+  return typeMentions(messages, now, "reactive");
+}
+
+/** Нормалізовані тексти свіжих повідомлень, що називають саме цей тип. */
+export function typeMentions(
+  messages: readonly ChannelMessage[],
+  now: number,
+  type: ThreatType,
+): string[] {
   return messages
     .filter((m) => m.at <= now && now - m.at <= JET_WINDOW_MS)
-    .filter((m) => classifyThreatType(m.text) === "reactive")
+    .filter((m) => classifyThreatType(m.text) === type)
     .map((m) => norm(m.text));
 }
 
@@ -124,11 +133,35 @@ function mentions(text: string, stem: string): boolean {
  * без згадки лишається поршневим.
  */
 export function applyJetType(threats: readonly Threat[], jetTexts: readonly string[]): Threat[] {
-  if (jetTexts.length === 0) return threats as Threat[];
+  return applyMentionedType(threats, jetTexts, "reactive", new Set(["shahed"]));
+}
+
+/**
+ * «Бандероль» за згадкою в каналах — так само, як реактивність: Нептун у v1 і
+ * REST такого підтипу не має, і ціль приходить як «БпЛА» чи «ракета». Тоді
+ * вона летіла б зі швидкістю поршневого шахеда (185) або «Калібру» (720)
+ * замість ~500, і без ракетного класу — тобто не будила б уночі.
+ */
+export function applyBanderolType(threats: readonly Threat[], texts: readonly string[]): Threat[] {
+  return applyMentionedType(
+    threats,
+    texts,
+    "banderol",
+    new Set<ThreatType>(["shahed", "reactive", "unknown", "cruise", "missile"]),
+  );
+}
+
+function applyMentionedType(
+  threats: readonly Threat[],
+  texts: readonly string[],
+  to: ThreatType,
+  from: ReadonlySet<ThreatType>,
+): Threat[] {
+  if (texts.length === 0) return threats as Threat[];
   return threats.map((t) => {
-    if (t.type !== "shahed") return t;
+    if (!from.has(t.type ?? "unknown")) return t;
     const stem = stemOf(t.name);
     if (!stem) return t;
-    return jetTexts.some((x) => mentions(x, stem)) ? { ...t, type: "reactive" } : t;
+    return texts.some((x) => mentions(x, stem)) ? { ...t, type: to } : t;
   });
 }

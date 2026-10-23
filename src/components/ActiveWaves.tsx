@@ -11,6 +11,7 @@ import CollapsiblePanel from "./CollapsiblePanel";
 const COLOR: Record<ThreatType, string> = {
   shahed: "#ffd23f",
   reactive: "#ff8c1a",
+  banderol: "#f472b6",
   fpv: "#a3e635",
   cruise: "#ff6a2a",
   missile: "#ff4d4d",

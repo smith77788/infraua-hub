@@ -35,6 +35,7 @@ import { fixAgeLabel, fixAgeMs } from "./position-age";
 const TYPE_NAME: Record<ThreatType, string> = {
   shahed: "шахед",
   reactive: "реактивний шахед",
+  banderol: "крилата ракета «Бандероль»",
   fpv: "FPV-дрон",
   cruise: "крилата ракета",
   missile: "ракета",
@@ -48,6 +49,7 @@ const TYPE_NAME: Record<ThreatType, string> = {
 const TYPE_EMOJI: Record<ThreatType, string> = {
   shahed: "🛸",
   reactive: "🛸",
+  banderol: "🚀",
   fpv: "🚁",
   cruise: "🚀",
   missile: "🚀",

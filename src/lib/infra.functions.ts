@@ -33,7 +33,14 @@ import {
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
-import { applyJetType, jetMentions, parseChannelPage, type ChannelMessage } from "./jet-sightings";
+import {
+  applyBanderolType,
+  applyJetType,
+  jetMentions,
+  parseChannelPage,
+  typeMentions,
+  type ChannelMessage,
+} from "./jet-sightings";
 import { applyChannelTracks, buildTracks, channelFixes, type ChannelTrack } from "./channel-track";
 import { type Gazetteer, loadGazetteer } from "./gazetteer";
 import {
@@ -820,13 +827,11 @@ function refreshJetSightings(now: number): void {
 /** Реактивні дрони — за свіжими згадками каналів; решту цілей не чіпає. */
 function withJetTypes(threats: Threat[], now: number): Threat[] {
   refreshJetSightings(now);
-  // Реактивність — лише з українських каналів спостереження.
-  return applyJetType(
-    threats,
-    jetMentions(
-      jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? "")),
-      now,
-    ),
+  // Підтип — лише з українських каналів спостереження.
+  const ua = jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? ""));
+  return applyBanderolType(
+    applyJetType(threats, jetMentions(ua, now)),
+    typeMentions(ua, now, "banderol"),
   );
 }
 

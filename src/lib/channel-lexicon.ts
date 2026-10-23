@@ -158,6 +158,7 @@ export function pluralUk(n: number, one: string, few: string, many: string): str
 const UK_TYPE: Record<ThreatType, [string, string, string]> = {
   shahed: ["шахед", "шахеди", "шахедів"],
   reactive: ["реактивний шахед", "реактивні шахеди", "реактивних шахедів"],
+  banderol: ["«Бандероль»", "«Бандеролі»", "«Бандеролей»"],
   fpv: ["FPV-дрон", "FPV-дрони", "FPV-дронів"],
   cruise: ["крилата", "крилаті", "крилатих"],
   missile: ["ракета", "ракети", "ракет"],
@@ -211,6 +212,7 @@ const UK_TAIL_LIGHT = [
 const UK_TAG: Partial<Record<ThreatType, string>> = {
   shahed: "шахеди",
   reactive: "шахеди",
+  banderol: "ракети",
   cruise: "ракети",
   missile: "ракети",
   ballistic: "балістика",
@@ -287,6 +289,7 @@ export const UK: Lexicon = {
 const EN_TYPE: Record<ThreatType, [string, string]> = {
   shahed: ["Shahed drone", "Shahed drones"],
   reactive: ["jet-powered Shahed", "jet-powered Shaheds"],
+  banderol: ["Banderol cruise missile", "Banderol cruise missiles"],
   fpv: ["FPV drone", "FPV drones"],
   cruise: ["cruise missile", "cruise missiles"],
   missile: ["missile", "missiles"],
@@ -329,6 +332,7 @@ const EN_TAIL_LIGHT = ["tracking", "updates follow"];
 const EN_TAG: Partial<Record<ThreatType, string>> = {
   shahed: "Shahed",
   reactive: "Shahed",
+  banderol: "missiles",
   cruise: "missiles",
   missile: "missiles",
   ballistic: "ballistic",

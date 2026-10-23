@@ -129,6 +129,7 @@ type WindowId = (typeof TIME_WINDOWS)[number]["id"];
 const AIR_TYPE_LABEL: Record<string, string> = {
   shahed: "Ударний БпЛА",
   reactive: "Реактивний БпЛА",
+  banderol: "«Бандероль» (крилата)",
   cruise: "Крилата ракета",
   missile: "Ракета",
   ballistic: "Балістика",

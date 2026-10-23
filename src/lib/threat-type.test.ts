@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { classifyThreatType, moreSevereType } from "./air";
+import { mapNeptunType } from "./neptun-map";
 
 describe("classifyThreatType", () => {
   it("розрізняє типи з тексту OSINT-повідомлень", () => {
@@ -23,7 +24,7 @@ describe("classifyThreatType", () => {
   });
 });
 
-describe("реактивні: розмовні назви, «Бандероль», «Герань-3» (дослівні дописи 22.10.2026)", () => {
+describe("реактивні й «Бандероль»: розмовні назви, «Герань-3» (дослівні дописи 22.10.2026)", () => {
   const JET = [
     "Вінниця - 1 реактив наближається до міста, увага!", // totallzrada
     "2 реактиви над Полтавою!", // totallzrada
@@ -33,16 +34,24 @@ describe("реактивні: розмовні назви, «Бандероль�
     "РеактБпЛА курсом на Вінницю з півдня.", // monitor_ukr
     "Имеем 2х Реакт БпЛа на Дерезуватое курс Пещянка/Самар", // dnepr_nagladach
     "2х Реактивтині БпЛА курсом на Берестин", // kharkivlife, з одруківкою
-    "Бандероль курсом на Дніпро", // RadarDnepr
-    "‼️ Бандеролі повз Запоріжжя в напрямку Дніпра.", // radar_raketaa
-    "‼ Відмічено пуски крилатих ракет типу «Бандероль» з акваторії Азовського моря.",
-    "❗️ Зафіксовано пуск ракет «Бандероль»", // temporis_odesa
-    "Могут быть Бандероли ~15:50-16:20", // odessa_inform
     "Пуск Герань-3 з Курська",
     "Shahed-238 курсом на Київ",
   ];
   for (const text of JET) {
     it(text, () => expect(classifyThreatType(text)).toBe("reactive"));
+  }
+
+  const BANDEROL = [
+    "Бандероль курсом на Дніпро", // RadarDnepr
+    "‼️ Бандеролі повз Запоріжжя в напрямку Дніпра.", // radar_raketaa
+    "‼ Відмічено пуски крилатих ракет типу «Бандероль» з акваторії Азовського моря.",
+    "❗️ Зафіксовано пуск ракет «Бандероль»", // temporis_odesa
+    "Могут быть Бандероли ~15:50-16:20", // odessa_inform
+    "❗️ Пуски бандеролей", // inform_odesa — «пуск» не робить її авіацією
+  ];
+  for (const text of BANDEROL) {
+    it(`«Бандероль» — окремий тип: ${text}`, () =>
+      expect(classifyThreatType(text)).toBe("banderol"));
   }
 
   it("підпис каналу «✙ Розвідка неба ✙» не робить реактивний розвідником", () => {
@@ -69,5 +78,16 @@ describe("реактивні: розмовні назви, «Бандероль�
     expect(classifyThreatType("Реакція ППО миттєва")).not.toBe("reactive");
     expect(classifyThreatType("Обстріл з реактивної артилерії по Херсону")).not.toBe("reactive");
     expect(classifyThreatType("Удар реактивними системами залпового вогню")).not.toBe("reactive");
+  });
+});
+
+describe("mapNeptunType — підтипи Нептуна", () => {
+  it("`jet` — реактивний БпЛА, а не авіація", () => {
+    expect(mapNeptunType("jet", "")).toBe("reactive");
+    expect(mapNeptunType("aircraft", "")).toBe("aircraft");
+  });
+
+  it("текст Нептуна з «Бандероль» — «Бандероль», хоч тип і «uav»", () => {
+    expect(mapNeptunType("uav", "Бандероль курсом на Запоріжжя.")).toBe("banderol");
   });
 });

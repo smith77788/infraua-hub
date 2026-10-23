@@ -1,7 +1,14 @@
 import { describe, expect, it } from "bun:test";
 
 import { classifyThreatType, type Threat } from "./air";
-import { applyJetType, JET_WINDOW_MS, jetMentions, parseChannelPage } from "./jet-sightings";
+import {
+  applyJetType,
+  JET_WINDOW_MS,
+  jetMentions,
+  parseChannelPage,
+  applyBanderolType,
+  typeMentions,
+} from "./jet-sightings";
 
 const NOW = Date.parse("2026-10-20T13:30:00Z");
 
@@ -183,5 +190,39 @@ describe("«реактивний» без слова БпЛА — справжн
     const out = applyJetType(threats, jetMentions(msgs, now));
     expect(out[0]!.type).toBe("reactive");
     expect(out[1]!.type).toBe("shahed"); // чужий пункт не чіпаємо
+  });
+});
+
+describe("applyBanderolType — «Бандероль» з каналів уточнює ціль джерела", () => {
+  const NOW = Date.parse("2026-10-22T20:00:00Z");
+  const base = {
+    id: "n",
+    lat: 47.84,
+    lon: 35.14,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+  };
+  // Дослівно radar_raketaa, 22.10.
+  const msgs = [{ at: NOW - 3 * 60_000, text: "‼️ Бандеролі в напрямку Запоріжжя." }];
+
+  it("«БпЛА» чи «ракета» Нептуна над названим пунктом стає «Бандероллю»", () => {
+    const texts = typeMentions(msgs, NOW, "banderol");
+    const out = applyBanderolType(
+      [
+        { ...base, name: "Запоріжжя", type: "shahed" as const },
+        { ...base, id: "m", name: "Запоріжжя", type: "cruise" as const },
+        { ...base, id: "k", name: "Запоріжжя", type: "kab" as const },
+        { ...base, id: "d", name: "Дніпро", type: "shahed" as const },
+      ],
+      texts,
+    );
+    expect(out.map((t) => t.type)).toEqual(["banderol", "banderol", "kab", "shahed"]);
+  });
+
+  it("стара згадка (понад вікно) нічого не змінює", () => {
+    const old = [{ at: NOW - 40 * 60_000, text: msgs[0]!.text }];
+    expect(typeMentions(old, NOW, "banderol")).toEqual([]);
   });
 });

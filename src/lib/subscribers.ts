@@ -176,6 +176,7 @@ export const CRITICAL_TYPES: ReadonlySet<ThreatType> = new Set<ThreatType>([
   "ballistic",
   "missile",
   "cruise",
+  "banderol",
   "kab",
 ]);
 

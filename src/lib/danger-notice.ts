@@ -52,6 +52,7 @@ const MISSILE_TYPES: ReadonlySet<ThreatType> = new Set<ThreatType>([
   "ballistic",
   "missile",
   "cruise",
+  "banderol",
   "kab",
 ]);
 
