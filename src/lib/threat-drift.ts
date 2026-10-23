@@ -1,6 +1,7 @@
 import type { Threat, ThreatType } from "./air";
 import { advance } from "./dead-reckoning";
 import { livePosition } from "./live-position";
+import { SPEED_KMH } from "./threat-eta";
 import { courseIsObserved, EMPTY_QUALITY } from "./threat-quality";
 
 /**
@@ -62,7 +63,7 @@ export interface Drift {
 }
 
 /** Класи руху Нептуна. Наші типи зводимо до них — див. `driftClass`. */
-type DriftClass = "uav" | "fpv" | "recon" | "missile" | "fixed" | "unknown";
+type DriftClass = "uav" | "jet" | "fpv" | "recon" | "missile" | "fixed" | "unknown";
 
 interface DriftLimits {
   /** Скільки хвилин від фіксації ще тягнемо. */
@@ -83,6 +84,25 @@ interface DriftLimits {
  */
 const LIMITS: Record<DriftClass, DriftLimits> = {
   uav: { maxMin: 12, maxKm: 30, statedKmh: 150, presumedKmh: 50 },
+  /*
+   * Реактивні — ЄДИНИЙ клас, де ми свідомо розходимося з Нептуном. Його клієнт
+   * зводить підтип `jet` до `uav` (`{jet:"uav",gerbera:"uav",…}`, клієнт
+   * neptun.in.ua, 22.10.2026), тож реактивна «Герань-3» чи «Бандероль» на обох
+   * картах повзла зі швидкістю поршневого шахеда: 150 км/год за названим
+   * курсом, 50 — за припущеним. Справжня — ~550 (SPEED_KMH.reactive).
+   *
+   * Частки — ті самі, що в Нептуна для БпЛА: названий курс ≈ 0,81 справжньої
+   * швидкості (150 / 185), припущений ≈ 0,27 (50 / 185) — тож таблиця похибок
+   * угорі лишається в силі. Стеля за часом коротша (8 хв проти 12): реактивний
+   * за той самий час відлітає втричі далі, і стара позиція старіє втричі
+   * швидше.
+   */
+  jet: {
+    maxMin: 8,
+    maxKm: 60,
+    statedKmh: Math.round(SPEED_KMH.reactive * (150 / 185)),
+    presumedKmh: Math.round(SPEED_KMH.reactive * (50 / 185)),
+  },
   recon: { maxMin: 12, maxKm: 24, statedKmh: 120, presumedKmh: 40 },
   fpv: { maxMin: 10, maxKm: 10, statedKmh: 60, presumedKmh: 30 },
   missile: { maxMin: 5, maxKm: 30, statedKmh: 400, presumedKmh: 400 },
@@ -93,8 +113,9 @@ const LIMITS: Record<DriftClass, DriftLimits> = {
 function driftClass(type: ThreatType | undefined): DriftClass {
   switch (type) {
     case "shahed":
-    case "reactive":
       return "uav";
+    case "reactive":
+      return "jet";
     case "recon":
       return "recon";
     case "fpv":

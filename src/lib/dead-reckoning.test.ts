@@ -13,7 +13,7 @@ describe("projectionSpeedKmh", () => {
   it("повільні дрони протягуємо за нижньою межею швидкості", () => {
     expect(projectionSpeedKmh("shahed")).toBe(185);
     expect(projectionSpeedKmh("recon")).toBe(100);
-    expect(projectionSpeedKmh("reactive")).toBe(500);
+    expect(projectionSpeedKmh("reactive")).toBe(300); // «Герань-3» з Telefly JT80 — 300–370
     expect(projectionSpeedKmh("unknown")).toBe(120);
   });
 

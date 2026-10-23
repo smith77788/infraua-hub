@@ -154,3 +154,26 @@ describe("driftPosition — рух як у Нептуна", () => {
     expect(Number.isFinite(broken.lat) && Number.isFinite(broken.lon)).toBe(true);
   });
 });
+
+describe("реактивні — власна швидкість руху, а не шахедова", () => {
+  // Та сама ціль з названим (спостереженим) курсом, лише тип різний.
+  const { velocity: _v, ...noVelocity } = MEASURED;
+  const base = mapNeptunThreat(noVelocity)!;
+  const ten = at(MEASURED.confirmedAt!, 5);
+
+  it("за 5 хв реактивний проходить утричі далі за шахеда", () => {
+    const shahed = driftPosition({ ...base, type: "shahed" }, ten);
+    const jet = driftPosition({ ...base, type: "reactive" }, ten);
+    expect(shahed.km).toBeGreaterThan(0);
+    expect(jet.km / shahed.km).toBeGreaterThan(2.5);
+    // ~450 км/год за 5 хв ≈ 37 км; шахед — 150 км/год ≈ 12,5 км.
+    expect(jet.km).toBeGreaterThan(30);
+    expect(jet.km).toBeLessThan(45);
+  });
+
+  it("стеля є: реактивний не летить по карті вічно", () => {
+    const late = driftPosition({ ...base, type: "reactive" }, at(MEASURED.confirmedAt!, 30));
+    expect(late.moving).toBe(false);
+    expect(late.km).toBeLessThanOrEqual(60);
+  });
+});
