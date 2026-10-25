@@ -376,3 +376,47 @@ describe("назва краю в рубриці списку — не пункт
     expect(mentionsOf("Рівненщина: Гоща", gaz).map((x) => x.kind)).toEqual(["position"]);
   });
 });
+
+describe("неназваний апарат поруч із ціллю джерела будь-якого типу — не нова ціль", () => {
+  /*
+   * Заміряно 25.10: 50 хв, 25 зрізів конвеєра консолі проти живого Нептуна.
+   * «Шахтарське — 0 км від цілі Нептуна», «Зарічне — 5 км»: одна подія, дві
+   * позначки. Зливаємо лише з дронами, тож поруч із FPV чи КАБом допис каналу
+   * без названого апарата ставав окремою ціллю.
+   */
+  const fixes = channelFixes(msgs, gaz, [], NOW);
+  const tracks = buildTracks(fixes);
+  const fpvAtHoshcha: Threat = {
+    id: "n-fpv",
+    name: "Гоща",
+    lat: 50.6,
+    lon: 26.68,
+    source: "neptun.in.ua",
+    count: 1,
+    since: new Date(NOW - 15 * 60_000).toISOString(),
+    expires: "",
+    type: "fpv",
+  };
+
+  it("до виправлення тут було дві цілі — тепер одна, і це ціль джерела", () => {
+    expect(tracks[0]!.type).toBe("unknown");
+    const out = applyChannelTracks([fpvAtHoshcha], tracks);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).toBe("n-fpv");
+  });
+
+  it("позицію FPV точкою села з допису не перезаписуємо", () => {
+    const out = applyChannelTracks([fpvAtHoshcha], tracks);
+    expect(out[0]!.lat).toBe(50.6);
+    expect(out[0]!.type).toBe("fpv");
+  });
+
+  it("НАЗВАНИЙ шахед поруч із FPV лишається окремою ціллю — це можуть бути двоє", () => {
+    const named = tracks.map((t) => ({ ...t, type: "shahed" as const }));
+    expect(applyChannelTracks([fpvAtHoshcha], named)).toHaveLength(2);
+  });
+
+  it("без цілей поруч канал, як і раніше, веде ціль сам", () => {
+    expect(applyChannelTracks([], tracks)).toHaveLength(1);
+  });
+});
