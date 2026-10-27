@@ -1534,7 +1534,13 @@ function Console() {
           </aside>
 
           {/* Map */}
-          <div className="order-1 flex min-h-[52svh] min-w-0 flex-1 flex-col lg:order-2">
+          {/*
+            На телефоні карта — головне, і їй висота майже всього екрана: при
+            52svh, з плеєром часу й смугами хвиль поверх, на саму карту
+            лишалась третина екрана (знімок користувача, 23.10). Решта панелей
+            — нижче, прокруткою.
+          */}
+          <div className="order-1 flex min-h-[82svh] min-w-0 flex-1 flex-col lg:order-2 lg:min-h-0">
             <main className="map-stage relative min-h-0 flex-1">
               <ClientOnly fallback={<MapSkeleton />}>
                 <Suspense fallback={<MapSkeleton />}>

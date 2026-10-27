@@ -259,7 +259,16 @@ const ROTATABLE: Partial<Record<ThreatType, boolean>> = {
   kab: true,
   recon: true,
   aircraft: true,
+  // Невідома теж: її значок — стрілка. Без повороту вона дивилась угору при
+  // траєкторії й векторі на схід (знімок користувача, Оріхів, 23.10).
+  unknown: true,
 };
+
+/**
+ * Значок невідомої цілі БЕЗ курсу — ромб, а не стрілка: стрілка вгору без
+ * курсу каже «летить на північ», чого ми не знаємо.
+ */
+const UNKNOWN_NO_COURSE = '<path d="M12 4 L19 12 L12 20 L5 12 Z"/>';
 /**
  * Значок цілі: тип, свіжість, курс. Кількості повідомлень тут немає навмисно.
  *
@@ -278,7 +287,8 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   const key = `${type}|${fresh}|${rot ?? "x"}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
-  const { color, glyph, code } = TYPE_STYLE[type];
+  const { color, code } = TYPE_STYLE[type];
+  const glyph = type === "unknown" && rot == null ? UNKNOWN_NO_COURSE : TYPE_STYLE[type].glyph;
   const { opacity, size } = FRESH_TONE[fresh];
   const g = Math.round(size * 0.74);
   const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
@@ -892,6 +902,29 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   color: style.color,
                   weight: 2,
                   opacity: fresh === "stale" ? 0.4 : 0.85,
+                }}
+              />
+            ) : null}
+            {/*
+              Від треку до позначки. Трек закінчується там, де ціль бачили
+              востаннє, а позначка протягнута далі за курсом — і без цього
+              відрізка лінія обривалась окремо від цілі, ніби це дві різні
+              речі (знімок користувача, Рівне, 23.10). Пунктир: це шлях за
+              оцінкою, а не за спостереженням.
+            */}
+            {projected ? (
+              <Polyline
+                positions={[
+                  ...(observed.length ? [observed[observed.length - 1]!] : []),
+                  [t.fixLat, t.fixLon],
+                  [t.lat, t.lon],
+                ]}
+                pathOptions={{
+                  color: style.color,
+                  weight: 1.5,
+                  opacity: fresh === "stale" ? 0.3 : 0.6,
+                  dashArray: "2 5",
+                  interactive: false,
                 }}
               />
             ) : null}

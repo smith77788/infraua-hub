@@ -37,8 +37,9 @@ export default function MapLayers({
       textClass="text-muted-foreground"
       title={
         <>
-          <Layers className="size-3 shrink-0" />
-          Шари карти
+          <Layers className="size-3.5 shrink-0" aria-label="Шари карти" />
+          {/* На телефоні — лише значок: підпис забирав чверть ширини карти. */}
+          <span className="hidden sm:inline">Шари карти</span>
         </>
       }
     >

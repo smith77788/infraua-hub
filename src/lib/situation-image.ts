@@ -362,6 +362,7 @@ const NOSED: ReadonlySet<ThreatType> = new Set([
   "kab",
   "recon",
   "aircraft",
+  "unknown",
 ]);
 
 /**

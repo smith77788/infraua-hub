@@ -53,8 +53,8 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
       textClass="text-muted-foreground"
       title={
         <>
-          <HelpCircle className="size-3 shrink-0" />
-          Легенда карти
+          <HelpCircle className="size-3.5 shrink-0" aria-label="Легенда карти" />
+          <span className="hidden sm:inline">Легенда карти</span>
         </>
       }
     >

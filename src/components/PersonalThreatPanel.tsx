@@ -295,7 +295,8 @@ export default function PersonalThreatPanel({
         title="Що загрожує саме моїй точці"
         className="pointer-events-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-cyan-400/40 bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300 hover:border-cyan-400"
       >
-        <Crosshair className="size-3.5" /> Я тут
+        <Crosshair className="size-3.5" />
+        <span className="hidden sm:inline">Я тут</span>
       </button>
     );
   }

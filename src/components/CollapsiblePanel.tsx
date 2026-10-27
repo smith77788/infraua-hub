@@ -92,7 +92,7 @@ export default function CollapsiblePanel({
       >
         <span className="flex min-w-0 flex-1 items-center gap-1.5">{title}</span>
         <ChevronDown
-          className={`size-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`size-3 shrink-0 transition-transform ${open ? "rotate-180" : "hidden sm:block"}`}
         />
       </button>
       {open ? <div className="px-2.5 pb-2">{children}</div> : null}

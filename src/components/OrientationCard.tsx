@@ -61,7 +61,9 @@ export default function OrientationCard({
 
   return (
     <div
-      className="fixed inset-0 z-[900] flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+      // Вище за елементи керування Leaflet (z-index 1000): з z-[900] кнопки
+      // масштабу й шарів лежали поверх цієї картки (знімок на 390 px, 23.10).
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Як читати консоль"
