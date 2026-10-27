@@ -2,7 +2,7 @@ import { classifyThreatType, moreSevereType, type Threat, type ThreatType } from
 import { type Gazetteer, type GeoPlace, normName } from "./gazetteer";
 import { distanceKm } from "./infra-types";
 import type { ChannelMessage } from "./jet-sightings";
-import { oblastAdminIn } from "./oblast";
+import { isRegionName, oblastAdminIn } from "./oblast";
 import { bearingDeg } from "./threat-eta";
 
 /**
@@ -95,6 +95,90 @@ export function isEndOfTarget(text: string): boolean {
   return line.split(" ").length <= 3 && END_CUE.test(line);
 }
 
+/**
+ * Дорозвідка — перевірка неба, а не ціль.
+ *
+ * Канали пишуть «дорозвідка» про ПОВТОРНИЙ огляд після збиття чи падіння:
+ * треба переконатися, що в небі справді нікого не лишилось. Тобто слово
+ * означає рівно протилежне появі цілі.
+ *
+ * Заміряно на живому модулі: «Дорозвідка в районі Гощі» давало `position`
+ * у Гощі — фантомну ціль саме там, де небо щойно перевіряли на чистоту.
+ * `STATUS_WORDS` цього не ловлять: вони прив'язані до цілого рядка, а тут
+ * після слова йде пункт, і спрацьовує `POSITION_CUE` («в районі»).
+ *
+ * Межа навмисно вузька: глушимо рядок ЛИШЕ коли в ньому не названо апарат.
+ * «Дорозвідка: БпЛА над Гощею» означає, що перевірка когось ЗНАЙШЛА, і таку
+ * ціль ховати не можна. Помилка тут має бути в бік показу загрози.
+ */
+const SKY_CHECK = /дорозвід/i;
+
+/**
+ * Рядок — лише рубрика списку: назва краю й нічого більше.
+ *
+ * Агрегатори пишуть списками за областями:
+ *
+ *     🛵 Буковина
+ *      - 2 на керованих Новодністровськ
+ *
+ * «Буковина» тут — заголовок, а не місце цілі. Але в довіднику є однойменне
+ * СЕЛО, і рядок «лише з назв» ставив туди позицію. Заміряно 25.10 на 4453
+ * рядках свіжих дописів 111 каналів: так сталося 12 разів, і з П'ЯТИ різних
+ * каналів (radar_top_ua, kudy_letyt, eRadarrua, rozvidkaneba,
+ * povitryanatrivogaaa). Ціль падала в село за сотні кілометрів від справжньої.
+ *
+ * Гірше, що однакова помилка кількох каналів виглядала як ПІДТВЕРДЖЕННЯ:
+ * `corroborated` створює ціль, коли одну точку назвали два канали, — і фантом
+ * ставав упевненою ціллю. Звідси на карті «3 шахеди — Буковина».
+ *
+ * Міста з назвою, співзвучною області («Житомир», «Херсон», «Суми»), сюди не
+ * потрапляють: `oblastAdminIn` впізнає лише основи «-щина»/«-ська»/«Буковина»,
+ * а не назву обласного центру.
+ */
+/**
+ * Назва пункту в дописі пишеться з великої літери — звичайне слово з малої.
+ *
+ * У довіднику (GeoNames) повно сіл, названих звичайними словами: Атаки, Село,
+ * Південне, Сильне, Площі. І «після вечірньої атаки» з новинного допису
+ * ставало ціллю в селі Атаки на Буковині — за сотні кілометрів від Дніпра, про
+ * який ішлося.
+ *
+ * Заміряно 25.10 на 450 остаточних точках 111 каналів: з малої літери — 6.
+ * П'ять — сміття («площі», «селом», «села», «атаки», «південь»), один —
+ * справжній («Шахед на черноморск», неформальний російськомовний допис). Ціна
+ * правила — оцей один, і поруч із Чорноморськом зазвичай уже стоїть ціль
+ * джерела. Ціна його відсутності — фантоми будь-де в країні.
+ */
+function startsCapitalized(said: string): boolean {
+  const first = said.match(/\p{L}/u)?.[0];
+  return first !== undefined && first === first.toUpperCase() && first !== first.toLowerCase();
+}
+
+/**
+ * Довгий допис, у якому рядок не називає апарата, — новина, а не зведення.
+ *
+ * «…російського контролю над Києвом» (804 символи), «режим тиші в районі
+ * Олешків» (359) — сигнальні слова «над», «в районі» тут ті самі, що й у
+ * зведенні, і кожна новина ставила ціль у названому місті. «Олешків» до того ж
+ * знаходився не в Херсонській, а в Івано-Франківській області.
+ *
+ * Межа — 250 символів, заміряна: з 53 точок із дописів від 250 символів усі
+ * справжні — це списки агрегатора, де КОЖЕН рядок називає апарат («Реактивний
+ * БпЛА курсом на …»). Короткі ж справжні дописи апарата часто не називають
+ * («Тупо транзит над Києвом», 54 символи) — їх правило не зачіпає.
+ */
+const NEWS_MIN_CHARS = 250;
+
+function isRegionHeadingOnly(line: string): boolean {
+  const bare = normName(line.replace(/^[^\p{L}]+/u, ""))
+    .replace(/[^\p{L}\s]/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (bare.length === 1) return true;
+  return bare.length === 2 && /^обл/.test(bare[1]!);
+}
+
 /** Рядок — стан області, а не назва пункту («чисто», «тихо», «відбій»). */
 const STATUS_WORDS =
   /^(?:поки |все |вже |наразі )?(?:чисто|тихо|спокиино|спокоино|пусто|видбии|отбои|увага|уважно|загроза|без загроз|чисте небо)[\s.!]*$/u;
@@ -167,10 +251,20 @@ function typeOfLine(line: string): ThreatType {
  */
 export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
   const out: Mention[] = [];
+  /*
+   * Довгий допис, що ЖОДНОГО апарата не називає, — новина чи репортаж, а не
+   * зведення. Заміряно 25.10: «Краматорськ / 25 жовтня 2026 року / Внаслідок
+   * постійних обстрілів місто…» (eRadarrua, 259 символів) — рядок-дата ставав
+   * ціллю в Краматорську. Зведення того ж розміру завжди називає апарат хоч
+   * десь: «Реактивні:», «🛵», «БпЛА курсом на…».
+   */
+  if (text.length >= NEWS_MIN_CHARS && classifyThreatType(text) === "unknown") return out;
   let header: string | null = null;
   text.split(/\n|•|;/).forEach((raw, lineNo) => {
     const line = raw.trim();
     if (!line) return;
+    // Хештег — тег, а не зведення: «#Дніпровський_район» з оголошення тривоги.
+    if (line.startsWith("#")) return;
     // «Чернігівщина: Городня», «Рівненщина - Клевань»: заголовок відрізаємо,
     // інакше рядок «лише з назв» не впізнається через назву області.
     const head = raw.trim().match(/^((?:[^\s:–—-]+)(?:\s+област[ьи])?)\s*[:–—-]\s*(.+)$/u);
@@ -178,9 +272,28 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
     const body = head && oblastAdminIn(head[1]!, gaz) ? head[2]!.trim() : line;
     // Заголовок діє на наступні рядки, поки не прийде інший.
     if (own) header = own;
+    // Сама назва краю — рубрика списку, а не пункт (див. isRegionHeadingOnly).
+    if (own && isRegionHeadingOnly(line)) return;
     const admin = own ?? header;
     const lineType = typeOfLine(line);
-    const push = (kind: Mention["kind"], p: { places: GeoPlace[]; said: string }) => {
+    // Перевірка неба без названого апарата — не ціль (див. SKY_CHECK).
+    if (lineType === "unknown" && SKY_CHECK.test(line)) return;
+    const push = (
+      kind: Mention["kind"],
+      p: { places: GeoPlace[]; said: string },
+      viaCue: boolean,
+    ) => {
+      // Звичайне слово, назва області, новина — не пункт цілі (див. вище).
+      if (!startsCapitalized(p.said)) return;
+      if (isRegionName(p.said)) return;
+      /*
+       * Район чи громада — територія, а не точка цілі. Офіційний канал тривог
+       * перелічує їх списком, і «🟢 Відбій тривоги в: • Кальміуський район»
+       * ставив ціль у кожному районі ВІДБОЮ — повідомлення про те, що небезпека
+       * минула, ставало ціллю (air_alert_ua, 25.10).
+       */
+      if (/\s(?:раион|громад)\S*$/.test(normName(p.said))) return;
+      if (viaCue && lineType === "unknown" && text.length >= NEWS_MIN_CHARS) return;
       const inRegion = admin ? p.places.filter((x) => x.admin === admin) : [];
       out.push({
         kind,
@@ -191,10 +304,10 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
       });
     };
     const course = firstPlaceAfter(body, COURSE_CUE, gaz);
-    if (course) push("course", course);
+    if (course) push("course", course, true);
     const pos = firstPlaceAfter(body, POSITION_CUE, gaz);
     if (pos) {
-      push("position", pos);
+      push("position", pos, true);
       return;
     }
     if (course || COURSE_CUE.test(body)) return;
@@ -212,7 +325,7 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
         const p = leadingPlace(w, gaz);
         return p && p.used === w.norm.length ? p : null;
       });
-      if (found.every((f) => f !== null)) for (const f of found) push("position", f!);
+      if (found.every((f) => f !== null)) for (const f of found) push("position", f!, false);
     }
   });
   return out;
@@ -518,6 +631,24 @@ export function applyChannelTracks(
     }
     if (tr.fixes.length < 2) {
       singles.push(tr);
+      continue;
+    }
+    /*
+     * Канал не назвав апарат, а поруч уже є ціль БУДЬ-ЯКОГО типу — це та сама
+     * подія, а не нова ціль.
+     *
+     * Зливаємо вище лише з дронами (позицію FPV чи КАБа точкою села з допису
+     * погіршувати не можна), і доти все, що не злилося, ставало ОКРЕМОЮ ціллю —
+     * навіть за кілометр від цілі джерела. Заміряно 25.10, 50 хв, 25 зрізів
+     * конвеєра консолі проти живого Нептуна: «Шахтарське — 0 км від цілі
+     * Нептуна», «Зарічне — 5 км» — одна подія, дві позначки.
+     *
+     * Правило те саме, що в `corroborated` для одиночних точок: поруч із будь-
+     * якою ціллю нової не створюємо. Межа — лише для НЕназваного апарата:
+     * «шахед» поруч із FPV біля фронту — цілком можливо два різні об'єкти, і
+     * ховати названий тип ми не маємо підстав.
+     */
+    if (tr.type === "unknown" && out.some((t) => distanceKm(t, last.place) <= MATCH_TARGET_KM)) {
       continue;
     }
     out.push({

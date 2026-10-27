@@ -896,14 +896,44 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               <Circle center={[t.lat, t.lon]} radius={radiusKm * 1000} pathOptions={ringStyle} />
             )}
             {observed.length >= 2 ? (
-              <Polyline
-                positions={observed}
-                pathOptions={{
-                  color: style.color,
-                  weight: 2,
-                  opacity: fresh === "stale" ? 0.4 : 0.85,
-                }}
-              />
+              <>
+                {/*
+                 * Лінія ЗʼЄДНУЄ повідомлення, а не показує шлях польоту.
+                 *
+                 * Заміряно на живому фіді 25.10: відрізки цих треків дають
+                 * 9, 27, 41, 93, 235 км/год — при тому, що кожна точка має
+                 * невизначеність ±4–10 км. Тобто це не траса, а «бачили тут,
+                 * за пів години — там»: між двома селами ціль летіла якось
+                 * інакше і точно не зі швидкістю 27 км/год.
+                 *
+                 * Суцільна лінія читалась як спостережений шлях — і саме про
+                 * неї сказали «незрозумілі лінії». Тому тепер вона тонша й
+                 * блідіша за позначки, а фактами виглядають КРАПКИ: кожна —
+                 * повідомлення, яке справді було.
+                 */}
+                <Polyline
+                  positions={observed}
+                  pathOptions={{
+                    color: style.color,
+                    weight: 1.2,
+                    opacity: fresh === "stale" ? 0.22 : 0.45,
+                  }}
+                />
+                {observed.map((pt, i) => (
+                  <CircleMarker
+                    key={`${t.id}-seen-${i}`}
+                    center={pt}
+                    radius={2.5}
+                    pathOptions={{
+                      color: style.color,
+                      weight: 1,
+                      fillColor: style.color,
+                      fillOpacity: fresh === "stale" ? 0.35 : 0.8,
+                      opacity: fresh === "stale" ? 0.35 : 0.8,
+                    }}
+                  />
+                ))}
+              </>
             ) : null}
             {/*
               Від треку до позначки. Трек закінчується там, де ціль бачили
