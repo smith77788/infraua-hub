@@ -55,7 +55,8 @@ export class SpeedLedger {
 
   observe(threats: readonly Threat[], now: number): void {
     for (const t of threats) {
-      const kmh = t.quality?.speedKmh;
+      // Сирий замір джерела, навіть відкинутий для руху: вибірка — про джерело.
+      const kmh = t.quality?.reportedSpeedKmh ?? t.quality?.speedKmh;
       if (typeof kmh !== "number" || !(kmh >= MIN_KMH && kmh <= MAX_KMH)) continue;
       if (!t.id) continue;
       this.entries.delete(t.id); // перевставляємо — порядок Map = свіжість

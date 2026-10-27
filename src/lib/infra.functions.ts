@@ -33,6 +33,7 @@ import {
 import { parseAlertLevels, type AlertLevels } from "./alert-levels";
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
+import { dropImplausibleSpeed } from "./threat-eta";
 import {
   applyBanderolType,
   applyJetType,
@@ -829,9 +830,12 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
   refreshJetSightings(now);
   // Підтип — лише з українських каналів спостереження.
   const ua = jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? ""));
-  return applyBanderolType(
-    applyJetType(threats, jetMentions(ua, now)),
-    typeMentions(ua, now, "banderol"),
+  // Після уточнення типу — бо неправдоподібність швидкості залежить від нього.
+  return dropImplausibleSpeed(
+    applyBanderolType(
+      applyJetType(threats, jetMentions(ua, now)),
+      typeMentions(ua, now, "banderol"),
+    ),
   );
 }
 

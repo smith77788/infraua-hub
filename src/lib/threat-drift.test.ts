@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 import { driftPosition } from "./threat-drift";
+import { dropImplausibleSpeed, implausibleSpeed } from "./threat-eta";
 
 /*
  * Записи — з живого потоку neptun.in.ua (2026-10-20, ~02:00), рівно в тій
@@ -175,5 +176,29 @@ describe("реактивні — власна швидкість руху, а н
     const late = driftPosition({ ...base, type: "reactive" }, at(MEASURED.confirmedAt!, 30));
     expect(late.moving).toBe(false);
     expect(late.km).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("заміряна джерелом швидкість реактивного нижча за фізичну — не віримо", () => {
+  // Прод, speed-ledger 23–27.10: медіана Нептуна для реактивних — 103 км/год.
+  const jet = { ...mapNeptunThreat(MEASURED)!, type: "reactive" as const };
+  const now = at(MEASURED.confirmedAt!, 5);
+
+  it("119 км/год у реактивного відкидаємо: рух — за класом реактивних", () => {
+    const [fixed] = dropImplausibleSpeed([jet]);
+    expect(fixed!.quality!.speedKmh).toBeNull();
+    expect(fixed!.quality!.reportedSpeedKmh).toBe(119.5);
+    const before = driftPosition(jet, now);
+    const after = driftPosition(fixed!, now);
+    // 119,5 км/год × 5 хв ≈ 10 км; клас реактивних — ~446 км/год ≈ 37 км.
+    expect(before.km).toBeLessThan(11);
+    expect(after.km).toBeGreaterThan(30);
+  });
+
+  it("у шахеда та сама швидкість — правдоподібна, лишається", () => {
+    const shahed = { ...jet, type: "shahed" as const };
+    expect(dropImplausibleSpeed([shahed])[0]!.quality!.speedKmh).toBe(119.5);
+    expect(implausibleSpeed("reactive", 450)).toBe(false);
+    expect(implausibleSpeed("banderol", 200)).toBe(true);
   });
 });

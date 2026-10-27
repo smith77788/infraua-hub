@@ -104,6 +104,35 @@ export const SPEED_KMH: Record<ThreatType, number> = {
 };
 
 /**
+ * Заміряна джерелом швидкість, якій для цього типу не віримо.
+ *
+ * Заміряно на проді (speed-ledger, 23–27.10): медіана `velocity.speedKmh`
+ * Нептуна для цілей, які канали назвали реактивними, — 103 км/год (n = 48,
+ * квартилі 89–129), для шахедів — 128 (n = 52). Реактивний повільніший за
+ * шахед фізично неможливий: найповільніша серія «Герані-3» — 300–370. Нептун
+ * рахує швидкість зі стрибків своєї позначки між населеними пунктами, і для
+ * швидкої цілі ці стрибки відстають. А заміряна швидкість у нас має перевагу
+ * над типовою — тож реактивні знову повзли картою на ~100 км/год.
+ *
+ * Для реактивних і «Бандеролі» заміряне нижче за нижню межу типу вважаємо
+ * артефактом виміру. Для решти типів не чіпаємо: заниження в шахедів
+ * помірне (128 проти 185) і може бути справжнім — вітер, маневр.
+ */
+export function implausibleSpeed(type: ThreatType | undefined, kmh: number | null): boolean {
+  if (kmh == null || (type !== "reactive" && type !== "banderol")) return false;
+  return kmh < SPEED_RANGE_KMH[type][0];
+}
+
+/** Цілі з неправдоподібною заміряною швидкістю — без неї (див. `implausibleSpeed`). */
+export function dropImplausibleSpeed(threats: readonly Threat[]): Threat[] {
+  return threats.map((t) => {
+    const q = t.quality;
+    if (!q || !implausibleSpeed(t.type, q.speedKmh)) return t;
+    return { ...t, quality: { ...q, speedKmh: null, reportedSpeedKmh: q.speedKmh! } };
+  });
+}
+
+/**
  * Діапазон швидкості для цієї цілі.
  *
  * Заміряна джерелом швидкість схлопує діапазон у точку: вона стосується саме

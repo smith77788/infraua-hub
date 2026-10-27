@@ -41,6 +41,12 @@ export interface ThreatQuality {
   presumptiveCourse: boolean;
   /** Заміряна швидкість, км/год, якщо джерело її дало. */
   speedKmh: number | null;
+  /**
+   * Що джерело заявило, коли `speedKmh` ми відкинули як неправдоподібну для
+   * типу (`dropImplausibleSpeed`). Лише для вибірки замірів (`speed-ledger`):
+   * у розрахунки руху й часу підльоту не йде.
+   */
+  reportedSpeedKmh?: number;
 }
 
 export const EMPTY_QUALITY: ThreatQuality = {

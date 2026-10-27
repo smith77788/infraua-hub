@@ -46,6 +46,13 @@ describe("SpeedLedger — заміряна швидкість за нашим т
     expect(l.summary(NOW + WINDOW_MS + 1).shahed).toBeUndefined();
   });
 
+  it("відкинута для руху швидкість (reportedSpeedKmh) у вибірці лишається", () => {
+    const l = new SpeedLedger();
+    const t0 = t("a", "reactive", null);
+    l.observe([{ ...t0, quality: { ...t0.quality!, reportedSpeedKmh: 103 } }], NOW);
+    expect(l.summary(NOW).reactive).toMatchObject({ n: 1, medianKmh: 103 });
+  });
+
   it("переживає перезапуск: стан → JSON → стан", () => {
     const l = new SpeedLedger();
     l.observe([t("a", "banderol", 480), t("b", "reactive", 510)], NOW);
