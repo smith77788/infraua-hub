@@ -484,3 +484,51 @@ describe("не-пункти з живих дописів: звичайні сл�
     expect(mentionsOf("#Дніпровський_район", gaz)).toHaveLength(0);
   });
 });
+
+describe("одиночна точка каналу спостереження (PhantomChe, 27.10.2026)", () => {
+  const AT = Date.parse("2026-10-27T23:40:00Z");
+  const JET = {
+    at: AT - 3 * 60_000,
+    text: "Новий реактивний від Брянської, попередньо, під кордоном повз Славутич на Київщину.",
+    channel: "PhantomChe",
+  };
+  const watch = { trusted: (c: string) => c === "PhantomChe", now: AT };
+
+  it("канал спостереження, тип названо, свіжа — ціль із позначкою «одне джерело»", () => {
+    const out = applyChannelTracks([], buildTracks(channelFixes([JET], gaz, [], AT)), watch);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ name: "Славутич", type: "reactive", sources: ["PhantomChe"] });
+    expect(out[0]!.quality).toMatchObject({ lifecycle: "uncertain", uncertaintyKm: 15 });
+  });
+
+  it("без правила, з не-спостережного каналу або старша за 10 хв — нічого", () => {
+    const tracks = buildTracks(channelFixes([JET], gaz, [], AT));
+    expect(applyChannelTracks([], tracks)).toHaveLength(0);
+    expect(applyChannelTracks([], tracks, { trusted: () => false, now: AT })).toHaveLength(0);
+    expect(applyChannelTracks([], tracks, { ...watch, now: AT + 15 * 60_000 })).toHaveLength(0);
+  });
+
+  it("тип не названо — одиночна точка не стає ціллю", () => {
+    const plain = { ...JET, text: "Повз Славутич" };
+    const tracks = buildTracks(channelFixes([plain], gaz, [], AT));
+    expect(applyChannelTracks([], tracks, watch)).toHaveLength(0);
+  });
+
+  it("«в районі Ріпки/Олешня» — пара назв вибирає ті, що поруч (Чернігівщина)", () => {
+    const f = channelFixes(
+      [
+        {
+          at: AT - 60_000,
+          text: "Ще звич.дрон під кордоном в районі Ріпки/Олешня.",
+          channel: "PhantomChe",
+        },
+      ],
+      gaz,
+      [],
+      AT,
+    );
+    const p = f.find((x) => x.kind === "position")!;
+    expect(p.place.admin).toBe("02");
+    expect(p.type).toBe("shahed");
+  });
+});

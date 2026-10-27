@@ -308,6 +308,7 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
     const pos = firstPlaceAfter(body, POSITION_CUE, gaz);
     if (pos) {
       push("position", pos, true);
+      if (pos.partner) push("position", pos.partner, true);
       return;
     }
     if (course || COURSE_CUE.test(body)) return;
@@ -340,13 +341,27 @@ function firstPlaceAfter(
   text: string,
   cue: RegExp,
   gaz: Gazetteer,
-): { places: GeoPlace[]; said: string } | null {
+): {
+  places: GeoPlace[];
+  said: string;
+  partner: { places: GeoPlace[]; said: string } | null;
+} | null {
   let rest = text;
   for (let i = 0; i < 6; i++) {
     const m = rest.match(cue);
     if (!m) return null;
     const p = leadingPlace(words(m[1]!), gaz);
-    if (p) return p;
+    if (p) {
+      /*
+       * «в районі Ріпки/Олешня» — друга назва того самого місця. Ріпок в
+       * Україні п'ять, Олешень три, і лише одна пара лежить поруч (17 км, на
+       * Чернігівщині): без другої назви точка губилась (PhantomChe, 27.10).
+       */
+      const tail = m[1]!.slice(m[1]!.indexOf(p.said) + p.said.length);
+      const after = tail.match(/^\s*\/\s*(.+)$/u);
+      const partner = after ? leadingPlace(words(after[1]!), gaz) : null;
+      return { places: p.places, said: p.said, partner };
+    }
     rest = m[1]!;
   }
   return null;
@@ -414,9 +429,9 @@ export function channelFixes(
         // Однозначний пункт із того ж рядка теж опора: «пройшов Городню, далі
         // курсом на Ріпки» — Городень на Чернігівщині дві, за 130 км, а Ріпки
         // там одні, і Городня поруч із ними — саме та.
-        const sameLine = lm
-          .filter((o) => o !== x && o.places.length === 1)
-          .map((o) => o.places[0]!);
+        // Неоднозначні теж — усіма кандидатами: з пари «Ріпки/Олешня»
+        // лишиться та, де обидві назви поруч.
+        const sameLine = lm.filter((o) => o !== x).flatMap((o) => o.places);
         const anchors = [
           ...mine.map((f) => f.place),
           ...positions.map((p) => p.place),
@@ -561,9 +576,16 @@ export function buildTracks(fixes: readonly ChannelFix[]): ChannelTrack[] {
  *  - Названий після позиції курс («Відвернув на Бугрин») — лише напрямок,
  *    позначений як припущений.
  */
+export interface SoloRule {
+  /** Чи можна вірити одиночній точці цього каналу (канали спостереження). */
+  trusted: (channel: string) => boolean;
+  now: number;
+}
+
 export function applyChannelTracks(
   threats: readonly Threat[],
   tracks: readonly ChannelTrack[],
+  solo?: SoloRule,
 ): Threat[] {
   const out = threats.map((t) => ({ ...t }));
   const singles: ChannelTrack[] = [];
@@ -675,7 +697,7 @@ export function applyChannelTracks(
       trail,
     });
   }
-  out.push(...corroborated(singles, out));
+  out.push(...corroborated(singles, out, solo));
   return out;
 }
 
@@ -697,7 +719,24 @@ const CORROBORATE_MS = 10 * 60_000;
  * відрізнити їх за текстом надійно не вдається. Тому поріг — два канали, а не
  * один, і лише для місць, де жодної цілі поруч немає.
  */
-function corroborated(singles: readonly ChannelTrack[], existing: readonly Threat[]): Threat[] {
+/** Наскільки свіжою має бути одиночна точка, щоб стати ціллю (див. `SoloRule`). */
+export const SOLO_FRESH_MS = 10 * 60_000;
+
+/**
+ * Одиночна точка одного каналу — теж ціль, але лише суворо: канал
+ * спостереження (`watch`), тип апарата названо, точці ≤ 10 хв, поруч жодної
+ * цілі. І позначена як непідтверджена — одне джерело.
+ *
+ * Чому взагалі: 27.10 о 23:40 UTC Нептун віддавав 0 цілей, а PhantomChe
+ * писав «Новий реактивний від Брянської… під кордоном повз Славутич на
+ * Київщину» — і на карті не було нічого. Порожня карта, коли спостерігач веде
+ * реактивний, — гірша помилка за позначку з підписом «одне джерело».
+ */
+function corroborated(
+  singles: readonly ChannelTrack[],
+  existing: readonly Threat[],
+  solo?: SoloRule,
+): Threat[] {
   const out: Threat[] = [];
   const used = new Set<ChannelTrack>();
   const sorted = [...singles].sort((a, b) => b.fixes[0]!.at - a.fixes[0]!.at);
@@ -711,7 +750,15 @@ function corroborated(singles: readonly ChannelTrack[], existing: readonly Threa
         distanceKm(o.fixes[0]!.place, f.place) <= CORROBORATE_KM,
     );
     const channels = [...new Set(group.map((g) => g.channel))];
-    if (channels.length < 2) continue;
+    const alone =
+      channels.length < 2 &&
+      !(
+        solo &&
+        solo.trusted(channels[0]!) &&
+        s.type !== "unknown" &&
+        solo.now - f.at <= SOLO_FRESH_MS
+      );
+    if (alone) continue;
     if ([...existing, ...out].some((t) => distanceKm(t, f.place) <= MATCH_TARGET_KM)) continue;
     for (const g of group) used.add(g);
     const latest = group.reduce((a, b) => (b.fixes[0]!.at > a.fixes[0]!.at ? b : a)).fixes[0]!;
@@ -730,7 +777,8 @@ function corroborated(singles: readonly ChannelTrack[], existing: readonly Threa
       lastSeen: iso,
       type: group.map((g) => g.type).reduce(moreSevereType),
       quality: {
-        uncertaintyKm: 10,
+        // Одне джерело — ширший розкид: його ніхто не перевірив.
+        uncertaintyKm: channels.length < 2 ? 15 : 10,
         position: "approx",
         lifecycle: "uncertain",
         presumptiveCourse: true,

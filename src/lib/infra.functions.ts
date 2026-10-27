@@ -872,7 +872,21 @@ function withChannelTracks(threats: Threat[], now: number): Threat[] {
       tracks: buildTracks(channelFixes(ua, gazetteer, threats, now)),
     };
   }
-  return applyChannelTracks(threats, trackCache.tracks);
+  return applyChannelTracks(threats, trackCache.tracks, {
+    trusted: (c) => roleOfSource(c) === "watch",
+    now,
+  });
+}
+
+/**
+ * Коли Нептун востаннє ВІДПОВІВ — живим потоком чи успішним REST, байдуже,
+ * скільки цілей. Порожня відповідь живого джерела означає «цілей немає», а не
+ * «джерело впало», і саме це треба розрізняти для фолбеку (#132).
+ */
+let neptunAnsweredAt = 0;
+const NEPTUN_ANSWER_TTL_MS = 3 * 60_000;
+export function neptunAnsweredRecently(now = Date.now()): boolean {
+  return now - neptunAnsweredAt <= NEPTUN_ANSWER_TTL_MS;
 }
 
 async function neptunThreatsRaw(maxAgeMs: number): Promise<Threat[]> {
@@ -894,6 +908,7 @@ async function neptunThreatsRaw(maxAgeMs: number): Promise<Threat[]> {
     reconcileInBackground(now);
     // Дзеркалимо у модульний кеш, щоб фолбек мав останню відому картину.
     neptunCache = { at: now, threats: live };
+    neptunAnsweredAt = now;
     return live;
   }
 
@@ -901,7 +916,9 @@ async function neptunThreatsRaw(maxAgeMs: number): Promise<Threat[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
-    const threats = (await fetchNeptunThreats(controller.signal)) ?? [];
+    const fetched = await fetchNeptunThreats(controller.signal);
+    if (fetched) neptunAnsweredAt = now;
+    const threats = fetched ?? [];
     neptunCache = { at: now, threats };
     return threats;
   } catch {
@@ -1090,6 +1107,9 @@ export async function fetchChannelReports(signal?: AbortSignal): Promise<Channel
  * (SSE). Виносимо його, щоб браузерний пуш і запит-опитування давали той самий
  * payload; інакше «наживо» й «перезавантажив» знову були б дві правди.
  */
+/** Наскільки свіжим має бути інцидент фолбеку, коли Нептун живий, але порожній. */
+const FALLBACK_FRESH_MS = 20 * 60_000;
+
 export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsPayload> {
   try {
     // 1) Основне джерело — neptun через СПІЛЬНИЙ кеш: та сама пам'ять, з якої
@@ -1122,6 +1142,15 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
       // Падаємо на фолбек detoyshahed нижче.
     }
 
+    /*
+     * Нептун ЖИВИЙ, але цілей у нього нема — тоді фолбек не замінює його, а
+     * лише доповнює свіжим. Досі порожній Нептун читався як збій, і на карту
+     * лягали «інциденти» detoyshahed, які живуть до двох годин: 27.10 о 23:39
+     * UTC — 35 позначок віком 33–117 хв, банер «Дані застигли», хоча
+     * Нептун відповідав і казав «0 цілей» (знімок користувача). Свіже — до
+     * `FALLBACK_FRESH_MS`: саме стільки ми й самі тримаємо точку каналу.
+     */
+    const neptunAlive = neptunAnsweredRecently();
     // 2) Фолбек — detoyshahed (позиції) + тип із тексту Telegram.
     const res = await fetch(THREATS_ENDPOINT, { signal });
     if (!res.ok) throw new Error(`threats ${res.status}`);
@@ -1145,6 +1174,10 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
       const [lat, lon] = mercToLatLon(c.lng, c.lat);
       if (lat < UA_BBOX.south || lat > UA_BBOX.north || lon < UA_BBOX.west || lon > UA_BBOX.east)
         continue;
+      if (neptunAlive) {
+        const created = Date.parse(it.created_at ?? "");
+        if (!(Number.isFinite(created) && Date.now() - created <= FALLBACK_FRESH_MS)) continue;
+      }
       threats.push({
         id: it.id,
         name: it.location_name ?? it.display_name ?? "Ціль",
@@ -1171,13 +1204,19 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
       threats: fuseThreats(threats),
       fetchedAt: new Date().toISOString(),
       degraded: false,
-      source: "detoyshahed",
+      // Порожньо й Нептун живий — це його відповідь «цілей нема», а не фолбеку.
+      source: neptunAlive && threats.length === 0 ? "neptun" : "detoyshahed",
+      ...(neptunAlive ? { launches: currentLaunches(Date.now()) } : {}),
     } satisfies ThreatsPayload;
   } catch {
+    // Фолбек не відповів, а Нептун живий і порожній — картина правдива: цілей
+    // нема. «Неповне» тут сказало б неправду про головне джерело.
+    const alive = neptunAnsweredRecently();
     return {
       threats: [],
       fetchedAt: new Date().toISOString(),
-      degraded: true,
+      degraded: !alive,
+      ...(alive ? { source: "neptun" as const, launches: currentLaunches(Date.now()) } : {}),
     } satisfies ThreatsPayload;
   }
 }
