@@ -103,7 +103,12 @@ export default function SituationBar({
     sameFocus(focus, f) ? "ring-1 ring-primary/70 bg-primary/10 rounded-full" : "";
 
   return (
-    <div className="z-10 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card/40 px-4 py-2">
+    /*
+      На телефоні — ОДИН рядок, що гортається вбік: чотири рядки чипів
+      займали п'яту частину екрана над картою (знімок користувача, 28.10).
+      Підписи там короткі («Цілі 10», «Тривога 10»), повні — від sm.
+    */
+    <div className="z-10 flex shrink-0 flex-nowrap items-center gap-x-2 overflow-x-auto whitespace-nowrap border-b border-border bg-card/40 px-3 py-1.5 [scrollbar-width:none] sm:flex-wrap sm:gap-x-4 sm:gap-y-2 sm:px-4 sm:py-2 [&::-webkit-scrollbar]:hidden [&>*]:shrink-0">
       {/*
         Рівень описує стан МЕРЕЖІ ОБʼЄКТІВ, а не наявність тривоги (див.
         `summarize`) — і це правильно. Але коли шари інфраструктури вимкнені,
@@ -155,10 +160,17 @@ export default function SituationBar({
           <Crosshair
             className={`size-3.5 ${airThreat.total > 0 && !rewinding ? "animate-pulse" : ""}`}
           />
-          {rewinding ? "Було в небі" : "Повітряні цілі"}
+          {rewinding ? (
+            "Було в небі"
+          ) : (
+            <>
+              <span className="hidden sm:inline">Повітряні цілі</span>
+              <span className="sm:hidden">Цілі</span>
+            </>
+          )}
           <span>{threats}</span>
           {airThreat.total > 0 ? (
-            <span className="font-normal normal-case tracking-normal opacity-90">
+            <span className="hidden font-normal normal-case tracking-normal opacity-90 sm:inline">
               → {airThreat.total} обʼєкт(ів)
               {airThreat.critical > 0 ? `, ${airThreat.critical} критич.` : ""}
             </span>
@@ -177,7 +189,8 @@ export default function SituationBar({
           className={`flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-400 transition-colors hover:bg-amber-500/20 ${active({ kind: "alarm" })}`}
         >
           <Siren className="size-3.5" />
-          Повітряна тривога
+          <span className="hidden sm:inline">Повітряна тривога</span>
+          <span className="sm:hidden">Тривога</span>
           <span>{summary.alarms} обл.</span>
         </button>
       ) : null}
@@ -207,7 +220,7 @@ export default function SituationBar({
         </button>
       ) : null}
 
-      <span className="ml-auto flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="flex items-center gap-3 font-mono sm:ml-auto text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
         {(Object.keys(EVENT_KINDS) as (keyof typeof EVENT_KINDS)[])
           .filter((k) => summary.byKind[k] > 0)
           .map((k) => (
@@ -227,7 +240,9 @@ export default function SituationBar({
               <span className="font-semibold text-foreground">{summary.byKind[k]}</span>
             </button>
           ))}
-        {summary.eventCount === 0 && !loading ? <span>Подій немає</span> : null}
+        {summary.eventCount === 0 && !loading ? (
+          <span className="hidden sm:inline">Подій немає</span>
+        ) : null}
       </span>
     </div>
   );
