@@ -5895,7 +5895,12 @@ export default {
     // Відкритий, з CORS: дані ті самі, що на публічній мапі.
     if (pathname === "/api/air/replay") {
       const now = Date.now();
-      const body = (await loadRaidHistory(now)).payload(now);
+      // ?hours=3 — «Наліт», ?hours=24 — «Історія» (усталено — 3).
+      const hours = Math.min(
+        24,
+        Math.max(1, Number(new URL(request.url).searchParams.get("hours")) || 3),
+      );
+      const body = (await loadRaidHistory(now)).payload(now, hours * 3_600_000);
       return new Response(JSON.stringify(body), {
         headers: {
           "content-type": "application/json",

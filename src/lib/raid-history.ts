@@ -22,7 +22,14 @@ import type { RaidFrame } from "./raid-replay";
  * 40 цілей при кадрі щохвилини — ~200 КБ замість ~1 МБ.
  */
 
-export const WINDOW_MS = 3 * 60 * 60_000;
+/**
+ * Доба: «Історія» показує нальоти за добу, «Наліт» — останні 3 год. Свіжі 3
+ * год — кадр щохвилини; старше — проріджено до кадру на 5 хв: для повтору
+ * доби цього досить, а дані лишаються легкими для телефона.
+ */
+export const WINDOW_MS = 24 * 60 * 60_000;
+export const DENSE_MS = 3 * 60 * 60_000;
+export const SPARSE_EVERY_MS = 5 * 60_000;
 /** Не частіше за кадр на хвилину: для повтору на 15 с цього досить із запасом. */
 export const SAMPLE_EVERY_MS = 60_000;
 
@@ -84,18 +91,29 @@ export class RaidHistory {
   }
 
   private prune(now: number): void {
-    this.frames = this.frames.filter((f) => now - f.t <= WINDOW_MS);
+    const kept: typeof this.frames = [];
+    for (const f of this.frames) {
+      if (now - f.t > WINDOW_MS) continue;
+      const prev = kept[kept.length - 1];
+      // Старше 3 год — не частіше за кадр на 5 хв.
+      if (prev && now - f.t > DENSE_MS && f.t - prev.t < SPARSE_EVERY_MS) continue;
+      kept.push(f);
+    }
+    this.frames = kept;
     const alive = new Set(this.frames.flatMap((f) => f.p.map((x) => x.id)));
     for (const id of this.meta.keys()) if (!alive.has(id)) this.meta.delete(id);
   }
 
-  payload(now: number): RaidHistoryPayload {
+  /** Кадри за останні `sinceMs` (усталено — усе вікно). */
+  payload(now: number, sinceMs: number = WINDOW_MS): RaidHistoryPayload {
     this.prune(now);
-    const ids = [...this.meta.values()];
+    const frames = this.frames.filter((f) => now - f.t <= sinceMs);
+    const used = new Set(frames.flatMap((f) => f.p.map((x) => x.id)));
+    const ids = [...this.meta.values()].filter((m) => used.has(m.id));
     const index = new Map(ids.map((m, i) => [m.id, i]));
     return {
       ids,
-      frames: this.frames.map((f) => ({
+      frames: frames.map((f) => ({
         t: f.t,
         p: f.p.filter((x) => index.has(x.id)).map((x) => [index.get(x.id)!, x.lat, x.lon, x.h]),
       })),

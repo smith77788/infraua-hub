@@ -11,7 +11,7 @@ import { selectVisibleLinks } from "@/lib/map-links";
 import { statusOf, trustState, type SourceStatus } from "@/lib/sources";
 import { mergeTiles } from "@/lib/tiles";
 import { summarize as summarizeProvenance } from "@/lib/provenance";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
 import {
   Activity,
@@ -408,7 +408,7 @@ function Console() {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetch("/api/air/replay")
+      fetch("/api/air/replay?hours=3")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (alive && d) setServerFrames(framesFromPayload(d));
@@ -420,6 +420,23 @@ function Console() {
       alive = false;
       clearInterval(id);
     };
+  }, []);
+  // «Історія» — доба кадрів; вантажимо лише коли її відкрили (вони важчі).
+  const [historyFrames, setHistoryFrames] = useState<readonly RaidFrame[]>([]);
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
+  const loadHistory = useCallback(() => {
+    fetch("/api/air/replay?hours=24")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setHistoryFrames(framesFromPayload(d));
+      })
+      .catch(() => {});
+  }, []);
+  // Курсор історії рухає і цілі на карті, і стрічку подій. Стабільна функція:
+  // плеєр викликає її в ефекті, і нова щорендеру смикала б його щоразу.
+  const onHistoryCursor = useCallback((c: number | null) => {
+    setHistoryCursor(c);
+    setPlayCursor(c);
   }, []);
   const raidFrames = useMemo(
     () => mergeFrames(serverFrames, localFrames),
@@ -600,10 +617,14 @@ function Console() {
   }, [threats]);
   // Під час перемотки карта показує кадр цього моменту; наживо — сам фід.
   const mapThreats = useMemo(() => {
+    if (historyCursor !== null) {
+      const frame = frameAt(historyFrames, historyCursor);
+      return frame ? [...frame.threats] : [];
+    }
     if (raidCursor === null) return threats;
     const frame = frameAt(raidFrames, raidCursor);
     return frame ? [...frame.threats] : threats;
-  }, [raidCursor, raidFrames, threats]);
+  }, [raidCursor, raidFrames, historyCursor, historyFrames, threats]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
   const frontline = feeds.frontline;
   const fires = feeds.fires;
@@ -1180,7 +1201,7 @@ function Console() {
          * карті не стільки, скільки в лічильнику».
          */
         threats={mapThreats.length}
-        rewinding={raidCursor !== null}
+        rewinding={raidCursor !== null || historyCursor !== null}
         airThreat={airThreatSummary}
         focus={focus}
         onFocus={setFocus}
@@ -1586,7 +1607,7 @@ function Console() {
                     alertLevels={alertLevels}
                     threats={mapThreats}
                     // У перегляді історії пуски «зараз» не мають сенсу — лише наживо.
-                    launches={raidCursor === null ? launches : []}
+                    launches={raidCursor === null && historyCursor === null ? launches : []}
                     frontline={frontline}
                     showFrontline={showFrontline}
                     fires={fires}
@@ -1716,8 +1737,10 @@ function Console() {
                 bars={
                   <TimeScrubbers
                     frames={raidFrames}
+                    historyFrames={historyFrames}
                     onRaidCursor={setRaidCursor}
-                    onHistoryCursor={setPlayCursor}
+                    onHistoryCursor={onHistoryCursor}
+                    onHistoryOpen={loadHistory}
                   />
                 }
               />

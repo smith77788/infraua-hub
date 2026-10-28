@@ -1,7 +1,14 @@
 import { describe, expect, it } from "bun:test";
 
 import type { Threat } from "./air";
-import { framesFromPayload, RaidHistory, SAMPLE_EVERY_MS, WINDOW_MS } from "./raid-history";
+import {
+  DENSE_MS,
+  framesFromPayload,
+  RaidHistory,
+  SAMPLE_EVERY_MS,
+  SPARSE_EVERY_MS,
+  WINDOW_MS,
+} from "./raid-history";
 import { mergeFrames, replaySpan } from "./raid-replay";
 
 const T0 = Date.parse("2026-10-28T17:00:00Z");
@@ -50,19 +57,34 @@ describe("RaidHistory — історія нальоту на сервері", ()
     });
   });
 
-  it("старше трьох годин — забуто; переживає перезапуск", () => {
+  it("старше доби — забуто; переживає перезапуск", () => {
     const h = new RaidHistory();
     h.sample([th("old", 49)], T0);
     h.sample([th("new", 50)], T0 + WINDOW_MS);
-    const back = RaidHistory.fromState(
-      JSON.parse(JSON.stringify(h.toState(T0 + WINDOW_MS + 1))),
-      T0 + WINDOW_MS + 1,
-    );
+    const at = T0 + WINDOW_MS + 1;
+    const back = RaidHistory.fromState(JSON.parse(JSON.stringify(h.toState(at))), at);
+    expect(framesFromPayload(back.payload(at)).flatMap((f) => f.threats.map((t) => t.id))).toEqual([
+      "new",
+    ]);
+  });
+
+  it("свіжі 3 год — щохвилини; старше — не частіше за 5 хв; ?hours обмежує вибірку", () => {
+    const h = new RaidHistory();
+    // Дві години кадрів щохвилини, з рухом — кожен змінює картину.
+    for (let i = 0; i <= 120; i++) h.sample([th("a", 50 + i / 100)], T0 + i * SAMPLE_EVERY_MS);
+    // Через 4 год ті кадри вже старші за 3 год — проріджуються.
+    const later = T0 + 120 * SAMPLE_EVERY_MS + DENSE_MS + 60_000;
+    h.sample([th("b", 48)], later);
+    const all = framesFromPayload(h.payload(later));
+    const old = all.filter((f) => later - f.t > DENSE_MS);
+    for (let i = 1; i < old.length; i++) {
+      expect(old[i]!.t - old[i - 1]!.t).toBeGreaterThanOrEqual(SPARSE_EVERY_MS);
+    }
+    expect(old.length).toBeLessThan(30);
+    // ?hours=3 — лише кадри за останні 3 год.
     expect(
-      framesFromPayload(back.payload(T0 + WINDOW_MS + 1)).flatMap((f) =>
-        f.threats.map((t) => t.id),
-      ),
-    ).toEqual(["new"]);
+      framesFromPayload(h.payload(later, 3 * 3_600_000)).every((f) => later - f.t <= 3 * 3_600_000),
+    ).toBe(true);
   });
 
   it("зіпсований вхід — порожньо, а не виняток", () => {
