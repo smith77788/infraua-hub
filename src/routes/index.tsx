@@ -86,7 +86,8 @@ import { roleOfSource } from "@/lib/osint-sources";
 import { simulateOutage } from "@/lib/contingency";
 import { projectThreats } from "@/lib/threat-eta";
 import { reportAirActivity } from "@/lib/platform-read.functions";
-import { type RaidFrame, frameAt, recordFrame } from "@/lib/raid-replay";
+import { type RaidFrame, frameAt, mergeFrames, recordFrame } from "@/lib/raid-replay";
+import { framesFromPayload } from "@/lib/raid-history";
 import {
   buildThreatGraph,
   correlateAirThreats,
@@ -397,7 +398,33 @@ function Console() {
   const [windowId, setWindowId] = useState<WindowId>("30d");
   const [playCursor, setPlayCursor] = useState<number | null>(null);
   // Реплей нальоту: буфер знімків повітряної картини + курсор перемотки.
-  const [raidFrames, setRaidFrames] = useState<readonly RaidFrame[]>([]);
+  const [localFrames, setLocalFrames] = useState<readonly RaidFrame[]>([]);
+  /*
+   * Історія з сервера — щоб повтор мав що програвати з першої секунди, а не
+   * лише з моменту відкриття (див. `raid-history`). Перечитуємо раз на 5 хв:
+   * свіжіше за перший свій кадр усе одно береться зі свого буфера.
+   */
+  const [serverFrames, setServerFrames] = useState<readonly RaidFrame[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch("/api/air/replay")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (alive && d) setServerFrames(framesFromPayload(d));
+        })
+        .catch(() => {});
+    void load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  const raidFrames = useMemo(
+    () => mergeFrames(serverFrames, localFrames),
+    [serverFrames, localFrames],
+  );
   const [raidCursor, setRaidCursor] = useState<number | null>(null);
 
   /*
@@ -564,7 +591,7 @@ function Console() {
   // Пишемо знімок повітряної картини в буфер реплею при кожному оновленні фіду
   // (recordFrame сам відсіює незмінні кадри й тримає вікно/стелю).
   useEffect(() => {
-    setRaidFrames((buf) => recordFrame(buf, threats, Date.now()));
+    setLocalFrames((buf) => recordFrame(buf, threats, Date.now()));
   }, [threats]);
   // Сегментація нальоту на окремі хвилі зі сталими id (updateWaves веде цикл).
   const [waves, setWaves] = useState<Wave[]>([]);

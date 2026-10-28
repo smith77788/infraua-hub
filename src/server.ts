@@ -68,6 +68,7 @@ import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { concernRadiusKm } from "./lib/advisory";
 import { SpeedLedger } from "./lib/speed-ledger";
+import { RaidHistory } from "./lib/raid-history";
 import { AlertOutcomes } from "./lib/alert-outcome";
 import { onStreamAlerts, streamAlertLevels } from "./lib/neptun-stream";
 import { LIVE_POST_MAX_MS } from "./lib/channel-cadence";
@@ -952,7 +953,43 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   // Трек росте з кожного опитування — оновлюємо історію тут, на кожному тику
   // каналу; пропущене опитування це розрив у лінії.
   rememberTracks(threats, Date.now());
+  await sampleRaidHistory(threats, Date.now());
   return threats;
+}
+
+/*
+ * Історія нальоту для повтору — на сервері, бо браузер записував лише з
+ * моменту відкриття сторінки (див. `raid-history`). На томі, щоб редеплой
+ * посеред нальоту не стирав три години історії; пишемо не частіше за
+ * `RAID_SAVE_EVERY_MS` — це допоміжне, а не стан, від якого хтось залежить.
+ */
+let raidHistory: RaidHistory | null = null;
+let raidSavedAt = 0;
+const RAID_MARKER = "raid-history";
+const RAID_SAVE_EVERY_MS = 3 * 60_000;
+
+async function loadRaidHistory(now: number): Promise<RaidHistory> {
+  if (raidHistory) return raidHistory;
+  let restored: RaidHistory | null = null;
+  try {
+    const raw = await readMarker(RAID_MARKER);
+    if (raw) restored = RaidHistory.fromState(JSON.parse(raw), now);
+  } catch {
+    // Битий файл — починаємо історію з нуля.
+  }
+  raidHistory ??= restored ?? new RaidHistory();
+  return raidHistory;
+}
+
+async function sampleRaidHistory(threats: readonly Threat[], now: number): Promise<void> {
+  try {
+    const h = await loadRaidHistory(now);
+    if (!h.sample(threats, now) || now - raidSavedAt < RAID_SAVE_EVERY_MS) return;
+    raidSavedAt = now;
+    await writeMarker(RAID_MARKER, JSON.stringify(h.toState(now)));
+  } catch {
+    // Повтор — допоміжне: збій запису не має ламати обхід сповіщень.
+  }
 }
 
 /**
@@ -5856,6 +5893,18 @@ export default {
 
     // Публічний знімок повітряної обстановки — щоб радар вбудовували інші.
     // Відкритий, з CORS: дані ті самі, що на публічній мапі.
+    if (pathname === "/api/air/replay") {
+      const now = Date.now();
+      const body = (await loadRaidHistory(now)).payload(now);
+      return new Response(JSON.stringify(body), {
+        headers: {
+          "content-type": "application/json",
+          // Кадр щохвилини — кеш на пів хвилини нічого не втрачає.
+          "cache-control": "public, max-age=30",
+        },
+      });
+    }
+
     if (pathname === "/api/air/snapshot") {
       try {
         return await airSnapshotResponse();

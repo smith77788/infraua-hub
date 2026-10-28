@@ -130,3 +130,19 @@ export function tracksUpTo(buffer: readonly RaidFrame[], cursorMs: number): Repl
   }
   return [...byId.values()].filter((tr) => tr.points.length >= 2);
 }
+
+/**
+ * Кадри сервера (`raid-history`) + свої, записані з відкриття сторінки.
+ *
+ * Серверні — лише ДО першого свого: свій кадр свіжіший і повний (усі поля
+ * цілі), серверний — компактний. Так повтор має історію з першої секунди, а
+ * не з моменту, коли людина відкрила застосунок.
+ */
+export function mergeFrames(
+  server: readonly RaidFrame[],
+  local: readonly RaidFrame[],
+): readonly RaidFrame[] {
+  const firstLocal = local[0]?.t ?? Number.POSITIVE_INFINITY;
+  const before = server.filter((f) => f.t < firstLocal);
+  return before.length ? [...before, ...local] : local;
+}
