@@ -276,6 +276,14 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
     if (own) header = own;
     // Сама назва краю — рубрика списку, а не пункт (див. isRegionHeadingOnly).
     if (own && isRegionHeadingOnly(line)) return;
+    /*
+     * Рядок, що закінчується двокрапкою, — рубрика, а не місце цілі, навіть
+     * коли це назва міста: monikppy пише «Запоріжжя: / БПЛА на Кушу». Як
+     * пункт «Запоріжжя» з двох таких дописів ставала ціль — у селі Запоріжжя
+     * на Київщині, за 400 км від міста, бо серед однойменних вибиралось
+     * найближче до інших точок каналу (28.10, 21:42 UTC).
+     */
+    if (/:\s*$/.test(line)) return;
     const admin = own ?? header;
     const lineType = typeOfLine(line);
     // Перевірка неба без названого апарата — не ціль (див. SKY_CHECK).

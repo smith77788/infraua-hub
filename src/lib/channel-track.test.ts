@@ -568,3 +568,11 @@ describe("курс — на захід, а не на північ (monikppy, 28.
     expect(oblastDirectionIn("Новий реактивний з Брянщини")).toBeNull();
   });
 });
+
+describe("«Запоріжжя:» — рубрика, а не село на Київщині (monikppy, 28.10.2026)", () => {
+  it("рядок із двокрапкою в кінці пунктом не стає", () => {
+    expect(mentionsOf("Запоріжжя:", gaz)).toHaveLength(0);
+    const ms = mentionsOf("Запоріжжя:\nБПЛА на Кушу", gaz);
+    expect(ms.every((m) => m.kind === "course")).toBe(true);
+  });
+});
