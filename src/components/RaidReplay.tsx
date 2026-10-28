@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pause, Play, Radio } from "lucide-react";
 
 import { type RaidFrame, replaySpan } from "@/lib/raid-replay";
 
 interface Props {
-  /** Кільцевий буфер знімків повітряної картини (накопичується в браузері). */
+  /** Знімки повітряної картини: історія сервера + записане з відкриття сторінки. */
   frames: readonly RaidFrame[];
   /** Права межа курсора (ms) під час перемотки, або null у «живому» режимі. */
   onCursor: (cursorMs: number | null) => void;
@@ -27,7 +27,15 @@ const TICK = 250;
  * а сама карта вже вміє малювати з нього спостережений трек.
  */
 export default function RaidReplay({ frames, onCursor, hideLabel = false }: Props) {
-  const span = replaySpan(frames);
+  const raw = replaySpan(frames);
+  const from = raw?.from ?? null;
+  const to = raw?.to ?? null;
+  /*
+   * Межі — числами, а не новим обʼєктом на кожен рендер: інакше ефект
+   * програвання (залежний від `span`) перезапускав таймер із кожним оновленням
+   * фіду, а воно приходить щопівтори секунди.
+   */
+  const span = useMemo(() => (from !== null && to !== null ? { from, to } : null), [from, to]);
   const [cursor, setCursor] = useState<number | null>(null); // null = наживо
   const [playing, setPlaying] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -45,13 +53,18 @@ export default function RaidReplay({ frames, onCursor, hideLabel = false }: Prop
     }
   }, [span]);
 
+  // Права межа росте з кожним живим кадром — читаємо її з ref, щоб не
+  // перезапускати таймер; крок рахуємо від меж на момент натискання «▶».
+  const toRef = useRef(to);
+  toRef.current = to;
   useEffect(() => {
-    if (!playing || !span) return;
-    const step = Math.max(1, (span.to - span.from) / STEPS);
+    if (!playing || from === null || toRef.current === null) return;
+    const step = Math.max(1, (toRef.current - from) / STEPS);
     timer.current = setInterval(() => {
       setCursor((c) => {
-        const next = (c ?? span.from) + step;
-        if (next >= span.to) {
+        const end = toRef.current ?? from;
+        const next = (c ?? from) + step;
+        if (next >= end) {
           setPlaying(false);
           return null; // дійшли до кінця — повертаємось наживо
         }
@@ -61,7 +74,7 @@ export default function RaidReplay({ frames, onCursor, hideLabel = false }: Prop
     return () => {
       if (timer.current) clearInterval(timer.current);
     };
-  }, [playing, span]);
+  }, [playing, from]);
 
   if (!span) return null;
 
