@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import { classifyThreatType, type Threat } from "./air";
 import {
+  airActivityOf,
   applyJetType,
   JET_WINDOW_MS,
   jetMentions,
@@ -224,5 +225,38 @@ describe("applyBanderolType — «Бандероль» з каналів уто�
   it("стара згадка (понад вікно) нічого не змінює", () => {
     const old = [{ at: NOW - 40 * 60_000, text: msgs[0]!.text }];
     expect(typeMentions(old, NOW, "banderol")).toEqual([]);
+  });
+});
+
+describe("airActivityOf — чи канали говорять про цілі (27.10.2026, 23:39 UTC)", () => {
+  const NOW = Date.parse("2026-10-27T23:40:00Z");
+  const m = (min: number, channel: string, text: string) => ({
+    at: NOW - min * 60_000,
+    channel,
+    text,
+  });
+  // Дослівно — той час, коли Нептун віддавав 0 цілей.
+  const LIVE = [
+    m(
+      3,
+      "PhantomChe",
+      "Новий реактивний від Брянської, попередньо, під кордоном повз Славутич на Київщину.",
+    ),
+    m(19, "PhantomChe", "Ще звич.дрон під кордоном в районі Ріпки/Олешня."),
+    m(20, "tlknewsua", "КАБ на Приколотное/Бурлук ⚠️"),
+    m(18, "horizon_of_war_Official", "Чернігівщина\nРеактивний 🛵 на Добрянку -Любеч -Неданчичі"),
+    m(20, "horizon_of_war_Official", "Відбій по балістиці"),
+    m(19, "cherkasy_nebbo", "відбій ракетної небезпеки 📡"),
+  ];
+
+  it("живі цілі в кількох каналах — активність є, «відбій» не рахується", () => {
+    expect(airActivityOf(LIVE, NOW)).toEqual({ messages: 4, channels: 3 });
+  });
+
+  it("лише відбої й старе — тиша", () => {
+    expect(airActivityOf([LIVE[4]!, LIVE[5]!, m(40, "x", "Шахед на Київ")], NOW)).toEqual({
+      messages: 0,
+      channels: 0,
+    });
   });
 });

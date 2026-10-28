@@ -451,6 +451,8 @@ async function health(request: Request): Promise<Response> {
      */
     boots: bootLogReport(),
     neptunStream: neptunStreamStatus(),
+    // Порожній Нептун на тлі живих каналів — його збій, а не тиша (#133).
+    neptunGap: (await import("./lib/infra.functions")).neptunGap(),
     // Чи знайдено шрифт картинок: без нього з постів зникав увесь текст.
     imageFonts: await (await import("./lib/image-fonts")).fontStatus(),
     // Яка частка доставлених попереджень справдилась: ціль пролетіла в радіусі

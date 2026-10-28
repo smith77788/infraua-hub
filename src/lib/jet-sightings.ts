@@ -165,3 +165,32 @@ function applyMentionedType(
     return texts.some((x) => mentions(x, stem)) ? { ...t, type: to } : t;
   });
 }
+
+/** Вікно, у якому рахуємо, чи канали говорять про цілі (`airActivityOf`). */
+export const AIR_ACTIVITY_WINDOW_MS = 20 * 60_000;
+const ALL_CLEAR = /(?<![а-яіїєґ])(?:відбій|отбой|зняли|сняли|чисто|тихо)/i;
+
+/**
+ * Скільки свіжих дописів і каналів говорять про цілі в повітрі.
+ *
+ * Потрібне, щоб розрізнити «Нептун порожній, бо тихо» і «Нептун порожній,
+ * бо збій». 27.10 о 23:39 UTC Нептун віддавав 0 цілей, а за ті самі 30 хв
+ * канали дали 42 дописи з названим типом: КАБи на Харківщині, реактивний біля
+ * Славутича, дрон у районі Ріпок; за 8 хв Нептун показав 8 цілей.
+ *
+ * Лише дописи з названим апаратом і без «відбою»: «Відбій по балістиці» —
+ * теж допис із типом, але про те, що загрози вже нема.
+ */
+export function airActivityOf(
+  messages: readonly ChannelMessage[],
+  now: number,
+): { messages: number; channels: number } {
+  const recent = messages.filter(
+    (m) =>
+      m.at <= now &&
+      now - m.at <= AIR_ACTIVITY_WINDOW_MS &&
+      !ALL_CLEAR.test(m.text) &&
+      classifyThreatType(m.text) !== "unknown",
+  );
+  return { messages: recent.length, channels: new Set(recent.map((m) => m.channel)).size };
+}

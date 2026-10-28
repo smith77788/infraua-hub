@@ -35,6 +35,7 @@ import { mapNeptunThreat, type NeptunThreat } from "./neptun-map";
 import { ensureNeptunStream, liveThreats, reconcileNeptunStream } from "./neptun-stream";
 import { dropImplausibleSpeed } from "./threat-eta";
 import {
+  airActivityOf,
   applyBanderolType,
   applyJetType,
   jetMentions,
@@ -42,7 +43,13 @@ import {
   typeMentions,
   type ChannelMessage,
 } from "./jet-sightings";
-import { applyChannelTracks, buildTracks, channelFixes, type ChannelTrack } from "./channel-track";
+import {
+  applyChannelTracks,
+  buildTracks,
+  channelFixes,
+  MATCH_TARGET_KM,
+  type ChannelTrack,
+} from "./channel-track";
 import { type Gazetteer, loadGazetteer } from "./gazetteer";
 import {
   launchReach,
@@ -841,7 +848,36 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
 
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
   const now = Date.now();
-  return withChannelTracks(withJetTypes(await neptunThreatsRaw(maxAgeMs), now), now);
+  const raw = await neptunThreatsRaw(maxAgeMs);
+  neptunOwnCount = raw.length;
+  return withChannelTracks(withJetTypes(raw, now), now);
+}
+
+/** Скільки цілей дав САМ Нептун в останньому знімку — до треків каналів. */
+let neptunOwnCount = 0;
+
+/** Чи українські канали спостереження зараз говорять про цілі — див. `airActivityOf`. */
+export function channelAirActivity(now = Date.now()): { messages: number; channels: number } {
+  return airActivityOf(
+    jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? "")),
+    now,
+  );
+}
+
+/** Порожній Нептун на тлі живих каналів — це його збій (див. `channelAirActivity`). */
+export function neptunGap(now = Date.now()): {
+  active: boolean;
+  neptunTargets: number;
+  channelMessages: number;
+  channels: number;
+} {
+  const a = channelAirActivity(now);
+  return {
+    active: neptunOwnCount === 0 && a.channels >= 2 && a.messages >= 3,
+    neptunTargets: neptunOwnCount,
+    channelMessages: a.messages,
+    channels: a.channels,
+  };
 }
 
 /*
@@ -1109,6 +1145,11 @@ export async function fetchChannelReports(signal?: AbortSignal): Promise<Channel
  */
 /** Наскільки свіжим має бути інцидент фолбеку, коли Нептун живий, але порожній. */
 const FALLBACK_FRESH_MS = 20 * 60_000;
+/**
+ * Те саме, коли порожній Нептун — збій: година, а не дві, як у самого
+ * detoyshahed. Старше за годину — уже не «де ціль», а «де вона була».
+ */
+const GAP_FALLBACK_MS = 60 * 60_000;
 
 export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsPayload> {
   try {
@@ -1117,7 +1158,9 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
     // один знімок, а не кожен свій.
     try {
       const neptun = await neptunThreatsCached();
-      if (neptun.length) {
+      // Нептун порожній, а канали говорять — це його збій: тоді нижче, у
+      // фолбек, і з позначкою «неповне», навіть якщо треки каналів дали цілі.
+      if (neptun.length && !neptunGap().active) {
         /*
          * Перехресне підтвердження другим агрегатором. Знайдені канали
          * домішуються в `sources`, а зважує їх наявна `verifyThreat` — вона
@@ -1143,14 +1186,26 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
     }
 
     /*
-     * Нептун ЖИВИЙ, але цілей у нього нема — тоді фолбек не замінює його, а
-     * лише доповнює свіжим. Досі порожній Нептун читався як збій, і на карту
-     * лягали «інциденти» detoyshahed, які живуть до двох годин: 27.10 о 23:39
-     * UTC — 35 позначок віком 33–117 хв, банер «Дані застигли», хоча
-     * Нептун відповідав і казав «0 цілей» (знімок користувача). Свіже — до
-     * `FALLBACK_FRESH_MS`: саме стільки ми й самі тримаємо точку каналу.
+     * Три стани порожнього Нептуна, і плутати їх не можна:
+     *
+     * 1. Не відповідає — фолбек як був: усе, що є, і «неповне».
+     * 2. Відповідає, але канали говорять про цілі — ЗБІЙ Нептуна (27.10, 23:39
+     *    UTC: 0 цілей при 42 дописах каналів із типом за 30 хв). Цілі каналів
+     *    + фолбек за останню годину, і «неповне».
+     * 3. Відповідає, і канали мовчать — справді тихо: лише свіже з фолбеку.
+     *
+     * Попередня версія (#132) знала тільки перший і третій стани й порожній
+     * живий Нептун завжди вважала тишею — тобто в збій карта лишилась би
+     * порожньою. Користувач: «не може бути нуль цілей в повітрі на всю країну
+     * під час інтенсивної війни».
      */
-    const neptunAlive = neptunAnsweredRecently();
+    const gap = neptunGap();
+    const quiet = neptunAnsweredRecently() && !gap.active;
+    const fallbackFreshMs = quiet ? FALLBACK_FRESH_MS : gap.active ? GAP_FALLBACK_MS : Infinity;
+    const neptunAlive = quiet;
+    // Цілі з треків каналів (їх дає той самий кеш, що й Нептуна) — у збій
+    // Нептуна вони головне свіже, що є.
+    const fromChannels = gap.active ? await neptunThreatsCached().catch(() => []) : [];
     // 2) Фолбек — detoyshahed (позиції) + тип із тексту Telegram.
     const res = await fetch(THREATS_ENDPOINT, { signal });
     if (!res.ok) throw new Error(`threats ${res.status}`);
@@ -1174,9 +1229,9 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
       const [lat, lon] = mercToLatLon(c.lng, c.lat);
       if (lat < UA_BBOX.south || lat > UA_BBOX.north || lon < UA_BBOX.west || lon > UA_BBOX.east)
         continue;
-      if (neptunAlive) {
+      if (Number.isFinite(fallbackFreshMs)) {
         const created = Date.parse(it.created_at ?? "");
-        if (!(Number.isFinite(created) && Date.now() - created <= FALLBACK_FRESH_MS)) continue;
+        if (!(Number.isFinite(created) && Date.now() - created <= fallbackFreshMs)) continue;
       }
       threats.push({
         id: it.id,
@@ -1201,9 +1256,16 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
     return {
       // Зливаємо близькі позначки (різні канали про ту саму ціль/район), щоб на
       // карті не було стосів дублікатів над одним містом.
-      threats: fuseThreats(threats),
+      threats: [
+        ...fromChannels,
+        // Позначка фолбеку там, де вже стоїть ціль каналу, — дубль.
+        ...fuseThreats(threats).filter(
+          (t) => !fromChannels.some((c) => distanceKm(c, t) <= MATCH_TARGET_KM),
+        ),
+      ],
       fetchedAt: new Date().toISOString(),
-      degraded: false,
+      // Збій Нептуна — картина неповна, хоч фолбек і відповів.
+      degraded: gap.active,
       // Порожньо й Нептун живий — це його відповідь «цілей нема», а не фолбеку.
       source: neptunAlive && threats.length === 0 ? "neptun" : "detoyshahed",
       ...(neptunAlive ? { launches: currentLaunches(Date.now()) } : {}),
@@ -1211,7 +1273,7 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
   } catch {
     // Фолбек не відповів, а Нептун живий і порожній — картина правдива: цілей
     // нема. «Неповне» тут сказало б неправду про головне джерело.
-    const alive = neptunAnsweredRecently();
+    const alive = neptunAnsweredRecently() && !neptunGap().active;
     return {
       threats: [],
       fetchedAt: new Date().toISOString(),
