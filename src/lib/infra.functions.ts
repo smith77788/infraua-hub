@@ -50,6 +50,7 @@ import {
   MATCH_TARGET_KM,
   type ChannelTrack,
 } from "./channel-track";
+import { mergeSuccessorChains } from "./successor-chain";
 import { type Gazetteer, loadGazetteer } from "./gazetteer";
 import {
   launchReach,
@@ -850,7 +851,13 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
   const now = Date.now();
   const raw = await neptunThreatsRaw(maxAgeMs);
   neptunOwnCount = raw.length;
-  return withChannelTracks(withJetTypes(raw, now), now);
+  /*
+   * Ланцюжки наступників — ДО треків каналів: так допис каналу чіпляється до
+   * голови ланцюжка (де дрон зараз), а не до звіту п'ятихвилинної давнини.
+   * Тип потрібен уже тут (реактивний летить утричі далі), тому після
+   * `withJetTypes`. Див. `successor-chain.ts`.
+   */
+  return withChannelTracks(mergeSuccessorChains(withJetTypes(raw, now)), now);
 }
 
 /** Скільки цілей дав САМ Нептун в останньому знімку — до треків каналів. */

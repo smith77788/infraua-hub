@@ -64,7 +64,8 @@ import { TYPE_STYLE } from "@/lib/threat-glyphs";
 import type { LaunchView } from "@/lib/infra.functions";
 import { advance } from "@/lib/dead-reckoning";
 import { bearingDeg } from "@/lib/threat-eta";
-import { ageOf, FRESHNESS_THRESHOLDS, type Freshness } from "@/lib/freshness";
+import { type Freshness } from "@/lib/freshness";
+import { markerFreshness } from "@/lib/marker-freshness";
 
 interface Props {
   facilities: Facility[];
@@ -194,11 +195,11 @@ const ICON_PATHS: Record<CategoryId, string> = {
  * зʼявляється як НОВИЙ трек у сусідньому селі, а не як зсув старого. Виправити
  * це ззовні ми не можемо — але подавати двадцятихвилинну позначку як свіжу не
  * маємо права.
+ *
+ * Сам розрахунок тепер у `marker-freshness.ts`: вік рахується і в хвилинах, і
+ * в кілометрах можливого зсуву, бо реактивний за ті самі 12 хвилин пролітає
+ * втричі далі за шахед (28.10).
  */
-function freshnessOf(iso: string | undefined): Freshness {
-  const { aging, stale } = FRESHNESS_THRESHOLDS.airObserved;
-  return ageOf(iso, aging, stale).freshness;
-}
 
 // Розміри підняті під телефон: на маленькому екрані позначка має читатися й
 // бути придатною для дотику. Свіжі — найбільші, застарілі — дрібніші й тьмяні.
@@ -823,8 +824,10 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
     <>
       {inView.map((t) => {
         const seen = t.lastSeen ?? t.since;
-        const fresh = freshnessOf(seen);
         const type: ThreatType = t.type ?? "unknown";
+        // Вік і в хвилинах, і в кілометрах: реактивний старіє втричі швидше
+        // за шахед (див. marker-freshness.ts).
+        const fresh = markerFreshness(seen, type);
         const style = TYPE_STYLE[type];
         const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
         const vecEnd = hasCourse ? destPoint(t.lat, t.lon, t.heading as number, 16) : null;
