@@ -1066,7 +1066,7 @@ function Console() {
         weather={feeds.weather}
       />
 
-      <header className="z-20 grid h-14 shrink-0 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
+      <header className="z-20 grid h-11 shrink-0 sm:h-14 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="relative flex size-2.5">
             <span className="animate-pulse-dot absolute inline-flex size-full rounded-full bg-primary" />
@@ -1204,7 +1204,7 @@ function Console() {
           title="Порівняння поточної кількості повітряних цілей із власною нормою за попередні години"
         >
           <AlertTriangle className="size-3 shrink-0" />
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em]">
+          <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.12em] sm:whitespace-normal">
             {airSurge.level === "surge" ? "Сплеск активності" : "Активність підвищена"}:{" "}
             {airSurge.current} цілей проти норми ~{airSurge.baseline} (×{airSurge.ratio})
             {topSurgeRegion ? ` · пік: ${topSurgeRegion.region} (×${topSurgeRegion.ratio})` : ""}
@@ -1218,14 +1218,14 @@ function Console() {
         відсутність даних, а не як застосована умова.
       */}
       {focus ? (
-        <div className="z-10 flex shrink-0 items-center gap-2 border-b border-primary/40 bg-primary/10 px-4 py-1.5">
-          <Filter className="size-3 text-primary" />
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-primary">
+        <div className="z-10 flex shrink-0 items-center gap-2 border-b border-primary/40 bg-primary/10 px-3 py-1 sm:px-4 sm:py-1.5">
+          <Filter className="size-3 shrink-0 text-primary" />
+          <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.12em] text-primary">
             Фокус: {focusLabel(focus)} — {visible.length} обʼєктів
           </span>
           <button
             onClick={() => setFocus(null)}
-            className="ml-auto flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground"
+            className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground"
           >
             <X className="size-3" /> Зняти
           </button>

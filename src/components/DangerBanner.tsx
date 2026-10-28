@@ -1,4 +1,5 @@
-import { AlertTriangle, EyeOff } from "lucide-react";
+import { AlertTriangle, ChevronDown, EyeOff } from "lucide-react";
+import { useState } from "react";
 
 import type { DangerNotice } from "@/lib/danger-notice";
 
@@ -16,13 +17,20 @@ import type { DangerNotice } from "@/lib/danger-notice";
  * мовчати про нього не можна.
  */
 export default function DangerBanner({ notice }: { notice: DangerNotice }) {
+  /*
+   * На телефоні пояснення «чому карта може бути порожньою» згорнуте до одного
+   * рядка: розгорнутий банер займав чверть екрана й зсував карту (знімок
+   * користувача, 28.10). Заголовок і рівень — завжди видно; пояснення —
+   * одним дотиком. На широкому екрані — як було, розгорнуто.
+   */
+  const [open, setOpen] = useState(false);
   if (notice.level === "none") return null;
   const danger = notice.level === "danger";
   return (
     <div
       role="alert"
       aria-live="assertive"
-      className={`border-b px-3 py-2 font-mono text-[11px] leading-snug ${
+      className={`shrink-0 border-b px-3 py-1.5 font-mono text-[11px] leading-snug sm:py-2 ${
         danger
           ? "border-red-500/55 bg-red-500/14 text-red-200"
           : "border-amber-500/50 bg-amber-500/12 text-amber-200"
@@ -30,12 +38,12 @@ export default function DangerBanner({ notice }: { notice: DangerNotice }) {
     >
       <div className="flex items-start gap-2">
         <AlertTriangle className={`mt-0.5 size-4 shrink-0 ${danger ? "animate-pulse" : ""}`} />
-        <div className="min-w-0">
+        <div className="line-clamp-2 min-w-0 sm:line-clamp-none">
           <span className="font-semibold uppercase tracking-[0.08em]">{notice.headline}</span>
           {notice.reasons.length > 0 ? (
             <span className="ml-1.5 opacity-90">{notice.reasons.join(" · ")}</span>
           ) : null}
-          <span className="ml-1.5 opacity-60">— оголошено офіційно</span>
+          <span className="ml-1.5 hidden opacity-60 sm:inline">— оголошено офіційно</span>
           {/*
            * Число цілей поруч із попередженням, а не лише на карті: саме
            * розрив між «оголошено» і «у фіді нуль» людина читає як «тихо»,
@@ -47,9 +55,23 @@ export default function DangerBanner({ notice }: { notice: DangerNotice }) {
         </div>
       </div>
       {notice.blindTo ? (
-        <div className="mt-1.5 flex items-start gap-2 border-t border-current/20 pt-1.5">
-          <EyeOff className="mt-0.5 size-4 shrink-0 opacity-80" />
-          <span className="min-w-0 opacity-90">{notice.blindTo}</span>
+        <div className="mt-1.5 border-t border-current/20 pt-1.5">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="flex w-full items-start gap-2 text-left sm:pointer-events-none"
+          >
+            <EyeOff className="mt-0.5 size-4 shrink-0 opacity-80" />
+            <span
+              className={`min-w-0 flex-1 opacity-90 ${open ? "" : "line-clamp-1 sm:line-clamp-none"}`}
+            >
+              {notice.blindTo}
+            </span>
+            <ChevronDown
+              className={`mt-0.5 size-4 shrink-0 opacity-70 transition-transform sm:hidden ${open ? "rotate-180" : ""}`}
+            />
+          </button>
         </div>
       ) : null}
     </div>
