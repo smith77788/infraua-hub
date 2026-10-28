@@ -30,7 +30,7 @@ export default function DangerBanner({ notice }: { notice: DangerNotice }) {
     <div
       role="alert"
       aria-live="assertive"
-      className={`shrink-0 border-b px-3 py-1.5 font-mono text-[11px] leading-snug sm:py-2 ${
+      className={`shrink-0 border-b px-3 py-1.5 text-[13px] leading-snug sm:py-2 ${
         danger
           ? "border-red-500/55 bg-red-500/14 text-red-200"
           : "border-amber-500/50 bg-amber-500/12 text-amber-200"
@@ -39,7 +39,7 @@ export default function DangerBanner({ notice }: { notice: DangerNotice }) {
       <div className="flex items-start gap-2">
         <AlertTriangle className={`mt-0.5 size-4 shrink-0 ${danger ? "animate-pulse" : ""}`} />
         <div className="line-clamp-2 min-w-0 sm:line-clamp-none">
-          <span className="font-semibold uppercase tracking-[0.08em]">{notice.headline}</span>
+          <span className="font-semibold">{notice.headline}</span>
           {notice.reasons.length > 0 ? (
             <span className="ml-1.5 opacity-90">{notice.reasons.join(" · ")}</span>
           ) : null}

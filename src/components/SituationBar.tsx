@@ -134,9 +134,7 @@ export default function SituationBar({
             <span className={`relative inline-flex size-2 rounded-full ${s.dot}`} />
           </span>
           <LevelIcon level={summary.level} className={`size-3.5 ${s.text}`} />
-          <span
-            className={`font-mono text-[10px] font-semibold uppercase tracking-[0.14em] ${s.text}`}
-          >
+          <span className={`text-[12px] font-semibold tabular-nums ${s.text}`}>
             {loading ? "Оцінка обстановки…" : summary.label}
           </span>
         </span>
@@ -151,7 +149,7 @@ export default function SituationBar({
                 ? `Кадр перемотки: ${threats} цілей у цей момент. Це не поточна картина.`
                 : `Цілей у повітрі: ${threats}. Поруч із нашими обʼєктами наразі немає.`
           }
-          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] ${
+          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-semibold tabular-nums ${
             airThreat.total > 0
               ? "border-red-500/60 bg-red-500/15 text-red-400"
               : "border-amber-500/40 bg-amber-500/10 text-amber-400"
@@ -186,7 +184,7 @@ export default function SituationBar({
               ? `Тривога у ${summary.alarms} обл., під нею ${summary.underAlarm} наших обʼєкт(ів). Показати ${focusLabel({ kind: "alarm" })}`
               : `Тривога у ${summary.alarms} обл., наших обʼєктів у цих областях немає. Показати ${focusLabel({ kind: "alarm" })}`
           }
-          className={`flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-400 transition-colors hover:bg-amber-500/20 ${active({ kind: "alarm" })}`}
+          className={`flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[12px] font-semibold tabular-nums text-amber-400 transition-colors hover:bg-amber-500/20 ${active({ kind: "alarm" })}`}
         >
           <Siren className="size-3.5" />
           <span className="hidden sm:inline">Повітряна тривога</span>
@@ -200,7 +198,7 @@ export default function SituationBar({
           onClick={toggle({ kind: "risk" })}
           disabled={summary.atRisk === 0}
           title={`Показати ${focusLabel({ kind: "risk" })}`}
-          className={`flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground ${active({ kind: "risk" })}`}
+          className={`flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium tabular-nums text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground ${active({ kind: "risk" })}`}
         >
           <AlertTriangle className="size-3 text-amber-400" />
           Під загрозою
@@ -212,7 +210,7 @@ export default function SituationBar({
         <button
           onClick={toggle({ kind: "life-risk" })}
           title={`Показати ${focusLabel({ kind: "life-risk" })}`}
-          className={`flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-red-400 transition-colors hover:text-red-300 ${active({ kind: "life-risk" })}`}
+          className={`flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium tabular-nums text-red-400 transition-colors hover:text-red-300 ${active({ kind: "life-risk" })}`}
         >
           <HeartPulse className="size-3" />
           Життєзабезпечення
@@ -220,7 +218,7 @@ export default function SituationBar({
         </button>
       ) : null}
 
-      <span className="flex items-center gap-3 font-mono sm:ml-auto text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <span className="flex items-center gap-3 text-[12px] tabular-nums text-muted-foreground sm:ml-auto">
         {(Object.keys(EVENT_KINDS) as (keyof typeof EVENT_KINDS)[])
           .filter((k) => summary.byKind[k] > 0)
           .map((k) => (

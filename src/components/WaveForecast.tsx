@@ -74,7 +74,7 @@ export default function WaveForecast({ threats }: { threats: readonly Threat[] }
 
       {reach.length ? (
         <div className="mt-1.5 border-t border-border/60 pt-1.5">
-          <div className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
+          <div className="text-[11px] font-medium tabular-nums text-muted-foreground">
             за курсом далі
           </div>
           <ul className="mt-0.5 space-y-0.5">

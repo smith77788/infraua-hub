@@ -82,13 +82,13 @@ export default function CollapsiblePanel({
 
   return (
     <div
-      className={`pointer-events-auto max-h-full max-w-[240px] overflow-y-auto rounded border bg-background/92 backdrop-blur ${borderClass}`}
+      className={`glass pointer-events-auto max-h-full max-w-[260px] overflow-y-auto rounded-xl border ${borderClass}`}
     >
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={`flex w-full items-center gap-1.5 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] ${textClass}`}
+        className={`flex w-full items-center gap-1.5 px-2.5 py-2 text-[12px] font-medium tabular-nums ${textClass}`}
       >
         <span className="flex min-w-0 flex-1 items-center gap-1.5">{title}</span>
         <ChevronDown

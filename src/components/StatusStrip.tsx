@@ -67,10 +67,10 @@ export default function StatusStrip({
   weather?: WeatherNow | undefined;
 }) {
   return (
-    <div className="flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b border-border bg-card/20 px-4 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center">
+    <div className="flex h-6 shrink-0 items-center justify-start gap-4 overflow-x-auto whitespace-nowrap border-b border-border bg-card/20 px-4 text-[12px] font-medium tabular-nums text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:justify-center">
       <span className="flex items-center gap-1.5">
         <span className={`size-1.5 rounded-full ${SOURCE_STATE_TONE[worstSource]}`} />
-        джерела: {SOURCE_STATE_LABEL[worstSource]}
+        Джерела: {SOURCE_STATE_LABEL[worstSource]}
       </span>
       {showInfra ? (
         <Chip

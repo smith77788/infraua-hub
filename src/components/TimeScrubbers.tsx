@@ -39,7 +39,7 @@ export default function TimeScrubbers({ frames, onRaidCursor, onHistoryCursor }:
           <button
             key={m}
             onClick={() => switchTo(m)}
-            className={`rounded px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] transition-colors ${
+            className={`rounded px-2 py-0.5 text-[11px] font-medium tabular-nums transition-colors ${
               mode === m
                 ? "bg-primary/15 text-primary"
                 : "text-muted-foreground hover:bg-card hover:text-foreground"

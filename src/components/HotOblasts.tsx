@@ -27,7 +27,7 @@ export default function HotOblasts({ threats }: { threats: Threat[] }): React.Re
         це мовчазна втрата саме тієї області, яку людина шукала. Рядок нижче
         коштує кілька пікселів, обрізка коштує змісту.
       */}
-      <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 rounded-2xl border border-amber-500/40 bg-background/90 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-300 shadow-lg backdrop-blur">
+      <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 rounded-2xl border border-amber-500/40 bg-background/90 px-2.5 py-1 text-[12px] font-medium tabular-nums text-amber-300 shadow-lg backdrop-blur">
         <span className="text-amber-400">🔥</span>
         {top.map(([name, n], i) => (
           <span key={name} className="whitespace-nowrap">

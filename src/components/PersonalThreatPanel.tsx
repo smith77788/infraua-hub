@@ -293,7 +293,7 @@ export default function PersonalThreatPanel({
         type="button"
         onClick={() => setOpen(true)}
         title="Що загрожує саме моїй точці"
-        className="pointer-events-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-cyan-400/40 bg-background/90 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300 hover:border-cyan-400"
+        className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-cyan-400/40 px-2.5 py-2 text-[12px] font-medium tabular-nums text-cyan-300 hover:border-cyan-400"
       >
         <Crosshair className="size-3.5" />
         <span className="hidden sm:inline">Я тут</span>
@@ -312,9 +312,7 @@ export default function PersonalThreatPanel({
     <div className="pointer-events-auto max-h-full w-[250px] max-w-full overflow-y-auto rounded border border-cyan-400/40 bg-background/95 p-2.5 backdrop-blur">
       <div className="mb-2 flex items-center gap-2">
         <Crosshair className="size-3.5 text-cyan-300" />
-        <span className="flex-1 font-mono text-[10px] uppercase tracking-[0.14em] text-cyan-300">
-          Моя точка
-        </span>
+        <span className="flex-1 text-[12px] font-medium tabular-nums text-cyan-300">Моя точка</span>
         <button
           type="button"
           onClick={toggleSound}
@@ -340,7 +338,7 @@ export default function PersonalThreatPanel({
             type="button"
             onClick={locate}
             disabled={locating}
-            className="w-full rounded border border-cyan-400/40 bg-cyan-400/10 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-cyan-300 hover:border-cyan-400 disabled:opacity-50"
+            className="w-full rounded border border-cyan-400/40 bg-cyan-400/10 px-2 py-1.5 text-[12px] font-medium tabular-nums text-cyan-300 hover:border-cyan-400 disabled:opacity-50"
           >
             {locating ? "визначення…" : "Визначити за геолокацією"}
           </button>
@@ -353,7 +351,7 @@ export default function PersonalThreatPanel({
                 <button
                   type="button"
                   onClick={openLocationSettings}
-                  className="w-full rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-amber-300 hover:border-amber-400"
+                  className="w-full rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[12px] font-medium tabular-nums text-amber-300 hover:border-amber-400"
                 >
                   Відкрити налаштування доступу
                 </button>
@@ -509,7 +507,7 @@ export default function PersonalThreatPanel({
           <button
             type="button"
             onClick={() => persistPoint(null)}
-            className="w-full font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground"
+            className="w-full text-[11px] font-medium tabular-nums text-muted-foreground hover:text-foreground"
           >
             змінити точку
           </button>

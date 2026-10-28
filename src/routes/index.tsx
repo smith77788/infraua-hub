@@ -1110,7 +1110,7 @@ function Console() {
               variant={showTable ? "secondary" : "outline"}
               title="Таблиця обʼєктів"
               aria-label="Таблиця обʼєктів"
-              className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
+              className="shrink-0 px-2 text-[12px] font-medium sm:px-3"
               onClick={() => setShowTable((v) => !v)}
               aria-pressed={showTable}
             >
@@ -1122,7 +1122,7 @@ function Console() {
             variant="outline"
             title="Оновити дані"
             aria-label="Оновити дані"
-            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
+            className="shrink-0 px-2 text-[12px] font-medium sm:px-3"
             onClick={() => {
               // Оновлюємо ВСЕ активне, а не 5 обраних запитів: раніше кнопка
               // мовчки лишала пожежі, фронт, погоду тощо застарілими.
@@ -1136,7 +1136,7 @@ function Console() {
             asChild
             size="sm"
             variant="outline"
-            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
+            className="shrink-0 px-2 text-[12px] font-medium sm:px-3"
           >
             <Link to="/brief" title="Ситуаційний брифінг" aria-label="Ситуаційний брифінг">
               <FileText className="size-3" />
@@ -1148,7 +1148,7 @@ function Console() {
             variant="ghost"
             title="Як читати консоль"
             aria-label="Як читати консоль"
-            className="shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:px-3"
+            className="shrink-0 px-2 text-[12px] font-medium sm:px-3"
             onClick={() => setShowHelp(true)}
           >
             <HelpCircle className="size-3" />
@@ -1158,7 +1158,7 @@ function Console() {
             asChild
             size="sm"
             variant="ghost"
-            className="hidden shrink-0 px-2 font-mono text-[10px] uppercase tracking-[0.12em] sm:inline-flex sm:px-3"
+            className="hidden shrink-0 px-2 text-[12px] font-medium sm:inline-flex sm:px-3"
           >
             <Link to="/about" title="Про платформу" aria-label="Про платформу">
               <Info className="size-3" />
@@ -1274,7 +1274,7 @@ function Console() {
           <aside className="order-2 shrink-0 space-y-4 overflow-y-auto border-border p-4 lg:order-1 lg:w-72 lg:border-r">
             {infraDisabled ? (
               <div className="rounded border border-border bg-card p-2.5">
-                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   Шари інфраструктури
                 </p>
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
@@ -1284,7 +1284,7 @@ function Console() {
               </div>
             ) : (
               <div>
-                <label className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                <label className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   <Search className="size-3" /> Пошук обʼєкта
                 </label>
                 <Input
@@ -1299,7 +1299,7 @@ function Console() {
             {infraDisabled ? null : (
               <>
                 <div>
-                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                     Шари даних
                   </p>
                   <div className="space-y-1">
@@ -1414,13 +1414,13 @@ function Console() {
               дотик, а не поперек екрана.
             */}
             <details className="group rounded border border-border bg-card/40">
-              <summary className="cursor-pointer list-none px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <summary className="cursor-pointer list-none px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
                 <span className="inline-block transition-transform group-open:rotate-90">▸</span>{" "}
                 Джерела та дані
               </summary>
               <div className="space-y-4 px-2.5 pb-3">
                 <div>
-                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                     Вікно подій
                   </p>
                   <div className="grid grid-cols-4 gap-1">
@@ -1442,7 +1442,7 @@ function Console() {
 
                 {palanterQuery.data?.configured && !infraDisabled ? (
                   <div className="rounded border border-border bg-card p-2.5">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                       Аналітична платформа
                     </p>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -1483,7 +1483,7 @@ function Console() {
 
                 {outageId ? (
                   <div className="rounded border border-destructive/50 bg-destructive/10 p-2.5">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-destructive">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-destructive">
                       Симуляція відключення
                     </p>
                     <p className="mt-1 text-xs">
@@ -1567,8 +1567,14 @@ function Console() {
             лишалась третина екрана (знімок користувача, 23.10). Решта панелей
             — нижче, прокруткою.
           */}
-          <div className="order-1 flex min-h-[82svh] min-w-0 flex-1 flex-col lg:order-2 lg:min-h-0">
-            <main className="map-stage relative min-h-0 flex-1">
+          <div className="order-1 flex min-h-[82svh] min-w-0 flex-1 flex-col lg:order-2 lg:min-h-0 lg:overflow-y-auto">
+            {/*
+              На широкому екрані карта не стискається панелями під нею: вони
+              розгорнуті за замовчуванням, і без нижньої межі карта лишалась
+              на 398 px із 820 (заміряно 1366×820, 28.10). Панелі — нижче,
+              прокруткою колонки.
+            */}
+            <main className="map-stage relative min-h-0 flex-1 lg:min-h-[68vh]">
               <ClientOnly fallback={<MapSkeleton />}>
                 <Suspense fallback={<MapSkeleton />}>
                   <InfraMap
@@ -1671,7 +1677,7 @@ function Console() {
                 topCenter={
                   <>
                     {showFacilities && loading ? (
-                      <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-center font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                      <span className="flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                         <Loader2 className="size-3 animate-spin" /> Завантаження обʼєктів з
                         OpenStreetMap
                       </span>
@@ -1850,7 +1856,7 @@ function Console() {
           <aside className="order-3 flex shrink-0 flex-col overflow-y-auto border-border p-4 lg:w-80 lg:border-l">
             {projections.length > 0 ? (
               <section className="mb-5">
-                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
+                <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-red-300">
                   <Waypoints className="size-3" /> Коридор підльоту
                   <span
                     className="ml-auto rounded bg-red-500/15 px-1.5 py-0.5 text-red-300"
@@ -1907,7 +1913,7 @@ function Console() {
             ) : null}
             {airThreat.length > 0 ? (
               <section className="mb-5">
-                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300">
+                <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-red-300">
                   <AlertTriangle className="size-3" /> Повітряна загроза обʼєктам
                   <span className="ml-auto rounded bg-red-500/15 px-1.5 py-0.5 text-red-300">
                     {airThreat.length}
@@ -1966,7 +1972,7 @@ function Console() {
 
             {selected ? (
               <section className="mb-5">
-                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   Інспектор
                 </p>
                 <h2 className="mt-1.5 text-sm font-semibold leading-snug">{selected.name}</h2>
@@ -2025,7 +2031,7 @@ function Console() {
                 {selectedAnalytics ? (
                   <div className="mt-3 rounded border border-border bg-card p-2">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                         Індекс критичності
                       </p>
                       <BandChip band={selectedAnalytics.band} score={selectedAnalytics.score} />
@@ -2125,7 +2131,7 @@ function Console() {
               // Без шарів інфраструктури обирати нема чого: панель звала
               // «оберіть обʼєкт на карті» там, де жодного обʼєкта немає.
               <section className="mb-5">
-                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   <AlertTriangle className="size-3" /> Обʼєкти під загрозою
                 </p>
                 {atRiskList.length === 0 ? (
@@ -2182,7 +2188,7 @@ function Console() {
             </Suspense>
 
             <section className="min-h-0">
-              <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 <Activity className="size-3" /> Стрічка подій
                 {eventsQuery.isFetching ? <Loader2 className="size-3 animate-spin" /> : null}
               </p>

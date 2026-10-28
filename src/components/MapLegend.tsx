@@ -58,7 +58,7 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         </>
       }
     >
-      <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+      <p className="mb-1 text-[11px] font-medium tabular-nums text-muted-foreground">
         Повітряні цілі (за типом)
       </p>
       <div className="mb-2 grid grid-cols-1 gap-1">
@@ -113,9 +113,7 @@ export default function MapLegend({ showInfra = true }: { showInfra?: boolean })
         </p>
       </div>
 
-      <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
-        Шари
-      </p>
+      <p className="mb-1 text-[11px] font-medium tabular-nums text-muted-foreground">Шари</p>
       <div className="grid grid-cols-1 gap-1 text-[11px]">
         <div className="flex items-center gap-2">
           <Swatch color="#34d399" /> Укриття: метро, обладнані сховища, підземні паркінги

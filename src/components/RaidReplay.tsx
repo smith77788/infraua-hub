@@ -81,7 +81,7 @@ export default function RaidReplay({ frames, onCursor, hideLabel = false }: Prop
   const live = cursor === null;
   const value = cursor ?? span.to;
   const label = live
-    ? "наживо"
+    ? "Наживо"
     : new Date(cursor).toLocaleTimeString("uk-UA", {
         hour: "2-digit",
         minute: "2-digit",
@@ -97,9 +97,7 @@ export default function RaidReplay({ frames, onCursor, hideLabel = false }: Prop
       }
     >
       {hideLabel ? null : (
-        <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-primary/80">
-          Наліт
-        </span>
+        <span className="shrink-0 text-[11px] font-medium tabular-nums text-primary/80">Наліт</span>
       )}
       <button
         onClick={() => {
@@ -141,7 +139,7 @@ export default function RaidReplay({ frames, onCursor, hideLabel = false }: Prop
         className="h-1 flex-1 cursor-pointer accent-primary"
       />
 
-      <span className="w-16 shrink-0 text-right font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+      <span className="w-16 shrink-0 text-right text-[12px] font-medium tabular-nums text-muted-foreground">
         {label}
       </span>
     </div>
