@@ -202,6 +202,7 @@ import {
 import { dangerNotice } from "./lib/danger-notice";
 import { packAlertMemory, unpackAlertMemory } from "./lib/alert-memory";
 import { appendBoot, bootReport, parseBootLog, type Boot } from "./lib/boot-log";
+import { LagLog, officialStartOf } from "./lib/alert-lag";
 import { CRITICAL_TYPES, isNight } from "./lib/subscribers";
 import { observationsTooOldForAlerts } from "./lib/air";
 import {
@@ -444,6 +445,8 @@ async function health(request: Request): Promise<Response> {
       lastRunAgoSec: sweep.ranAt === null ? null : Math.round((Date.now() - sweep.ranAt) / 1000),
       lastSentAgoSec: sweep.sentAt === null ? null : Math.round((Date.now() - sweep.sentAt) / 1000),
       memoryRestored: sweep.restored,
+      // Від офіційного оголошення до того, як обхід побачив тривогу, с.
+      detectLag: alertDetectLagReport(),
     },
     /*
      * Перезапуски: скільки разів процес піднімався на ТІЙ САМІЙ збірці.
@@ -3429,6 +3432,17 @@ export function alertSweepReport(): typeof alertSweepSeen {
   return alertSweepSeen;
 }
 
+/**
+ * Затримка виявлення тривоги: від офіційного оголошення (найраніший район
+ * області в джерелі рівнів) до моменту, коли обхід побачив перехід. Див.
+ * `alert-lag.ts` — скарга «сповіщення приходять із великою затримкою» тепер
+ * має число в /api/health, а не лише відчуття.
+ */
+const alertDetectLag = new LagLog();
+export function alertDetectLagReport(): ReturnType<LagLog["summary"]> {
+  return alertDetectLag.summary();
+}
+
 /** Памʼять між перезапусками підтягується один раз на життя процесу. */
 let alertMemoryLoaded = false;
 async function hydrateAlertMemory(now: number): Promise<void> {
@@ -3451,7 +3465,7 @@ async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void>
   if (!token) return;
   // `fresh` — обхід, розбуджений зміною тривог у потоці: кеш тут зайвий, бо
   // він і є причиною, через яку ми б побачили зміну на крок пізніше.
-  const active = await fetchOfficialAlerts(opts.fresh ? 0 : undefined);
+  const active = await fetchOfficialAlerts(opts.fresh ? 0 : OFFICIAL_MAX_AGE_MS);
   if (active === null) return; // джерело мовчить — станів не вигадуємо
 
   const now = Date.now();
@@ -3476,6 +3490,9 @@ async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void>
    * саме її й бракувало, коли в місті пролунали вибухи.
    */
   const levels = await fetchAlertLevels();
+  for (const t of transitions) {
+    if (t.kind === "started") alertDetectLag.record(now, officialStartOf(levels, t.oblast));
+  }
   const levelsNow = levelMapOf(levels);
   const escalated = levelEscalations(knownLevels, levelsNow);
   knownLevels = levelsNow;
@@ -3645,6 +3662,12 @@ async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void>
         undefined,
         true,
       );
+      /*
+       * «Коли востаннє слав» — по-справжньому. Поле було в звіті з самого
+       * початку, але не записувалось ніде, тож `lastSentAgoSec: null` нічого не
+       * означало — і з нього не можна було сказати, мовчав бот чи ні (28.10).
+       */
+      if (res.ok) alertSweepSeen = { ...alertSweepSeen, sentAt: Date.now() };
       const hook = envelope.payload.stats;
       if (res.ok && hook) {
         /*
@@ -3750,6 +3773,24 @@ async function carrierSweep(threats: readonly Threat[], now: number): Promise<vo
  * `alertSweepRunning`, тож довгий обхід не громадить чергу.
  */
 const ALERT_TICK_EVERY_MS = 30 * 1000;
+
+/**
+ * Офіційний обхід — окремим, частішим кроком і під ВЛАСНИМ замком.
+ *
+ * Доти обидва обходи йшли одним кроком під одним замком:
+ * `Promise.all([personalAlertSweep(), officialAlertSweep()])`, і поки крок не
+ * закінчувався, наступні просто пропускались. Персональний обхід проходить
+ * усіх підписників і ДОСТАВЛЯЄ свої попередження, тож під час великої хвилі
+ * він довгий — і офіційна тривога чекала на нього. Заміряно на проді 28.10:
+ * проміжки між обходами 90 с, 41 с, 18 с замість обіцяних 30.
+ *
+ * Офіційний обхід дешевий (один запит і порівняння) і саме його чекають
+ * найбільше: це «оголошено тривогу». Тому — 10 с, свіжим запитом, і жодної
+ * залежності від персонального. Кеш у 8 с лишається, щоб поштовх із потоку
+ * Нептуна й крок не смикали джерело двічі поспіль.
+ */
+const OFFICIAL_TICK_EVERY_MS = 10 * 1000;
+const OFFICIAL_MAX_AGE_MS = 8 * 1000;
 /** Пауза між надсиланнями: Telegram приймає до 30 повідомлень на секунду. */
 const ALERT_SEND_GAP_MS = 40;
 /** Скільки передтривога чекає на сирену, перш ніж перестати рахуватись. */
@@ -3757,6 +3798,9 @@ const PRE_ALERT_TTL_MS = 60 * 60 * 1000;
 
 let alertTimer: ReturnType<typeof setInterval> | null = null;
 let alertSweepRunning = false;
+/** Замок офіційного обходу — свій, щоб тривога не чекала на персональний. */
+let officialSweepRunning = false;
+let officialTimer: ReturnType<typeof setInterval> | null = null;
 
 export interface AlertSweepResult {
   checked: number;
@@ -4416,19 +4460,26 @@ function startAlertScheduler(): void {
    * позаплановий обхід стартує одразу після нього. Секунда згладжування
    * збирає пачку кадрів в один обхід.
    */
+  /*
+   * Офіційний обхід: власний замок, власний крок (див. OFFICIAL_TICK_EVERY_MS).
+   *
+   * Поштовх із потоку Нептуна будить його одразу, свіжим запитом. Якщо обхід
+   * саме йде — позначаємо, і позаплановий стартує одразу після нього. Два
+   * ОФІЦІЙНІ обходи поверх один одного дали б два сповіщення про той самий
+   * перехід, тож замок лишається — але тепер лише між офіційними.
+   */
   let kickPending = false;
   let kickTimer: ReturnType<typeof setTimeout> | null = null;
-  const runKick = () => {
-    kickTimer = null;
-    if (alertSweepRunning) {
-      kickPending = true;
+  const runOfficial = (fresh: boolean) => {
+    if (officialSweepRunning) {
+      if (fresh) kickPending = true;
       return;
     }
-    alertSweepRunning = true;
-    officialAlertSweep({ fresh: true })
-      .catch((e) => console.error("event alert sweep failed", e))
+    officialSweepRunning = true;
+    officialAlertSweep({ fresh })
+      .catch((e) => console.error("official alert sweep failed", e))
       .finally(() => {
-        alertSweepRunning = false;
+        officialSweepRunning = false;
         if (kickPending) {
           kickPending = false;
           kick();
@@ -4437,28 +4488,33 @@ function startAlertScheduler(): void {
   };
   const kick = () => {
     if (kickTimer) return;
-    kickTimer = setTimeout(runKick, 1_000);
+    kickTimer = setTimeout(() => {
+      kickTimer = null;
+      runOfficial(true);
+    }, 1_000);
     (kickTimer as unknown as { unref?: () => void }).unref?.();
   };
+  /*
+   * Персональний обхід — як і раніше, кожні 30 с і під своїм замком: довгий
+   * персональний не має запускати наступний поверх себе.
+   */
   const tick = () => {
-    // Перекриття обходів дало б два сповіщення про ту саму ціль: довгий обхід
-    // не має запускати наступний поверх себе.
     if (alertSweepRunning) return;
     alertSweepRunning = true;
-    Promise.all([personalAlertSweep(), officialAlertSweep()])
-      .catch((e) => console.error("alert sweep failed", e))
+    personalAlertSweep()
+      .catch((e) => console.error("personal alert sweep failed", e))
       .finally(() => {
         alertSweepRunning = false;
-        // Зміна тривог прийшла, поки йшов крок, — дивимось на неї одразу.
-        if (kickPending) {
-          kickPending = false;
-          kick();
-        }
       });
   };
-  const warmup = setTimeout(tick, 30_000);
+  const warmup = setTimeout(() => {
+    tick();
+    runOfficial(false);
+  }, 30_000);
   (warmup as unknown as { unref?: () => void }).unref?.();
   alertTimer = setInterval(tick, ALERT_TICK_EVERY_MS);
+  officialTimer = setInterval(() => runOfficial(false), OFFICIAL_TICK_EVERY_MS);
+  (officialTimer as unknown as { unref?: () => void }).unref?.();
 
   onStreamAlerts(kick);
   (alertTimer as unknown as { unref?: () => void }).unref?.();
