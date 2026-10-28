@@ -532,3 +532,39 @@ describe("одиночна точка каналу спостереження (P
     expect(p.type).toBe("shahed");
   });
 });
+
+describe("курс — на захід, а не на північ (monikppy, 28.10.2026)", () => {
+  const AT = Date.parse("2026-10-28T21:36:00Z");
+  const msgs = [
+    {
+      at: AT - 18 * 60_000,
+      text: "⚠️ Київщина:\n2х Реактивних повз Чорнобиль",
+      channel: "monikppy",
+    },
+    {
+      at: AT - 7 * 60_000,
+      text: "⚠️ Житомирщина:\nРеактивний на Овруч\nРеактивний повз Овруч у Рівненську область",
+      channel: "monikppy",
+    },
+  ];
+
+  it("«на Овруч» у самому Овручі курсу не дає; «у Рівненську область» — дає захід", () => {
+    const tracks = buildTracks(channelFixes(msgs, gaz, [], AT));
+    const out = applyChannelTracks([], tracks);
+    const ovruch = out.find((t) => t.name === "Овруч")!;
+    expect(ovruch).toBeDefined();
+    // Рівне від Овруча — на захід-південний захід; північ (≈0°) — неправда.
+    expect(ovruch.heading!).toBeGreaterThan(220);
+    expect(ovruch.heading!).toBeLessThan(290);
+  });
+
+  it("область як напрямок: «у Рівненську область», «на Київщину», «в бік Волині» — так; заголовок, «на Полтавщині», «з Брянщини» — ні", async () => {
+    const { oblastDirectionIn } = await import("./oblast");
+    expect(oblastDirectionIn("повз Овруч у Рівненську область")).not.toBeNull();
+    expect(oblastDirectionIn("7 реактивів на Київщину")).not.toBeNull();
+    expect(oblastDirectionIn("далі в бік Волині")).not.toBeNull();
+    expect(oblastDirectionIn("Житомирщина: Реактивний на Овруч")).toBeNull();
+    expect(oblastDirectionIn("Реактивний на Полтавщині повернув")).toBeNull();
+    expect(oblastDirectionIn("Новий реактивний з Брянщини")).toBeNull();
+  });
+});

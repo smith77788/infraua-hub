@@ -2,7 +2,7 @@ import { classifyThreatType, moreSevereType, type Threat, type ThreatType } from
 import { type Gazetteer, type GeoPlace, normName } from "./gazetteer";
 import { distanceKm } from "./infra-types";
 import type { ChannelMessage } from "./jet-sightings";
-import { isRegionName, oblastAdminIn } from "./oblast";
+import { isRegionName, oblastAdminIn, oblastDirectionIn } from "./oblast";
 import { bearingDeg } from "./threat-eta";
 
 /**
@@ -231,6 +231,8 @@ interface Mention {
   line: number;
   /** Тип, названий у самому рядку («звичайний біля Ружина»), або `unknown`. */
   lineType: ThreatType;
+  /** Курс на область, а не на пункт: важливіший за «на X» у тому ж рядку. */
+  region?: boolean;
 }
 
 /**
@@ -305,6 +307,18 @@ export function mentionsOf(text: string, gaz: Gazetteer): Mention[] {
     };
     const course = firstPlaceAfter(body, COURSE_CUE, gaz);
     if (course) push("course", course, true);
+    // «повз Овруч у Рівненську область» — курс на область (див. oblastDirectionIn).
+    const toRegion = oblastDirectionIn(body);
+    if (toRegion) {
+      out.push({
+        kind: "course",
+        places: [{ name: "область", lat: toRegion.lat, lon: toRegion.lon, admin: "" }],
+        said: "область",
+        line: lineNo,
+        lineType,
+        region: true,
+      });
+    }
     const pos = firstPlaceAfter(body, POSITION_CUE, gaz);
     if (pos) {
       push("position", pos, true);
@@ -431,7 +445,9 @@ export function channelFixes(
         // там одні, і Городня поруч із ними — саме та.
         // Неоднозначні теж — усіма кандидатами: з пари «Ріпки/Олешня»
         // лишиться та, де обидві назви поруч.
-        const sameLine = lm.filter((o) => o !== x).flatMap((o) => o.places);
+        // Курс на область — не опора: центр області не каже, який із
+        // однойменних пунктів мається на увазі.
+        const sameLine = lm.filter((o) => o !== x && !o.region).flatMap((o) => o.places);
         const anchors = [
           ...mine.map((f) => f.place),
           ...positions.map((p) => p.place),
@@ -606,7 +622,13 @@ export function applyChannelTracks(
       heading = bearingDeg(prev.place, last.place);
       observed = true;
     }
-    if (tr.course && tr.course.at >= last.at) {
+    /*
+     * Курс у ту саму точку, де ціль уже є («Реактивний на Овруч» + «повз
+     * Овруч»), напрямку не має: з нульової відстані виходить 0°, і значок
+     * дивився на північ (знімок користувача, 28.10). Такий курс не чіпає
+     * курсу з треку.
+     */
+    if (tr.course && tr.course.at >= last.at && distanceKm(last.place, tr.course.place) >= 3) {
       heading = bearingDeg(last.place, tr.course.place);
       observed = false;
     }

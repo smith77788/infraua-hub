@@ -133,3 +133,36 @@ export function oblastAdminIn(line: string, gaz: Gazetteer): string | null {
   }
   return m.get(found) ?? null;
 }
+
+/**
+ * Область як НАПРЯМОК: «повз Овруч у Рівненську область», «на Київщину», «в
+ * бік Волині», «до Житомирщини». Повертає точку, куди дивиться курс, — центр
+ * області (обласний центр: для напрямку з сусідньої області цього досить).
+ *
+ * Заміряно 28.10, monikppy: «Реактивний на Овруч / Реактивний повз Овруч у
+ * Рівненську область». Без цього єдиним курсом лишалось «на Овруч» — у ту
+ * саму точку, де ціль уже була, — і значок дивився на північ, хоча ціль ішла
+ * на захід.
+ *
+ * Не напрямок: заголовок («Житомирщина: …»), місцевий відмінок («на
+ * Полтавщині») і походження («з Брянщини», «з Житомирщини»).
+ */
+export function oblastDirectionIn(line: string): { lat: number; lon: number } | null {
+  const n = normName(line);
+  for (const o of NORMALIZED) {
+    for (const s of o.norm) {
+      let k = n.indexOf(s);
+      while (k >= 0) {
+        if (k === 0 || !/[\p{L}]/u.test(n[k - 1]!)) {
+          const word = n.slice(k).split(" ")[0]!;
+          const before = n.slice(Math.max(0, k - 14), k);
+          const toward = /(?:^|\s)(?:до|в бик|у бик|в напрямку|у напрямку) $/.test(before);
+          const into = /(?:^|\s)(?:у|в|на) $/.test(before) && /у$/.test(word);
+          if (toward || into) return { lat: o.lat, lon: o.lon };
+        }
+        k = n.indexOf(s, k + 1);
+      }
+    }
+  }
+  return null;
+}
