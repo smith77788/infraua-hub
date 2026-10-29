@@ -445,6 +445,8 @@ async function health(request: Request): Promise<Response> {
       lastRunAgoSec: sweep.ranAt === null ? null : Math.round((Date.now() - sweep.ranAt) / 1000),
       lastSentAgoSec: sweep.sentAt === null ? null : Math.round((Date.now() - sweep.sentAt) / 1000),
       memoryRestored: sweep.restored,
+      // Облік доставок у пам'яті процесу — з останнього перезапуску, до доби.
+      deliveries: deliveryReport(),
       // Від офіційного оголошення до того, як обхід побачив тривогу, с.
       detectLag: alertDetectLagReport(),
     },
@@ -618,6 +620,42 @@ const MAX_RETRY_AFTER_S = 30;
  * ній. Тому тут ми лише повертаємо `retry_after` нагору — рішення ухвалює той,
  * хто бачить чергу.
  */
+/*
+ * Облік доставок — для відповіді на «бот мовчить»: скільки повідомлень і в
+ * скільки чатів пішло за добу, коли востаннє — власнику, і скільки відмов.
+ * Без цього 29.10 не було чим відповісти, чи бот мовчав, чи мовчав лише
+ * для однієї людини. Номерів чатів тут немає — лише лічильники.
+ */
+const DELIVERY_WINDOW_MS = 24 * 60 * 60_000;
+const deliveries: { at: number; chat: number; ok: boolean; status: number }[] = [];
+function noteDelivery(chat: number, ok: boolean, status: number): void {
+  const now = Date.now();
+  deliveries.push({ at: now, chat, ok, status });
+  while (deliveries.length && now - deliveries[0]!.at > DELIVERY_WINDOW_MS) deliveries.shift();
+}
+function deliveryReport(): {
+  sent24h: number;
+  chats24h: number;
+  failed24h: number;
+  failedByStatus: Record<string, number>;
+  ownerLastSentAgoSec: number | null;
+} {
+  const now = Date.now();
+  const recent = deliveries.filter((d) => now - d.at <= DELIVERY_WINDOW_MS);
+  const ok = recent.filter((d) => d.ok);
+  const owner = Number(process.env["TELEGRAM_OWNER_ID"]);
+  const ownerLast = ok.filter((d) => d.chat === owner).at(-1);
+  const failedByStatus: Record<string, number> = {};
+  for (const d of recent) if (!d.ok) failedByStatus[d.status] = (failedByStatus[d.status] ?? 0) + 1;
+  return {
+    sent24h: ok.length,
+    chats24h: new Set(ok.map((d) => d.chat)).size,
+    failed24h: recent.length - ok.length,
+    failedByStatus,
+    ownerLastSentAgoSec: ownerLast ? Math.round((now - ownerLast.at) / 1000) : null,
+  };
+}
+
 async function telegramSend(
   token: string,
   chatId: number,
@@ -660,6 +698,7 @@ async function telegramSend(
         } catch {
           /* тіло не розібралось — id немає, і це не поразка відправки */
         }
+        noteDelivery(chatId, true, response.status);
         return {
           ok: true,
           status: response.status,
@@ -668,6 +707,7 @@ async function telegramSend(
         };
       }
       const raw = await response.text();
+      noteDelivery(chatId, false, response.status);
       console.error("telegram sendMessage failed", response.status, raw);
       return { ok: false, status: response.status, retryAfter: parseRetryAfter(raw) };
     } catch (err) {

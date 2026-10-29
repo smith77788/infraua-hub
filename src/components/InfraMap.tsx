@@ -61,7 +61,8 @@ import { useThreatMotion } from "./use-threat-motion";
 import { TYPE_STYLE } from "@/lib/threat-glyphs";
 import type { LaunchView } from "@/lib/infra.functions";
 import { advance } from "@/lib/dead-reckoning";
-import { bearingDeg } from "@/lib/threat-eta";
+import { bearingDeg, speedRangeFor } from "@/lib/threat-eta";
+import { cleanTrail, trailHeading } from "@/lib/trail-clean";
 import { type Freshness } from "@/lib/freshness";
 import { markerFreshness } from "@/lib/marker-freshness";
 
@@ -269,6 +270,14 @@ const ROTATABLE: Partial<Record<ThreatType, boolean>> = {
  */
 const UNKNOWN_NO_COURSE = '<path d="M12 4 L19 12 L12 20 L5 12 Z"/>';
 /**
+ * Будь-яка ціль «з носом» без курсу — круг кольору типу (тип — у підписі
+ * поруч, «РШ», «Ш»). Силует носом угору без курсу казав «летить на північ»:
+ * знімок користувача 29.10, Сумщина — трек є, курсу від джерела нема,
+ * значок дивився вгору.
+ */
+const NO_COURSE =
+  '<circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.2" fill="#0a0e14"/>';
+/**
  * Значок цілі: тип, свіжість, курс. Кількості повідомлень тут немає навмисно.
  *
  * Лічильник висів просто на позначці й читався як щось про саму ціль — скільки
@@ -287,7 +296,12 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
   const cached = threatIconCache.get(key);
   if (cached) return cached;
   const { color, code } = TYPE_STYLE[type];
-  const glyph = type === "unknown" && rot == null ? UNKNOWN_NO_COURSE : TYPE_STYLE[type].glyph;
+  const glyph =
+    rot == null && ROTATABLE[type]
+      ? type === "unknown"
+        ? UNKNOWN_NO_COURSE
+        : NO_COURSE
+      : TYPE_STYLE[type].glyph;
   const { opacity, size } = FRESH_TONE[fresh];
   const g = Math.round(size * 0.74);
   const pulse = fresh === "fresh" ? " air-tgt--pulse" : "";
@@ -787,8 +801,19 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
         // за шахед (див. marker-freshness.ts).
         const fresh = markerFreshness(seen, type);
         const style = TYPE_STYLE[type];
-        const hasCourse = typeof t.heading === "number" && Number.isFinite(t.heading);
-        const vecEnd = hasCourse ? destPoint(t.lat, t.lon, t.heading as number, 16) : null;
+        /*
+         * Трек — очищений (`trail-clean`): без тремтіння A→B→A і стрибків,
+         * швидших за тип цілі. Курс значка — за ним: це те, куди ціль справді
+         * рухалась. Курс джерела — лише коли треку нема. Заміряно 29.10:
+         * Кам'янське — трек на захід (279°), а курс джерела 114° (на схід);
+         * Нова Слобода — курсу джерело не дало зовсім, і значок дивився вгору.
+         */
+        const cleaned = cleanTrail(t.trail ?? [], speedRangeFor(t.type, null)[1] * 1.5);
+        const courseDeg =
+          trailHeading(cleaned) ??
+          (typeof t.heading === "number" && Number.isFinite(t.heading) ? t.heading : null);
+        const hasCourse = courseDeg !== null;
+        const vecEnd = hasCourse ? destPoint(t.lat, t.lon, courseDeg, 16) : null;
         // Спостережений трек (де ціль реально була) — СУЦІЛЬНА лінія; вектор
         // курсу вперед — ПУНКТИР (екстраполяція, а не факт). Це прибирає
         // хибну паніку: пунктир прямо каже «це припущення, не трек».
@@ -801,7 +826,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
          * потрібна. Накопичене лишається як доповнення: сесія триває довше за
          * вікно, яке віддає джерело.
          */
-        const fromSource = (t.trail ?? []).map((p) => [p.lat, p.lon] as [number, number]);
+        const fromSource = cleaned.map((p) => [p.lat, p.lon] as [number, number]);
         const accumulated = trackLatLngs(historyRef.current.get(t.id));
         const observed = fromSource.length >= 2 ? fromSource : accumulated;
 
@@ -843,7 +868,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             ? driftSector({
                 lat: t.fixLat,
                 lon: t.fixLon,
-                courseDeg: t.heading as number,
+                courseDeg: courseDeg as number,
                 spreadDeg: spreadFor(courseObserved || t.projBasis === "measured"),
                 driftKm: Math.max(projKm, nowRadiusKm(t, Date.now()).driftKm),
                 statedKm: displayRadiusKm(q),
@@ -936,7 +961,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             ) : null}
             <Marker
               position={[t.lat, t.lon]}
-              icon={threatIcon(type, fresh, hasCourse ? (t.heading as number) : null)}
+              icon={threatIcon(type, fresh, courseDeg)}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "aging" ? 500 : 0}
               eventHandlers={{
                 popupopen: () => setSelected(t.id),
@@ -961,7 +986,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                   <p className="opacity-80">{t.name}</p>
                   {hasCourse ? (
                     <p className="opacity-70">
-                      Курс: {compass(t.heading as number)} ({Math.round(t.heading as number)}°)
+                      Курс: {compass(courseDeg as number)} ({Math.round(courseDeg as number)}°)
                       {courseObserved ? "" : " · припущений джерелом"}
                     </p>
                   ) : null}
