@@ -468,6 +468,12 @@ async function health(request: Request): Promise<Response> {
     // з каналів) поруч із довідковою: так видно, чи довідка бреше. Див.
     // `speed-ledger`.
     measuredSpeed: speedLedger.summary(Date.now()),
+    typeMemory: {
+      tracks: (await import("./lib/infra.functions")).typeMemoryState().length,
+      restoredOnStart: typeMemoryStats.restored,
+      lastCleanupAt: typeMemoryStats.lastCleanupAt,
+      lastCleanupRemoved: typeMemoryStats.lastCleanupRemoved,
+    },
     unknownSources: unknownChannelReport(),
     // Без проби запису: /api/health смикають часто, а проба — це файлова
     // операція на кожен виклик. Глибша діагностика вже є в /api/subscribers/stats.
@@ -989,12 +995,64 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   // ЄДИНЕ джерело з застосунком: той самий кеш, що читає карта (getThreats) і
   // публічний віджет. Так канал і мапа бачать один знімок, а не кожен свій.
   const { neptunThreatsCached } = await import("./lib/infra.functions");
+  // Памʼять підтипів — ДО першого кадру: інакше після деплою реактивні
+  // малювались би шахедами, доки канали не назвуть їх знову.
+  await hydrateTypeMemory();
   const threats = await neptunThreatsCached(maxAgeMs);
   // Трек росте з кожного опитування — оновлюємо історію тут, на кожному тику
   // каналу; пропущене опитування це розрив у лінії.
   rememberTracks(threats, Date.now());
   await sampleRaidHistory(threats, Date.now());
+  await saveTypeMemory(Date.now());
   return threats;
+}
+
+/*
+ * Памʼять підтипів (реактивний, «Бандероль») — на томі, див. `type-memory`.
+ * Пишемо не частіше за хвилину; раз на добу (зміна київської дати) прибираємо
+ * відлетілі треки й переписуємо файл, щоб він не накопичував учорашні нальоти.
+ */
+const TYPE_MEMORY_MARKER = "type-memory";
+const TYPE_MEMORY_SAVE_EVERY_MS = 60_000;
+let typeMemoryLoaded = false;
+let typeMemorySavedAt = 0;
+const typeMemoryStats: {
+  restored: number;
+  cleanupDay: string;
+  lastCleanupAt: string | null;
+  lastCleanupRemoved: number;
+} = { restored: 0, cleanupDay: kyivDate(new Date()), lastCleanupAt: null, lastCleanupRemoved: 0 };
+
+async function hydrateTypeMemory(): Promise<void> {
+  if (typeMemoryLoaded) return;
+  typeMemoryLoaded = true;
+  const raw = await readMarker(TYPE_MEMORY_MARKER);
+  if (!raw) return;
+  try {
+    const { restoreTypeMemory } = await import("./lib/infra.functions");
+    typeMemoryStats.restored = restoreTypeMemory(JSON.parse(raw), Date.now());
+  } catch {
+    // Битий файл — порожня памʼять: тип знову дадуть згадки каналів.
+  }
+}
+
+// Відновлюємо одразу при старті, не чекаючи першого обходу.
+void hydrateTypeMemory();
+
+async function saveTypeMemory(now: number): Promise<void> {
+  const day = kyivDate(new Date(now));
+  const daily = day !== typeMemoryStats.cleanupDay;
+  if (!daily && now - typeMemorySavedAt < TYPE_MEMORY_SAVE_EVERY_MS) return;
+  typeMemorySavedAt = now;
+  const { cleanupTypeMemory, typeMemoryState } = await import("./lib/infra.functions");
+  if (daily) {
+    const { removed, kept } = cleanupTypeMemory(now);
+    typeMemoryStats.cleanupDay = day;
+    typeMemoryStats.lastCleanupAt = new Date(now).toISOString();
+    typeMemoryStats.lastCleanupRemoved = removed;
+    console.log(`памʼять підтипів: щоденне прибирання — викинуто ${removed}, лишилось ${kept}`);
+  }
+  await writeMarker(TYPE_MEMORY_MARKER, JSON.stringify(typeMemoryState(now)));
 }
 
 /*

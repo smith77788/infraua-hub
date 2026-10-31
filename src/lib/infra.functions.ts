@@ -856,6 +856,25 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
 /** Підтип, раз названий каналами, тримається до кінця польоту треку. */
 const typeMemory = new TypeMemory();
 
+/** Стан памʼяті підтипів для тому — зберігає сервер (`server.ts`). */
+export function typeMemoryState(now = Date.now()): ReturnType<TypeMemory["toState"]> {
+  return typeMemory.toState(now);
+}
+
+/** Відновити памʼять підтипів із тому; викликається раз, до першого кадру. */
+export function restoreTypeMemory(raw: unknown, now = Date.now()): number {
+  // Злиттям, а не заміною: карта могла встигнути записати кадр до відновлення.
+  const restored = TypeMemory.fromState(raw, now);
+  typeMemory.absorb(restored);
+  return restored.size;
+}
+
+/** Щоденне прибирання памʼяті підтипів; повертає, скільки треків викинуто. */
+export function cleanupTypeMemory(now = Date.now()): { removed: number; kept: number } {
+  const removed = typeMemory.cleanup(now);
+  return { removed, kept: typeMemory.size };
+}
+
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
   const now = Date.now();
   const raw = await neptunThreatsRaw(maxAgeMs);

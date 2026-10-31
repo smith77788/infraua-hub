@@ -27,6 +27,10 @@ import type { Threat, ThreatType } from "./air";
  * - `TTL_MS` від ОСТАННЬОГО кадру, у якому ціль мала цей тип: довше за
  *   найдовший політ, щоб не загубити тип посеред маршруту, але трек, що зник
  *   з неба, не тягне памʼять у наступну ніч.
+ * - Памʼять — на томі (`toState`/`fromState`): без цього кожен деплой посеред
+ *   нальоту робив усі реактивні шахедами (заміряно 31.10 22:32 UTC: перший
+ *   кадр після рестарту — 48 із 48 шахеди). Раз на добу сервер прибирає
+ *   відлетілі треки й переписує файл (`cleanup`).
  */
 
 export const TTL_MS = 3 * 60 * 60_000;
@@ -61,6 +65,52 @@ export class TypeMemory {
 
   get size(): number {
     return this.byId.size;
+  }
+
+  /**
+   * Щоденне прибирання: викинути треки, що відлетіли (старші за `TTL_MS`).
+   * Повертає, скільки викинуто, — для журналу й `/api/health`.
+   */
+  cleanup(now: number): number {
+    const before = this.byId.size;
+    this.prune(now);
+    return before - this.byId.size;
+  }
+
+  /** Стан для тому: [id, тип, коли востаннє бачили з цим типом]. */
+  toState(now: number): [string, ThreatType, number][] {
+    this.prune(now);
+    return [...this.byId].map(([id, m]) => [id, m.type, m.at]);
+  }
+
+  /**
+   * Тотальна: битий чи чужий файл — порожня памʼять, а не виняток. Записи,
+   * старші за `TTL_MS`, не відновлюємо: деплой після паузи не має повертати
+   * учорашній наліт.
+   */
+  static fromState(raw: unknown, now: number): TypeMemory {
+    const m = new TypeMemory();
+    if (!Array.isArray(raw)) return m;
+    for (const item of raw) {
+      if (!Array.isArray(item)) continue;
+      const [id, type, at] = item as unknown[];
+      if (typeof id !== "string" || typeof at !== "number" || !Number.isFinite(at)) continue;
+      if (typeof type !== "string" || !REMEMBERED[type as ThreatType]) continue;
+      if (at > now || now - at > TTL_MS) continue;
+      m.byId.set(id, { type: type as ThreatType, at });
+    }
+    return m;
+  }
+
+  /**
+   * Злити з іншою памʼяттю: на кожен трек лишається свіжіший запис. Потрібне
+   * при відновленні з тому, якщо карта встигла записати кадр раніше.
+   */
+  absorb(other: TypeMemory): void {
+    for (const [id, m] of other.byId) {
+      const mine = this.byId.get(id);
+      if (!mine || mine.at < m.at) this.byId.set(id, m);
+    }
   }
 
   private prune(now: number): void {

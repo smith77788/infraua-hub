@@ -57,3 +57,43 @@ describe("TypeMemory — реактивний лишається реактив�
     expect(m.apply([t("zven", "shahed")], T0 + TTL_MS + 60_000)[0]!.type).toBe("shahed");
   });
 });
+
+describe("TypeMemory — на томі й щоденне прибирання", () => {
+  it("переживає перезапуск: toState → fromState", () => {
+    const m = new TypeMemory();
+    m.note([t("zven", "reactive"), t("b", "banderol")], T0);
+    const back = TypeMemory.fromState(JSON.parse(JSON.stringify(m.toState(T0))), T0 + 60_000);
+    expect(back.apply([t("zven", "shahed")], T0 + 60_000)[0]!.type).toBe("reactive");
+    expect(back.apply([t("b", "shahed")], T0 + 60_000)[0]!.type).toBe("banderol");
+  });
+
+  it("не відновлює вчорашнє, бите й чуже", () => {
+    const raw = [
+      ["old", "reactive", T0 - TTL_MS - 60_000],
+      ["bad", "reactive", "вчора"],
+      ["cruise", "cruise", T0],
+      "сміття",
+      ["ok", "reactive", T0 - 60_000],
+    ];
+    const m = TypeMemory.fromState(raw, T0);
+    expect(m.size).toBe(1);
+    expect(TypeMemory.fromState("не масив", T0).size).toBe(0);
+  });
+
+  it("щоденне прибирання викидає відлетілі треки й лишає ті, що летять", () => {
+    const m = new TypeMemory();
+    m.note([t("gone", "reactive")], T0);
+    m.note([t("flying", "reactive")], T0 + TTL_MS);
+    expect(m.cleanup(T0 + TTL_MS + 60_000)).toBe(1);
+    expect(m.size).toBe(1);
+  });
+
+  it("відновлення зливається з тим, що карта встигла записати", () => {
+    const live = new TypeMemory();
+    live.note([t("new", "reactive")], T0 + 60_000);
+    const disk = new TypeMemory();
+    disk.note([t("old", "banderol")], T0);
+    live.absorb(TypeMemory.fromState(disk.toState(T0), T0 + 60_000));
+    expect(live.size).toBe(2);
+  });
+});
