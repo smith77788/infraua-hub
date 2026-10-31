@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { RU_LAUNCH_SOURCES, roleOfSource, TG_CHANNELS } from "./osint-sources";
+import { TypeMemory } from "./type-memory";
 
 const RU_CHANNELS = new Set(RU_LAUNCH_SOURCES.map((s) => s.channel));
 const RU_HOME = new Map(RU_LAUNCH_SOURCES.map((s) => [s.channel, s.home]));
@@ -839,13 +840,21 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
   // Підтип — лише з українських каналів спостереження.
   const ua = jetMessages.filter((m) => !RU_CHANNELS.has(m.channel ?? ""));
   // Після уточнення типу — бо неправдоподібність швидкості залежить від нього.
+  // Памʼять підтипу — до перевірки швидкості: реактивному дозволено летіти
+  // втричі швидше за шахед. Див. `type-memory.ts`.
   return dropImplausibleSpeed(
-    applyBanderolType(
-      applyJetType(threats, jetMentions(ua, now)),
-      typeMentions(ua, now, "banderol"),
+    typeMemory.apply(
+      applyBanderolType(
+        applyJetType(threats, jetMentions(ua, now)),
+        typeMentions(ua, now, "banderol"),
+      ),
+      now,
     ),
   );
 }
+
+/** Підтип, раз названий каналами, тримається до кінця польоту треку. */
+const typeMemory = new TypeMemory();
 
 export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> {
   const now = Date.now();
@@ -857,7 +866,10 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
    * Тип потрібен уже тут (реактивний летить утричі далі), тому після
    * `withJetTypes`. Див. `successor-chain.ts`.
    */
-  return withChannelTracks(mergeSuccessorChains(withJetTypes(raw, now)), now);
+  const merged = mergeSuccessorChains(withJetTypes(raw, now));
+  // Голова ланцюжка успадкувала тип попередників — запамʼятовуємо її id.
+  typeMemory.note(merged, now);
+  return withChannelTracks(merged, now);
 }
 
 /** Скільки цілей дав САМ Нептун в останньому знімку — до треків каналів. */

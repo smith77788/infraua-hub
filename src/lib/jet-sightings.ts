@@ -141,7 +141,7 @@ function mentions(text: string, stem: string): boolean {
      */
     const word = text.slice(at).split(NOT_WORD)[0] ?? "";
     const region =
-      /щин|^волин/.test(word) ||
+      /щин|ччин|^волин/.test(word) ||
       (/^\s+обл/.test(text.slice(at + word.length)) && /ськ(?:а|ій|у|ої)$/.test(word));
     if (startsWord && !region) return true;
     at = text.indexOf(stem, at + 1);

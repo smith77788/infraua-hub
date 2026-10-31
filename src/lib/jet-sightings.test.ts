@@ -134,7 +134,13 @@ describe("тип — з рядка, а не з усього допису (про
       NOW,
     );
     expect(applyJetType([drone("Харків")], region)[0]!.type).toBe("shahed");
-    expect(applyJetType([drone("Полтава")], region)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Полтава")], region)[0]!.type).toBe("shahed"); // «Вінниччина» — «ччина», не «щина».
+    const vin = jetMentions(
+      parseChannelPage(page([{ at: NOW - 60_000, text: "Вінниччина: реактивний на Тростянець" }])),
+      NOW,
+    );
+    expect(applyJetType([drone("Вінниця")], vin)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Тростянець")], vin)[0]!.type).toBe("reactive");
   });
 
   it("а сам пункт поруч з областю — знаходиться", () => {
