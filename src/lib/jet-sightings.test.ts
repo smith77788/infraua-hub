@@ -102,6 +102,52 @@ describe("applyJetType — реактивний за свіжою згадкою
   });
 });
 
+describe("тип — з рядка, а не з усього допису (прод, 31.10)", () => {
+  // Агрегатори пишуть списком; «реактивний» в одному рядку не робить
+  // реактивними пункти з інших рядків. Так 62 з 80 цілей ставали реактивними.
+  const list = jetMentions(
+    parseChannelPage(
+      page([
+        {
+          at: NOW - 60_000,
+          text: "🏍 Реактивний БпЛА на Любеч<br/>🛵 БпЛА на Куликівку<br/>🛵 БпЛА на Олевськ",
+        },
+      ]),
+    ),
+    NOW,
+  );
+
+  it("реактивним стає лише пункт із рядка про реактивний", () => {
+    expect(applyJetType([drone("Любеч")], list)[0]!.type).toBe("reactive");
+    expect(applyJetType([drone("Куликівка")], list)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Олевськ")], list)[0]!.type).toBe("shahed");
+  });
+
+  it("назва області — не пункт: «на Харківщині» не робить реактивним Харків", () => {
+    const region = jetMentions(
+      parseChannelPage(
+        page([
+          { at: NOW - 60_000, text: "🏍 Реактивні БпЛА на Харківщині" },
+          { at: NOW - 60_000, text: "🏍 Реактивний БпЛА, Полтавська область" },
+        ]),
+      ),
+      NOW,
+    );
+    expect(applyJetType([drone("Харків")], region)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Полтава")], region)[0]!.type).toBe("shahed");
+  });
+
+  it("а сам пункт поруч з областю — знаходиться", () => {
+    const both = jetMentions(
+      parseChannelPage(
+        page([{ at: NOW - 60_000, text: "🏍 Харківщина: реактивний БпЛА курсом на Харків" }]),
+      ),
+      NOW,
+    );
+    expect(applyJetType([drone("Харків")], both)[0]!.type).toBe("reactive");
+  });
+});
+
 describe("FPV — окремий тип, а не «шахед»", () => {
   it("текст «FPV-дрон» класифікується як FPV, хоч і містить слово «дрон»", async () => {
     const { classifyThreatType } = await import("./air");

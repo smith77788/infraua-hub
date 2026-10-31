@@ -262,10 +262,13 @@ export function summarize(
   events: InfraEvent[],
   alarms = 0,
   underAlarm = 0,
+  /** Обʼєкти поруч із повітряними цілями — теж під загрозою. */
+  airRiskIds: ReadonlySet<string> = new Set(),
 ): SituationSummary {
   const byId = new Map(facilities.map((f) => [f.id, f]));
+  const riskIds = new Set([...riskMap.keys(), ...airRiskIds]);
   let lifeAtRisk = 0;
-  for (const id of riskMap.keys()) {
+  for (const id of riskIds) {
     const f = byId.get(id);
     if (f && CATEGORIES[f.category].tier === "life") lifeAtRisk++;
   }
@@ -280,7 +283,7 @@ export function summarize(
   };
   for (const e of events) byKind[e.kind]++;
 
-  const atRisk = riskMap.size;
+  const atRisk = riskIds.size;
   /*
    * Рівень має означати стан інфраструктури, а не сам факт тривоги.
    *

@@ -690,27 +690,6 @@ function Console() {
   );
   const byId = useMemo(() => new Map(allFacilities.map((f) => [f.id, f])), [allFacilities]);
 
-  const riskIds = useMemo(
-    () => new Set(facilitiesAtRisk(allFacilities, events).keys()),
-    [allFacilities, events],
-  );
-  const riskMap = useMemo(() => facilitiesAtRisk(allFacilities, events), [allFacilities, events]);
-
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const byFilters = allFacilities.filter(
-      (f) =>
-        active.has(f.category) &&
-        (!q || f.name.toLowerCase().includes(q) || (f.operator ?? "").toLowerCase().includes(q)),
-    );
-    return applyFocus(byFilters, focus, { riskIds, alarmIds, regionOf });
-  }, [allFacilities, active, query, focus, riskIds, alarmIds, regionOf]);
-
-  const summary = useMemo(
-    () => summarize(allFacilities, riskMap, events, activeAlarms, alarmIds.size),
-    [allFacilities, riskMap, events, activeAlarms, alarmIds],
-  );
-
   /*
    * Повітряна загроза обʼєктам — порт шару кореляції з тактичного радара.
    * Курс цілі відкрите джерело не віддає, тож звʼязок рахується за близькістю
@@ -725,6 +704,32 @@ function Console() {
     () => correlateAirThreats(allFacilities, threats, { alarmIds, roleOf: roleOfSource }),
     [allFacilities, threats, alarmIds],
   );
+  const riskMap = useMemo(() => facilitiesAtRisk(allFacilities, events), [allFacilities, events]);
+  /*
+   * «Під загрозою» — обʼєкти біля наземної події АБО біля повітряної цілі.
+   *
+   * Рахувалось лише перше: під час нальоту з цілями над усією країною чип
+   * показував «Під загрозою 0» (знімок користувача, 31.10), бо пожеж і повеней
+   * поруч не було. Для чергового обидва — одна відповідь на «що з обʼєктами».
+   */
+  const airRiskIds = useMemo(() => new Set(airThreat.map((c) => c.facility.id)), [airThreat]);
+  const riskIds = useMemo(() => new Set([...riskMap.keys(), ...airRiskIds]), [riskMap, airRiskIds]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const byFilters = allFacilities.filter(
+      (f) =>
+        active.has(f.category) &&
+        (!q || f.name.toLowerCase().includes(q) || (f.operator ?? "").toLowerCase().includes(q)),
+    );
+    return applyFocus(byFilters, focus, { riskIds, alarmIds, regionOf });
+  }, [allFacilities, active, query, focus, riskIds, alarmIds, regionOf]);
+
+  const summary = useMemo(
+    () => summarize(allFacilities, riskMap, events, activeAlarms, alarmIds.size, airRiskIds),
+    [allFacilities, riskMap, events, activeAlarms, alarmIds, airRiskIds],
+  );
+
   const airThreatSummary = useMemo(() => summarizeAirThreat(airThreat), [airThreat]);
   const threatGraph = useMemo(() => buildThreatGraph(airThreat, threats), [airThreat, threats]);
 

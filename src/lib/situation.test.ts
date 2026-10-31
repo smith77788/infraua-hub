@@ -78,3 +78,29 @@ describe("summarize — від чого залежить рівень", () => {
     expect(s.eventCount).toBe(0);
   });
 });
+
+/*
+ * Знімок користувача 31.10: цілі над усією країною, а «Під загрозою 0» — бо
+ * рахувались лише обʼєкти біля наземних подій.
+ */
+describe("summarize — повітряна загроза теж «під загрозою»", () => {
+  const facilities = [facility("h", "hospital"), facility("s", "substation")];
+  const e = event("fire-1");
+
+  it("обʼєкт біля повітряної цілі рахується без жодної наземної події", () => {
+    const s = summarize(facilities, new Map(), [], 0, 0, new Set(["s"]));
+    expect(s.atRisk).toBe(1);
+    expect(s.level).toBe("elevated");
+  });
+
+  it("обʼєкт і біля події, і біля цілі — один, а не два", () => {
+    const s = summarize(facilities, risk(["s"], e), [e], 0, 0, new Set(["s"]));
+    expect(s.atRisk).toBe(1);
+  });
+
+  it("лікарня під повітряною загрозою — життєзабезпечення під загрозою", () => {
+    const s = summarize(facilities, new Map(), [], 0, 0, new Set(["h"]));
+    expect(s.lifeAtRisk).toBe(1);
+    expect(s.level).toBe("critical");
+  });
+});

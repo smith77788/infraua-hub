@@ -113,18 +113,40 @@ export function typeMentions(
   now: number,
   type: ThreatType,
 ): string[] {
+  /*
+   * Рядок, а не весь допис. Агрегатори пишуть списками — «Реактивний на
+   * Любеч / БПЛА на Куликівку», — і коли тип брався з усього допису, слово
+   * «реактивний» в одному рядку робило реактивними всі пункти сусідніх рядків.
+   * Заміряно на проді 31.10 ~15:40 UTC: 41 такий допис зробив реактивними 62
+   * з 80 цілей Нептуна (у самого Нептуна підтипу не було в жодної).
+   */
   return messages
     .filter((m) => m.at <= now && now - m.at <= JET_WINDOW_MS)
-    .filter((m) => classifyThreatType(m.text) === type)
-    .map((m) => norm(m.text));
+    .flatMap((m) => m.text.split(/\n|•|;|\|/))
+    .filter((line) => classifyThreatType(line) === type)
+    .map((line) => norm(line));
 }
+
+const NOT_WORD = new RegExp(`[^${LETTER}'ʼ’-]`);
 
 function mentions(text: string, stem: string): boolean {
   // Назва — з початку слова: «Ірпінь» не має знаходитись усередині іншого слова.
-  const at = text.indexOf(stem);
-  if (at < 0) return false;
-  if (at === 0) return true;
-  return !new RegExp(`[${LETTER}]`).test(text[at - 1]!);
+  let at = text.indexOf(stem);
+  while (at >= 0) {
+    const startsWord = at === 0 || !new RegExp(`[${LETTER}]`).test(text[at - 1]!);
+    /*
+     * І не назва області: «на Харківщині», «Полтавська область» — це край, а
+     * не пункт. Основа «харк» інакше робила реактивним Харків від кожної
+     * згадки Харківщини.
+     */
+    const word = text.slice(at).split(NOT_WORD)[0] ?? "";
+    const region =
+      /щин|^волин/.test(word) ||
+      (/^\s+обл/.test(text.slice(at + word.length)) && /ськ(?:а|ій|у|ої)$/.test(word));
+    if (startsWord && !region) return true;
+    at = text.indexOf(stem, at + 1);
+  }
+  return false;
 }
 
 /**
