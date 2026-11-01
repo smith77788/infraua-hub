@@ -62,7 +62,7 @@ import {
 import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelters";
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
-import { INFRA_DISABLED_NOTICE, infraLayersEnabled } from "./infra-gate";
+import { infraLayersEnabled, publicOnly } from "./infra-gate";
 import {
   distanceKm,
   UA_BBOX,
@@ -360,31 +360,22 @@ interface FacilitiesPayload {
   truncatedCategories: CategoryId[];
 }
 
-/**
- * Порожній набір із названою причиною.
- *
- * Не виняток і не HTTP 403: консоль малює ту саму карту без шару обʼєктів, а
- * відмова з помилкою зробила б із навмисного рішення аварію, яку хтось піде
- * лагодити.
- */
-const DISABLED_FACILITIES = (): FacilitiesPayload => ({
-  facilities: [],
-  fetchedAt: new Date().toISOString(),
-  degraded: false,
-  source: "disabled",
-  disabled: true,
-  notice: INFRA_DISABLED_NOTICE,
-  truncatedCategories: [],
-});
-
 export const getFacilities = createServerFn({ method: "GET" })
   .validator((input: unknown): { initData?: string } => {
     const initData = (input as { initData?: unknown } | undefined)?.initData;
     return typeof initData === "string" && initData ? { initData } : {};
   })
   .handler(async ({ data }): Promise<FacilitiesPayload> => {
-    if (!(await infraLayersEnabled(data.initData))) return DISABLED_FACILITIES();
+    const full = await infraLayersEnabled(data.initData);
+    const payload = await loadAllFacilities();
+    // Без перемикача — лише публічні категорії (див. `PUBLIC_CATEGORIES`).
+    return full
+      ? payload
+      : { ...payload, facilities: publicOnly(payload.facilities), truncatedCategories: [] };
+  });
 
+async function loadAllFacilities(): Promise<FacilitiesPayload> {
+  {
     const cached = readCache<FacilitiesPayload>("facilities", 30 * 60 * 1000);
     if (cached) return cached;
 
@@ -444,7 +435,8 @@ export const getFacilities = createServerFn({ method: "GET" })
     } finally {
       clearTimeout(timer);
     }
-  });
+  }
+}
 
 interface EonetEvent {
   id: string;
@@ -2076,8 +2068,18 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
     return typeof initData === "string" && initData ? { have, initData } : { have };
   })
   .handler(async ({ data }): Promise<FacilityTilesPayload> => {
-    if (!(await infraLayersEnabled(data.initData)))
-      return { tiles: [], tilesTotal: 0, disabled: true };
+    const full = await infraLayersEnabled(data.initData);
+    const res = await loadFacilityTiles(data.have);
+    if (full) return res;
+    return {
+      ...res,
+      tiles: res.tiles.map((t) => ({ key: t.key, facilities: publicOnly(t.facilities) })),
+    };
+  });
+
+async function loadFacilityTiles(have: string[]): Promise<FacilityTilesPayload> {
+  {
+    const data = { have };
 
     const all = grid();
     const pending = pendingTiles(all, data.have, TILES_PER_CALL);
@@ -2120,7 +2122,8 @@ export const getFacilityTiles = createServerFn({ method: "GET" })
     }
 
     return { tiles: fetched, tilesTotal: all.length };
-  });
+  }
+}
 
 /*
  * Укриття навколо точки.

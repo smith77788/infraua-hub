@@ -1131,30 +1131,12 @@ function Console() {
             >
               <MapIcon className="size-3" /> <span className="hidden sm:inline">Карта</span>
             </button>
-            {infraDisabled ? null : (
-              <button
-                onClick={() => setView("analytics")}
-                className={`flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
-                  view === "analytics" ? "bg-card text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <BarChart3 className="size-3" /> <span className="hidden sm:inline">Аналітика</span>
-              </button>
-            )}
+            {/*
+              «Аналітика», «Таблиця» і «Про платформу» прибрані з меню
+              (опитувальник 01.11): система — для підписників бота й каналу,
+              а не для аналітика; зайві кнопки лише ускладнювали екран.
+            */}
           </div>
-          {view === "map" && !infraDisabled ? (
-            <Button
-              size="sm"
-              variant={showTable ? "secondary" : "outline"}
-              title="Таблиця обʼєктів"
-              aria-label="Таблиця обʼєктів"
-              className="shrink-0 px-2 text-[12px] font-medium sm:px-3"
-              onClick={() => setShowTable((v) => !v)}
-              aria-pressed={showTable}
-            >
-              <Table2 className="size-3" /> <span className="hidden sm:inline">Таблиця</span>
-            </Button>
-          ) : null}
           <Button
             size="sm"
             variant="outline"
@@ -1208,17 +1190,6 @@ function Console() {
           >
             <HelpCircle className="size-3" />
             <span className="hidden sm:inline">Як читати</span>
-          </Button>
-          <Button
-            asChild
-            size="sm"
-            variant="ghost"
-            className="hidden shrink-0 px-2 text-[12px] font-medium sm:inline-flex sm:px-3"
-          >
-            <Link to="/about" title="Про платформу" aria-label="Про платформу">
-              <Info className="size-3" />
-              <span className="hidden sm:inline">Про платформу</span>
-            </Link>
           </Button>
         </div>
       </header>
@@ -1358,7 +1329,9 @@ function Console() {
                     Шари даних
                   </p>
                   <div className="space-y-1">
-                    {ALL_CATEGORIES.map((c) => (
+                    {/* Лише категорії, які справді є: у публічному наборі це
+                        самі лікарні, і пʼятнадцять рядків «0» лише заважали. */}
+                    {ALL_CATEGORIES.filter((c) => (counts.get(c) ?? 0) > 0).map((c) => (
                       <button
                         key={c}
                         onClick={() => toggle(c)}

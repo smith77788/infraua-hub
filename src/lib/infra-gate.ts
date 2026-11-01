@@ -118,3 +118,19 @@ export const INFRA_DISABLED_NOTICE = "Шари критичної інфраст
 export function infraLayersOff(payload: { disabled?: boolean } | undefined): boolean {
   return payload?.disabled !== false;
 }
+
+/**
+ * Що з обʼєктів можна показувати ВСІМ, без перемикача власника.
+ *
+ * Користувач (опитувальник, 01.11): «увімкнути знову, але забрати підстанції,
+ * водоканали, енергетику, центри обробки даних і те, по чому завжди бʼє
+ * ворог». Лишаються лікарні: вони потрібні людям під час нальоту, а їхні
+ * адреси й так публічні. Укриття — окремий шар і цього переліку не стосуються.
+ * Решта категорій (енергетика, вода, звʼязок, транспорт, держустанови,
+ * промисловість) — лише з `INFRA_LAYERS=on` або для власника в Telegram.
+ */
+export const PUBLIC_CATEGORIES: ReadonlySet<string> = new Set(["hospital"]);
+
+export function publicOnly<T extends { category: string }>(facilities: readonly T[]): T[] {
+  return facilities.filter((f) => PUBLIC_CATEGORIES.has(f.category));
+}

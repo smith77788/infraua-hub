@@ -123,3 +123,20 @@ describe("як консоль читає стан із відповіді", () =
     expect(infraLayersOff({ disabled: true })).toBe(true);
   });
 });
+
+describe("publicOnly — що бачать усі без перемикача", () => {
+  it("лікарні — так; енергетика, вода, звʼязок, ЦОД — ні", async () => {
+    const { publicOnly } = await import("./infra-gate");
+    const all = [
+      "hospital",
+      "substation",
+      "power_plant",
+      "water",
+      "data_center",
+      "telecom",
+      "oil_gas",
+      "rail",
+    ].map((category, i) => ({ id: String(i), category }));
+    expect(publicOnly(all).map((f) => f.category)).toEqual(["hospital"]);
+  });
+});
