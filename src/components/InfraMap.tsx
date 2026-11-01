@@ -20,6 +20,7 @@ import {
   type AlertZone,
   type FirePoint,
   type FrontlineArea,
+  moreSevereType,
   type Threat,
   type ThreatType,
 } from "@/lib/air";
@@ -40,6 +41,7 @@ import { verifyThreat, type VerificationLevel } from "@/lib/advisory";
 import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history";
 import { fixedAtMs, nowRadiusKm } from "@/lib/position-age";
 import { driftSector, spreadFor } from "@/lib/drift-sector";
+import { spreadOffsets } from "@/lib/spread-offsets";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -61,7 +63,7 @@ import { useThreatMotion } from "./use-threat-motion";
 import { TYPE_STYLE } from "@/lib/threat-glyphs";
 import type { LaunchView } from "@/lib/infra.functions";
 import { advance } from "@/lib/dead-reckoning";
-import { bearingDeg, speedRangeFor } from "@/lib/threat-eta";
+import { bearingDeg, SPEED_KMH, speedRangeFor } from "@/lib/threat-eta";
 import { cleanTrail, trailHeading } from "@/lib/trail-clean";
 import { type Freshness } from "@/lib/freshness";
 import { markerFreshness } from "@/lib/marker-freshness";
@@ -203,10 +205,15 @@ const ICON_PATHS: Record<CategoryId, string> = {
 // Розміри підняті під телефон: на маленькому екрані позначка має читатися й
 // бути придатною для дотику. Свіжі — найбільші, застарілі — дрібніші й тьмяні.
 // Невідомий час — як застарілий: позначка без часу не має виглядати впевнено.
+/** Колір втраченої цілі. */
+const LOST_COLOR = "#8b949e";
+/** На скільки хвилин уперед малюємо конус прогнозу. */
+const FORECAST_MIN = 10;
+
 const FRESH_TONE: Record<Freshness, { opacity: number; size: number }> = {
   fresh: { opacity: 1, size: 32 },
   aging: { opacity: 0.62, size: 26 },
-  stale: { opacity: 0.32, size: 20 },
+  stale: { opacity: 0.6, size: 22 },
   unknown: { opacity: 0.32, size: 20 },
 };
 
@@ -288,14 +295,23 @@ const NO_COURSE =
  *
  * Місце такого числа — у вікні цілі, поруч із поясненням, що воно означає.
  */
-function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null): L.DivIcon {
+function threatIcon(
+  type: ThreatType,
+  fresh: Freshness,
+  heading: number | null,
+  /** Зсув значка в пікселях — для цілей в одній точці (див. `spreadOffsets`). */
+  offset: [number, number] = [0, 0],
+): L.DivIcon {
   // Курс округлюємо до 5° — досить для ока й тримає кеш маленьким.
   const rot =
     heading != null && ROTATABLE[type] ? Math.round((((heading % 360) + 360) % 360) / 5) * 5 : null;
-  const key = `${type}|${fresh}|${rot ?? "x"}`;
+  const key = `${type}|${fresh}|${rot ?? "x"}|${offset[0]},${offset[1]}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
-  const { color, code } = TYPE_STYLE[type];
+  const { code } = TYPE_STYLE[type];
+  // Втрачена ціль (джерело давно не оновлювало) — сіра: її ще видно, але вона
+  // не читається як жива (опитувальник 01.11: «сірою „втрачена“»).
+  const color = fresh === "stale" ? LOST_COLOR : TYPE_STYLE[type].color;
   const glyph =
     rot == null && ROTATABLE[type]
       ? type === "unknown"
@@ -314,8 +330,8 @@ function threatIcon(type: ThreatType, fresh: Freshness, heading: number | null):
     html,
     className: "threat-pin",
     iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -size / 2],
+    iconAnchor: [size / 2 - offset[0], size / 2 - offset[1]],
+    popupAnchor: [offset[0], offset[1] - size / 2],
   });
   threatIconCache.set(key, icon);
   return icon;
@@ -466,16 +482,33 @@ function clusterIcon(count: number): L.DivIcon {
   });
 }
 
-/** Бурштинова купка повітряних цілей на огляді країни (за масштабом). */
-function threatClusterIcon(count: number): L.DivIcon {
-  const size = count > 50 ? 42 : count > 20 ? 36 : count > 8 ? 32 : 26;
-  const html = `<div style="width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(20,12,4,.85);border:1.5px solid rgba(255,160,32,.85);color:#ffb020;font:700 ${size > 34 ? 12 : 11}px 'JetBrains Mono',monospace;box-shadow:0 0 12px rgba(255,153,0,.35)">${count}</div>`;
+/**
+ * Купка цілей на огляді країни — кольором найнебезпечнішого типу в ній, а не
+ * одним бурштиновим для всього: «3» з реактивним усередині має бути видно.
+ */
+function threatGroupIcon(count: number, type: ThreatType): L.DivIcon {
+  const size = count > 50 ? 42 : count > 20 ? 36 : count > 8 ? 32 : 28;
+  const color = TYPE_STYLE[type].color;
+  const html = `<div style="width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(10,14,20,.85);border:2px solid ${color};color:${color};font:700 ${size > 34 ? 12 : 11}px 'JetBrains Mono',monospace;box-shadow:0 0 10px ${color}55">${count}</div>`;
   return L.divIcon({
     html,
     className: "infra-cluster",
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
+}
+
+/** Цілі, згруповані в клітинки сітки за масштабом (огляд країни). */
+function gridThreatGroups(threats: readonly Threat[], zoom: number): Threat[][] {
+  const step = zoom <= 5 ? 1.3 : zoom === 6 ? 0.8 : 0.45;
+  const cells = new Map<string, Threat[]>();
+  for (const t of threats) {
+    const key = `${Math.round(t.lat / step)}|${Math.round(t.lon / step)}`;
+    const list = cells.get(key);
+    if (list) list.push(t);
+    else cells.set(key, [t]);
+  }
+  return [...cells.values()];
 }
 
 function FacilityPopup({ f }: { f: Facility }) {
@@ -760,20 +793,47 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
   const animated = useThreatMotion(threats);
 
   if (zoom < 7) {
-    const clusters = gridClusters(threats, zoom);
+    /*
+     * Огляд країни. Одиночна ціль — своїм значком (тип і курс видно одразу), а
+     * не кружком «1», що нічого не каже; купка — числом кольору
+     * найнебезпечнішого типу в ній.
+     */
+    const groups = gridThreatGroups(animated, zoom);
     return (
       <>
-        {clusters.map((c, i) => (
-          <Marker
-            key={`tc-${i}`}
-            position={[c.lat, c.lon]}
-            icon={threatClusterIcon(c.count)}
-            zIndexOffset={800}
-            eventHandlers={{
-              click: () => map.flyTo([c.lat, c.lon], Math.min(zoom + 3, 10), { duration: 0.6 }),
-            }}
-          />
-        ))}
+        {groups.map((g) => {
+          const lat = g.reduce((a, t) => a + t.lat, 0) / g.length;
+          const lon = g.reduce((a, t) => a + t.lon, 0) / g.length;
+          const fly = () => map.flyTo([lat, lon], Math.min(zoom + 3, 10), { duration: 0.6 });
+          if (g.length === 1) {
+            const t = g[0]!;
+            const type: ThreatType = t.type ?? "unknown";
+            const heading =
+              typeof t.heading === "number" && Number.isFinite(t.heading) ? t.heading : null;
+            return (
+              <Marker
+                key={`tc-${t.id}`}
+                position={[t.lat, t.lon]}
+                icon={threatIcon(type, markerFreshness(t.lastSeen ?? t.since, type), heading)}
+                zIndexOffset={800}
+                eventHandlers={{ click: fly }}
+              />
+            );
+          }
+          const worst = g.reduce<ThreatType>(
+            (acc, t) => moreSevereType(acc, t.type ?? "unknown"),
+            "unknown",
+          );
+          return (
+            <Marker
+              key={`tc-${g.map((t) => t.id).join(",")}`}
+              position={[lat, lon]}
+              icon={threatGroupIcon(g.length, worst)}
+              zIndexOffset={800}
+              eventHandlers={{ click: fly }}
+            />
+          );
+        })}
       </>
     );
   }
@@ -792,6 +852,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
    * (і автопрокрутка попапа) більше не вбиває те, що людина щойно відкрила.
    */
   const inView = animated.filter((t) => bounds.pad(0.3).contains([t.lat, t.lon]));
+  const offsets = spreadOffsets(inView);
   return (
     <>
       {inView.map((t) => {
@@ -874,14 +935,49 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 statedKm: displayRadiusKm(q),
               })
             : null;
+        /*
+         * Конус прогнозу: куди ціль може долетіти за `FORECAST_MIN` хвилин за
+         * типовою швидкістю свого типу, з розкидом курсу. Для кожної цілі з
+         * курсом, бліда заливка без контуру — підказка напрямку, а не
+         * спостереження (користувач, опитувальник 01.11: «конус можливих
+         * напрямків»). Втраченим цілям не малюємо: напрям уже не відомий.
+         */
+        const cone =
+          hasCourse && fresh !== "stale"
+            ? driftSector({
+                lat: t.lat,
+                lon: t.lon,
+                courseDeg: courseDeg as number,
+                spreadDeg: spreadFor(courseObserved),
+                driftKm: ((SPEED_KMH[type] ?? SPEED_KMH.unknown) * FORECAST_MIN) / 60,
+                statedKm: 0,
+              })
+            : null;
+        const isSelected = selected === t.id;
         return (
           <Fragment key={t.id}>
+            {cone ? (
+              <Polygon
+                positions={cone}
+                pathOptions={{
+                  stroke: false,
+                  fillColor: style.color,
+                  fillOpacity: isSelected ? 0.16 : 0.07,
+                  interactive: false,
+                }}
+              />
+            ) : null}
             {selected !== t.id ? null : sector ? (
               <Polygon positions={sector} pathOptions={ringStyle} />
             ) : (
               <Circle center={[t.lat, t.lon]} radius={radiusKm * 1000} pathOptions={ringStyle} />
             )}
-            {observed.length >= 2 ? (
+            {/*
+              Хвіст — лише в обраної цілі (користувач, опитувальник 01.11:
+              «показувати лише при натисканні»): десятки треків разом
+              перетворювали карту на клубок ліній.
+            */}
+            {isSelected && observed.length >= 2 ? (
               <>
                 {/*
                  * Лінія ЗʼЄДНУЄ повідомлення, а не показує шлях польоту.
@@ -928,7 +1024,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               речі (знімок користувача, Рівне, 23.10). Пунктир: це шлях за
               оцінкою, а не за спостереженням.
             */}
-            {projected ? (
+            {isSelected && projected ? (
               <Polyline
                 positions={[
                   ...(observed.length ? [observed[observed.length - 1]!] : []),
@@ -961,7 +1057,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             ) : null}
             <Marker
               position={[t.lat, t.lon]}
-              icon={threatIcon(type, fresh, courseDeg)}
+              icon={threatIcon(type, fresh, courseDeg, offsets.get(t.id))}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "aging" ? 500 : 0}
               eventHandlers={{
                 popupopen: () => setSelected(t.id),
@@ -981,7 +1077,11 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                 <div className="max-h-[190px] space-y-1 overflow-y-auto pr-1 font-sans text-xs">
                   <p className="font-semibold" style={{ color: style.color }}>
                     {style.label}
-                    {fresh === "fresh" ? " · свіжа" : fresh === "stale" ? " · застаріла" : ""}
+                    {fresh === "fresh"
+                      ? " · свіжа"
+                      : fresh === "stale"
+                        ? " · втрачена: джерело давно не оновлювало"
+                        : ""}
                   </p>
                   <p className="opacity-80">{t.name}</p>
                   {hasCourse ? (
