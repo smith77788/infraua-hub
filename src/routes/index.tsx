@@ -89,6 +89,7 @@ import { projectThreats } from "@/lib/threat-eta";
 import { reportAirActivity } from "@/lib/platform-read.functions";
 import { type RaidFrame, frameAt, mergeFrames, recordFrame } from "@/lib/raid-replay";
 import { framesFromPayload } from "@/lib/raid-history";
+import type { NightPayload } from "@/lib/night-tracks";
 import {
   buildThreatGraph,
   correlateAirThreats,
@@ -424,23 +425,36 @@ function Console() {
       clearInterval(id);
     };
   }, []);
-  // «Історія» — доба кадрів; вантажимо лише коли її відкрили (вони важчі).
-  const [historyFrames, setHistoryFrames] = useState<readonly RaidFrame[]>([]);
-  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
-  const loadHistory = useCallback(() => {
-    fetch("/api/air/replay?hours=24")
+  /*
+   * «Історія» — усі треки ночі однією картинкою, 30 ночей (опитувальник
+   * 01.11; див. `night-tracks`). Перелік ночей вантажимо, коли «Історію»
+   * відкрили; поки обрано ніч, карта показує її треки замість живих цілей.
+   */
+  const [nights, setNights] = useState<string[]>([]);
+  const [night, setNight] = useState<string | null>(null);
+  const [nightData, setNightData] = useState<NightPayload | null>(null);
+  const openNight = useCallback((n: string | null) => {
+    setNight(n);
+    setNightData(null);
+    if (n === null) return;
+    fetch(`/api/air/night?n=${encodeURIComponent(n)}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d) setHistoryFrames(framesFromPayload(d));
+      .then((d: NightPayload | null) => {
+        if (d && d.night === n) setNightData(d);
       })
       .catch(() => {});
   }, []);
-  // Курсор історії рухає і цілі на карті, і стрічку подій. Стабільна функція:
-  // плеєр викликає її в ефекті, і нова щорендеру смикала б його щоразу.
-  const onHistoryCursor = useCallback((c: number | null) => {
-    setHistoryCursor(c);
-    setPlayCursor(c);
-  }, []);
+  const loadHistory = useCallback(() => {
+    fetch("/api/air/nights")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { nights?: string[] } | null) => {
+        const list = d?.nights ?? [];
+        setNights(list);
+        if (list[0]) openNight(list[0]);
+      })
+      .catch(() => {});
+  }, [openNight]);
+  const historyActive = night !== null;
   const raidFrames = useMemo(
     () => mergeFrames(serverFrames, localFrames),
     [serverFrames, localFrames],
@@ -620,14 +634,12 @@ function Console() {
   }, [threats]);
   // Під час перемотки карта показує кадр цього моменту; наживо — сам фід.
   const mapThreats = useMemo(() => {
-    if (historyCursor !== null) {
-      const frame = frameAt(historyFrames, historyCursor);
-      return frame ? [...frame.threats] : [];
-    }
+    // Відкрита ніч — на карті її треки, а не живі цілі.
+    if (historyActive) return [];
     if (raidCursor === null) return threats;
     const frame = frameAt(raidFrames, raidCursor);
     return frame ? [...frame.threats] : threats;
-  }, [raidCursor, raidFrames, historyCursor, historyFrames, threats]);
+  }, [raidCursor, raidFrames, historyActive, threats]);
   const zones = useMemo(() => zonesQuery.data?.zones ?? [], [zonesQuery.data]);
   const frontline = feeds.frontline;
   const fires = feeds.fires;
@@ -1206,7 +1218,7 @@ function Console() {
          * карті не стільки, скільки в лічильнику».
          */
         threats={mapThreats.length}
-        rewinding={raidCursor !== null || historyCursor !== null}
+        rewinding={raidCursor !== null || historyActive}
         airThreat={airThreatSummary}
         focus={focus}
         onFocus={setFocus}
@@ -1614,7 +1626,8 @@ function Console() {
                     alertLevels={alertLevels}
                     threats={mapThreats}
                     // У перегляді історії пуски «зараз» не мають сенсу — лише наживо.
-                    launches={raidCursor === null && historyCursor === null ? launches : []}
+                    launches={raidCursor === null && !historyActive ? launches : []}
+                    nightTracks={historyActive ? nightData : null}
                     frontline={frontline}
                     showFrontline={showFrontline}
                     fires={fires}
@@ -1744,9 +1757,11 @@ function Console() {
                 bars={
                   <TimeScrubbers
                     frames={raidFrames}
-                    historyFrames={historyFrames}
                     onRaidCursor={setRaidCursor}
-                    onHistoryCursor={onHistoryCursor}
+                    nights={nights}
+                    night={night}
+                    nightTargets={nightData ? nightData.tracks.length : null}
+                    onNight={openNight}
                     onHistoryOpen={loadHistory}
                   />
                 }

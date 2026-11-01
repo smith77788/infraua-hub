@@ -43,6 +43,7 @@ import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history"
 import { fixedAtMs, nowRadiusKm } from "@/lib/position-age";
 import { driftSector, spreadFor } from "@/lib/drift-sector";
 import { spreadOffsets } from "@/lib/spread-offsets";
+import type { NightPayload } from "@/lib/night-tracks";
 import ReportButton from "@/components/ReportButton";
 import {
   CATEGORIES,
@@ -87,6 +88,8 @@ interface Props {
   threats: Threat[];
   /** Пуски ще на тій території — за повідомленнями каналів (`launch-sightings`). */
   launches?: LaunchView[];
+  /** Відкрита в «Історії» ніч — усі її треки однією картинкою (`night-tracks`). */
+  nightTracks?: NightPayload | null;
   frontline: FrontlineArea[];
   showFrontline: boolean;
   fires: FirePoint[];
@@ -485,6 +488,59 @@ function clusterIcon(count: number): L.DivIcon {
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
+}
+
+/**
+ * Треки ночі однією картинкою: лінія кольору типу й значок типу в останній
+ * точці, повернутий за останнім відрізком. Без анімації й без кіл — це
+ * підсумок ночі, а не жива картина.
+ */
+function NightLayer({ night }: { night: NightPayload }) {
+  return (
+    <>
+      {night.tracks.map((tr) => {
+        const color = TYPE_STYLE[tr.type].color;
+        const pts = tr.pts.map((p) => [p[0], p[1]] as [number, number]);
+        const last = pts[pts.length - 1];
+        if (!last) return null;
+        const prev = pts[pts.length - 2];
+        const heading = prev
+          ? bearingDeg({ lat: prev[0], lon: prev[1] }, { lat: last[0], lon: last[1] })
+          : null;
+        const fromMin = tr.pts[0]![2];
+        const toMin = tr.pts[tr.pts.length - 1]![2];
+        const clock = (m: number) =>
+          new Date(night.start + m * 60_000).toLocaleTimeString("uk-UA", {
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "Europe/Kyiv",
+          });
+        return (
+          <Fragment key={`night-${tr.id}`}>
+            {pts.length >= 2 ? (
+              <Polyline
+                positions={pts}
+                pathOptions={{ color, weight: 1.6, opacity: 0.7, interactive: false }}
+              />
+            ) : null}
+            <Marker position={last} icon={threatIcon(tr.type, "aging", heading)}>
+              <Popup maxWidth={220}>
+                <div className="space-y-1 font-sans text-xs">
+                  <p className="font-semibold" style={{ color }}>
+                    {TYPE_STYLE[tr.type].label}
+                  </p>
+                  {tr.name ? <p className="opacity-80">{tr.name}</p> : null}
+                  <p className="opacity-70">
+                    {clock(fromMin)} – {clock(toMin)} · точок треку: {pts.length}
+                  </p>
+                </div>
+              </Popup>
+            </Marker>
+          </Fragment>
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -1253,6 +1309,7 @@ export default function InfraMap({
   alertLevels = null,
   threats,
   launches = [],
+  nightTracks = null,
   frontline,
   showFrontline,
   fires,
@@ -1533,6 +1590,7 @@ export default function InfraMap({
         текстом у панелі «Рій», де видно, на скільки цілей він спирається.
       */}
       <LaunchLayer launches={launches} />
+      {nightTracks ? <NightLayer night={nightTracks} /> : null}
       <ThreatLayer threats={threats} />
 
       <FlyTo facility={selected} />

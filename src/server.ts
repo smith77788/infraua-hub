@@ -202,6 +202,13 @@ import {
   type OblastDanger,
 } from "./lib/oblast-watch";
 import {
+  keepNights,
+  nightKeyOf,
+  nightStart,
+  NightTracks,
+  type NightPayload,
+} from "./lib/night-tracks";
+import {
   appendReport,
   parseReport,
   renderReportForOwner,
@@ -1043,6 +1050,7 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   // каналу; пропущене опитування це розрив у лінії.
   rememberTracks(threats, Date.now());
   await sampleRaidHistory(threats, Date.now());
+  await sampleNightTracks(threats, Date.now());
   await saveTypeMemory(Date.now());
   return threats;
 }
@@ -1136,6 +1144,65 @@ async function loadRaidHistory(now: number): Promise<RaidHistory> {
   }
   raidHistory ??= restored ?? new RaidHistory();
   return raidHistory;
+}
+
+/*
+ * Треки ночі для «Історії» (див. `night-tracks`): одна лінія на ціль, ніч —
+ * з 12:00 до 12:00 за Києвом, 30 ночей на томі. Індекс ночей — окремим
+ * маркером, старші за 30 ночей файли спорожнюємо.
+ */
+const NIGHTS_INDEX_MARKER = "nights-index";
+const NIGHT_SAVE_EVERY_MS = 3 * 60_000;
+let nightTracks: NightTracks | null = null;
+let nightSavedAt = 0;
+let nightDirty = false;
+
+const nightMarker = (night: string) => `night-tracks-${night}`;
+
+async function readNightsIndex(): Promise<string[]> {
+  try {
+    const raw = await readMarker(NIGHTS_INDEX_MARKER);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function sampleNightTracks(threats: readonly Threat[], now: number): Promise<void> {
+  try {
+    const key = nightKeyOf(now);
+    if (!nightTracks || nightTracks.night !== key) {
+      if (nightTracks && nightDirty) {
+        await writeMarker(nightMarker(nightTracks.night), JSON.stringify(nightTracks.payload()));
+      }
+      const raw = await readMarker(nightMarker(key));
+      nightTracks = NightTracks.fromPayload(raw ? JSON.parse(raw) : null, key, nightStart(key));
+      const before = await readNightsIndex();
+      const kept = keepNights([key, ...before]);
+      for (const old of before) if (!kept.includes(old)) await writeMarker(nightMarker(old), "");
+      await writeMarker(NIGHTS_INDEX_MARKER, JSON.stringify(kept));
+    }
+    if (nightTracks.observe(threats, now)) nightDirty = true;
+    if (nightDirty && now - nightSavedAt >= NIGHT_SAVE_EVERY_MS) {
+      nightSavedAt = now;
+      nightDirty = false;
+      await writeMarker(nightMarker(key), JSON.stringify(nightTracks.payload()));
+    }
+  } catch {
+    // Історія — допоміжне: збій запису не має ламати обхід сповіщень.
+  }
+}
+
+async function nightPayload(night: string): Promise<NightPayload | null> {
+  if (nightTracks && nightTracks.night === night) return nightTracks.payload();
+  const raw = await readMarker(nightMarker(night));
+  if (!raw) return null;
+  try {
+    return NightTracks.fromPayload(JSON.parse(raw), night, nightStart(night)).payload();
+  } catch {
+    return null;
+  }
 }
 
 async function sampleRaidHistory(threats: readonly Threat[], now: number): Promise<void> {
@@ -6198,6 +6265,24 @@ export default {
 
     // Публічний знімок повітряної обстановки — щоб радар вбудовували інші.
     // Відкритий, з CORS: дані ті самі, що на публічній мапі.
+    // Треки ночі для «Історії»: перелік ночей і одна ніч — див. `night-tracks`.
+    if (pathname === "/api/air/nights") {
+      const keys = keepNights([nightKeyOf(Date.now()), ...(await readNightsIndex())]);
+      return new Response(JSON.stringify({ nights: keys }), {
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=60" },
+      });
+    }
+    if (pathname === "/api/air/night") {
+      const night = new URL(request.url).searchParams.get("n") ?? nightKeyOf(Date.now());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(night)) {
+        return new Response(JSON.stringify({ error: "n=YYYY-MM-DD" }), { status: 400 });
+      }
+      const body = (await nightPayload(night)) ?? { night, start: nightStart(night), tracks: [] };
+      return new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=60" },
+      });
+    }
+
     // «Тут неправильно» з карти — див. `map-reports.ts`.
     if (pathname === "/api/report" && request.method === "POST") {
       return handleMapReport(request);
