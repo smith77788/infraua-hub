@@ -76,19 +76,51 @@ export class NightTracks {
         if (this.tracks.size >= MAX_TRACKS) continue;
         tr = { id: t.id, name: t.name, type, pts: [] };
         this.tracks.set(t.id, tr);
+        // Слід, який ціль принесла з собою (джерело чи злиті звіти), — теж
+        // частина шляху цієї ночі.
+        for (const p of t.trail ?? []) {
+          const at = Date.parse(p.t);
+          if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon) || !(at >= this.start)) continue;
+          this.push(tr, p.lat, p.lon, Math.round((at - this.start) / 60_000));
+        }
+        changed = true;
+      }
+      /*
+       * Звіти, що злились у цю ціль (`successor-chain`, `parallel-merge`), — той
+       * самий дрон: їхні точки переходять у цей трек, а окремі треки зникають.
+       */
+      for (const old of t.mergedIds ?? []) {
+        const o = this.tracks.get(old);
+        if (!o || o === tr) continue;
+        tr.pts = [...o.pts, ...tr.pts]
+          .sort((a, b) => a[2] - b[2])
+          .filter(
+            (p, i, arr) =>
+              i === 0 ||
+              distanceKm({ lat: arr[i - 1]![0], lon: arr[i - 1]![1] }, { lat: p[0], lon: p[1] }) >=
+                STEP_KM,
+          )
+          .slice(-MAX_POINTS);
+        this.tracks.delete(old);
+        changed = true;
       }
       // Тип — останній відомий: канали могли уточнити його посеред польоту.
       if (tr.type !== type) {
         tr.type = type;
         changed = true;
       }
-      const last = tr.pts[tr.pts.length - 1];
-      if (last && distanceKm({ lat: last[0], lon: last[1] }, t) < STEP_KM) continue;
-      if (tr.pts.length >= MAX_POINTS) continue;
-      tr.pts.push([r3(t.lat), r3(t.lon), minute]);
-      changed = true;
+      if (this.push(tr, t.lat, t.lon, minute)) changed = true;
     }
     return changed;
+  }
+
+  /** Додати точку, якщо ціль зрушила на `STEP_KM`; `true` — додано. */
+  private push(tr: NightTrack, lat: number, lon: number, minute: number): boolean {
+    const last = tr.pts[tr.pts.length - 1];
+    if (last && distanceKm({ lat: last[0], lon: last[1] }, { lat, lon }) < STEP_KM) return false;
+    if (tr.pts.length >= MAX_POINTS) return false;
+    tr.pts.push([r3(lat), r3(lon), Math.max(0, minute)]);
+    return true;
   }
 
   payload(): NightPayload {

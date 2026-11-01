@@ -70,3 +70,36 @@ describe("keepNights — 30 ночей", () => {
     expect(kept[0]).toBe(keys[39]);
   });
 });
+
+describe("NightTracks — звіти того самого дрона склеюються в один трек", () => {
+  const start = nightStart("2026-10-31");
+
+  it("голова ланцюжка забирає точки злитих звітів, окремі треки зникають", () => {
+    const n = new NightTracks("2026-10-31", start);
+    n.observe([t("r1", 50.0, 30.0)], start + 60_000);
+    n.observe([t("r2", 50.1, 30.0)], start + 5 * 60_000);
+    n.observe([{ ...t("r3", 50.2, 30.0), mergedIds: ["r1", "r2"] }], start + 9 * 60_000);
+    const tracks = n.payload().tracks;
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]!.id).toBe("r3");
+    expect(tracks[0]!.pts.map((p) => p[2])).toEqual([1, 5, 9]);
+  });
+
+  it("слід, принесений ціллю, — початок треку", () => {
+    const n = new NightTracks("2026-10-31", start);
+    const iso = (m: number) => new Date(start + m * 60_000).toISOString();
+    n.observe(
+      [
+        {
+          ...t("h", 50.2, 30.0),
+          trail: [
+            { lat: 50.0, lon: 30.0, t: iso(2) },
+            { lat: 50.1, lon: 30.0, t: iso(4) },
+          ],
+        },
+      ],
+      start + 6 * 60_000,
+    );
+    expect(n.payload().tracks[0]!.pts).toHaveLength(3);
+  });
+});

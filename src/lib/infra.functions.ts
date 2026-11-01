@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 
 import { RU_LAUNCH_SOURCES, roleOfSource, TG_CHANNELS } from "./osint-sources";
 import { mergeParallelDuplicates } from "./parallel-merge";
-import { TypeMemory } from "./type-memory";
+import { refuteJetBySpeed, TypeMemory } from "./type-memory";
 
 const RU_CHANNELS = new Set(RU_LAUNCH_SOURCES.map((s) => s.channel));
 const RU_HOME = new Map(RU_LAUNCH_SOURCES.map((s) => [s.channel, s.home]));
@@ -836,12 +836,16 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
   // Памʼять підтипу — до перевірки швидкості: реактивному дозволено летіти
   // втричі швидше за шахед. Див. `type-memory.ts`.
   return dropImplausibleSpeed(
-    typeMemory.apply(
-      applyBanderolType(
-        applyJetType(threats, jetMentions(ua, now)),
-        typeMentions(ua, now, "banderol"),
+    // Замір швидкості сильніший за слово каналу: поршневий дрон не реактивний.
+    refuteJetBySpeed(
+      typeMemory.apply(
+        applyBanderolType(
+          applyJetType(threats, jetMentions(ua, now)),
+          typeMentions(ua, now, "banderol"),
+        ),
+        now,
       ),
-      now,
+      typeMemory,
     ),
   );
 }

@@ -63,6 +63,11 @@ export class TypeMemory {
     }
   }
 
+  /** Забути підтип треку — коли його спростував замір (`contradictedBySpeed`). */
+  forget(id: string): void {
+    this.byId.delete(id);
+  }
+
   get size(): number {
     return this.byId.size;
   }
@@ -116,4 +121,25 @@ export class TypeMemory {
   private prune(now: number): void {
     for (const [id, m] of this.byId) if (now - m.at > TTL_MS) this.byId.delete(id);
   }
+}
+
+/**
+ * Межа, нижче якої заміряна джерелом швидкість спростовує «реактивний» зі слів
+ * каналу: поршнева «Герань» — до ~185 км/год, реактивна — 300+.
+ *
+ * Досі було навпаки: тип зі слів каналу вважався правдою, а замір —
+ * «неправдоподібним для реактивного» і відкидався. Заміряно 01.11 05:55 UTC:
+ * Борщагівка — «реактивний (канал)» при заміряних Нептуном 108 км/год.
+ */
+export const JET_REFUTE_KMH = 200;
+
+export function refuteJetBySpeed(threats: readonly Threat[], memory: TypeMemory): Threat[] {
+  return threats.map((t) => {
+    if (t.type !== "reactive" || !t.typeFromChannels) return t;
+    const kmh = t.quality?.speedKmh;
+    if (typeof kmh !== "number" || !(kmh > 0) || kmh >= JET_REFUTE_KMH) return t;
+    memory.forget(t.id);
+    const { typeFromChannels: _drop, ...rest } = t;
+    return { ...rest, type: "shahed" };
+  });
 }

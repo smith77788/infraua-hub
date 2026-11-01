@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
 import type { Threat, ThreatType } from "./air";
-import { TTL_MS, TypeMemory } from "./type-memory";
+import { EMPTY_QUALITY } from "./threat-quality";
+import { refuteJetBySpeed, TTL_MS, TypeMemory } from "./type-memory";
 
 const T0 = Date.parse("2026-10-31T21:45:00Z");
 
@@ -95,5 +96,33 @@ describe("TypeMemory — на томі й щоденне прибирання", 
     disk.note([t("old", "banderol")], T0);
     live.absorb(TypeMemory.fromState(disk.toState(T0), T0 + 60_000));
     expect(live.size).toBe(2);
+  });
+});
+
+describe("refuteJetBySpeed — замір швидкості сильніший за слово каналу", () => {
+  const q = (speedKmh: number | null) => ({ ...EMPTY_QUALITY, speedKmh });
+
+  it("«реактивний (канал)» при заміряних 108 км/год — шахед, і памʼять його забуває", () => {
+    const m = new TypeMemory();
+    m.note([t("borsch", "reactive")], T0);
+    const [out] = refuteJetBySpeed(
+      [{ ...t("borsch", "reactive"), typeFromChannels: true, quality: q(108) }],
+      m,
+    );
+    expect(out!.type).toBe("shahed");
+    expect(out!.typeFromChannels).toBeUndefined();
+    expect(m.apply([t("borsch", "shahed")], T0 + 60_000)[0]!.type).toBe("shahed");
+  });
+
+  it("швидкий замір, нема заміру чи тип від самого джерела — не чіпає", () => {
+    const m = new TypeMemory();
+    const fast = { ...t("a", "reactive"), typeFromChannels: true, quality: q(390) };
+    const none = { ...t("b", "reactive"), typeFromChannels: true, quality: q(null) };
+    const own = { ...t("c", "reactive"), quality: q(120) };
+    expect(refuteJetBySpeed([fast, none, own], m).map((x) => x.type)).toEqual([
+      "reactive",
+      "reactive",
+      "reactive",
+    ]);
   });
 });
