@@ -328,6 +328,7 @@ const TYPE_PLURAL: Record<ThreatType, string> = {
   reactive: "реактивні шахеди",
   banderol: "«Бандеролі»",
   fpv: "FPV-дрони",
+  decoy: "імітатори",
   cruise: "крилаті",
   missile: "ракети",
   ballistic: "балістика",

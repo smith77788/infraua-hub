@@ -62,6 +62,15 @@ export const TYPE_STYLE: Record<ThreatType, ThreatGlyph> = {
     label: "FPV-дрон",
     code: "FPV",
   },
+  // «Гербера» та інші імітатори: та сама дельта, що й у «Шахеда», але
+  // порожниста (лише контур) — приманка без бойової частини.
+  decoy: {
+    color: "#c4b5fd",
+    glyph:
+      '<path fill="#0a0e14" fill-opacity="0.55" stroke="#c4b5fd" stroke-width="2.2" d="M12 3 L13.2 7 L20.5 14.8 L20.5 17.6 L13 16.5 L12 18.8 L11 16.5 L3.5 17.6 L3.5 14.8 L10.8 7 Z"/>',
+    label: "Імітатор («Гербера»)",
+    code: "ІМ",
+  },
   // Крилата ракета: довгий корпус, короткі прямі крила посередині, хвостове
   // оперення.
   cruise: {
@@ -122,6 +131,7 @@ export const LEGEND_ORDER: ThreatType[] = [
   "shahed",
   "reactive",
   "banderol",
+  "decoy",
   "fpv",
   "recon",
   "cruise",

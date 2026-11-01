@@ -159,6 +159,7 @@ const TYPE_EMOJI: Record<ThreatType, string> = {
   reactive: "🛸",
   banderol: "🚀",
   fpv: "🚁",
+  decoy: "🎈",
   cruise: "🚀",
   missile: "🚀",
   ballistic: "🎯",

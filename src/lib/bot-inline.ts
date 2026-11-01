@@ -72,6 +72,7 @@ const TYPE_LABEL: Record<ThreatType, string> = {
   reactive: "реактивні шахеди",
   banderol: "«Бандеролі»",
   fpv: "FPV-дрони",
+  decoy: "імітатори («Гербери»)",
   cruise: "крилаті ракети",
   missile: "ракети",
   ballistic: "балістика",

@@ -103,6 +103,7 @@ const COLOR: Record<ThreatType, string> = {
   reactive: "#ff8c1a",
   banderol: "#f472b6",
   fpv: "#a3e635",
+  decoy: "#c4b5fd",
   cruise: "#ff6a2a",
   missile: "#ff4d4d",
   ballistic: "#ff2d2d",
@@ -354,6 +355,7 @@ function markerParts(
  */
 const NOSED: ReadonlySet<ThreatType> = new Set([
   "shahed",
+  "decoy",
   "reactive",
   "banderol",
   "cruise",

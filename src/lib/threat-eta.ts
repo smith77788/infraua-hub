@@ -70,6 +70,8 @@ export const SPEED_RANGE_KMH: Record<ThreatType, [slow: number, fast: number]> =
   reactive: [300, 600],
   banderol: [250, 500],
   fpv: [60, 150],
+  // «Гербера»: легкий поршневий імітатор, повільніший за «Шахед».
+  decoy: [120, 200],
   shahed: [185, 600],
   recon: [100, 200],
   unknown: [120, 600],
@@ -98,6 +100,7 @@ export const SPEED_KMH: Record<ThreatType, number> = {
   reactive: 550,
   banderol: 500, // «до 500 км/год» (ГУР) — верхня оцінка: попередження не має запізнюватись
   fpv: 100,
+  decoy: 150,
   shahed: 185, // поршнева «Герань» — найчастіший випадок
   recon: 120,
   unknown: 200,

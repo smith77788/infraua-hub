@@ -51,7 +51,7 @@ export class TypeMemory {
       const m = t.id ? this.byId.get(t.id) : undefined;
       if (!m) return t;
       const from = REMEMBERED[m.type];
-      return from?.has(t.type ?? "unknown") ? { ...t, type: m.type } : t;
+      return from?.has(t.type ?? "unknown") ? { ...t, type: m.type, typeFromChannels: true } : t;
     });
   }
 

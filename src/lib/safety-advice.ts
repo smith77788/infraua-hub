@@ -98,6 +98,8 @@ const BY_TYPE: Record<ThreatType, SafetyAdvice> = {
   banderol: CRUISE,
   // Окремої перевіреної поради для FPV тут немає — загальна, а не вигадана.
   fpv: GENERIC,
+  // Імітатор від шахеда в небі не відрізнити — порада та сама.
+  decoy: SHAHED,
   aircraft: GENERIC,
   recon: GENERIC,
   unknown: GENERIC,
@@ -122,6 +124,7 @@ const SEVERITY: ThreatType[] = [
   "banderol",
   "reactive",
   "shahed",
+  "decoy",
   "fpv",
   "aircraft",
   "recon",

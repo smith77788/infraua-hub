@@ -21,6 +21,7 @@ import {
   type FirePoint,
   type FrontlineArea,
   moreSevereType,
+  subtypeConfirmed,
   type Threat,
   type ThreatType,
 } from "@/lib/air";
@@ -260,6 +261,7 @@ const ROTATABLE: Partial<Record<ThreatType, boolean>> = {
   shahed: true,
   reactive: true,
   banderol: true,
+  decoy: true,
   missile: true,
   cruise: true,
   ballistic: true,
@@ -301,14 +303,16 @@ function threatIcon(
   heading: number | null,
   /** Зсув значка в пікселях — для цілей в одній точці (див. `spreadOffsets`). */
   offset: [number, number] = [0, 0],
+  /** Підтип лише зі слів каналу — «РШ?» замість «РШ» (див. `subtypeConfirmed`). */
+  presumed = false,
 ): L.DivIcon {
   // Курс округлюємо до 5° — досить для ока й тримає кеш маленьким.
   const rot =
     heading != null && ROTATABLE[type] ? Math.round((((heading % 360) + 360) % 360) / 5) * 5 : null;
-  const key = `${type}|${fresh}|${rot ?? "x"}|${offset[0]},${offset[1]}`;
+  const key = `${type}|${fresh}|${rot ?? "x"}|${offset[0]},${offset[1]}|${presumed ? "?" : ""}`;
   const cached = threatIconCache.get(key);
   if (cached) return cached;
-  const { code } = TYPE_STYLE[type];
+  const code = TYPE_STYLE[type].code + (presumed ? "?" : "");
   // Втрачена ціль (джерело давно не оновлювало) — сіра: її ще видно, але вона
   // не читається як жива (опитувальник 01.11: «сірою „втрачена“»).
   const color = fresh === "stale" ? LOST_COLOR : TYPE_STYLE[type].color;
@@ -814,7 +818,13 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
               <Marker
                 key={`tc-${t.id}`}
                 position={[t.lat, t.lon]}
-                icon={threatIcon(type, markerFreshness(t.lastSeen ?? t.since, type), heading)}
+                icon={threatIcon(
+                  type,
+                  markerFreshness(t.lastSeen ?? t.since, type),
+                  heading,
+                  undefined,
+                  !subtypeConfirmed(t),
+                )}
                 zIndexOffset={800}
                 eventHandlers={{ click: fly }}
               />
@@ -1057,7 +1067,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
             ) : null}
             <Marker
               position={[t.lat, t.lon]}
-              icon={threatIcon(type, fresh, courseDeg, offsets.get(t.id))}
+              icon={threatIcon(type, fresh, courseDeg, offsets.get(t.id), !subtypeConfirmed(t))}
               zIndexOffset={fresh === "fresh" ? 1000 : fresh === "aging" ? 500 : 0}
               eventHandlers={{
                 popupopen: () => setSelected(t.id),
@@ -1083,6 +1093,14 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                         ? " · втрачена: джерело давно не оновлювало"
                         : ""}
                   </p>
+                  {!subtypeConfirmed(t) ? (
+                    <p className="opacity-80">
+                      Можливо: так назвав канал моніторингу. Джерело треку бачить «БпЛА», а
+                      швидкість ще не заміряна.
+                    </p>
+                  ) : t.typeFromChannels ? (
+                    <p className="opacity-80">Підтверджено заміряною швидкістю.</p>
+                  ) : null}
                   <p className="opacity-80">{t.name}</p>
                   {hasCourse ? (
                     <p className="opacity-70">

@@ -184,7 +184,7 @@ function applyMentionedType(
     if (!from.has(t.type ?? "unknown")) return t;
     const stem = stemOf(t.name);
     if (!stem) return t;
-    return texts.some((x) => mentions(x, stem)) ? { ...t, type: to } : t;
+    return texts.some((x) => mentions(x, stem)) ? { ...t, type: to, typeFromChannels: true } : t;
   });
 }
 

@@ -24,6 +24,7 @@ export type ThreatType =
   | "reactive" // реактивний БпЛА («Герань-3», Shahed-238)
   | "banderol" // S8000 «Бандероль»: малогабаритна крилата ракета з турбореактивним двигуном
   | "fpv" // FPV-дрон: малий, ближнього радіуса, біля фронту — не «Шахед»
+  | "decoy" // «Гербера», «Пародія» та інші імітатори: дрон-приманка без бойової частини
   | "cruise" // крилата ракета
   | "missile" // ракета (загальне / С-300 / зен.)
   | "ballistic" // балістика (Іскандер/Кинджал)
@@ -64,6 +65,14 @@ const TYPE_PATTERNS: [ThreatType, RegExp][] = [
    * розвідувальним (заміряно 22.10: усі 16 таких дописів rozvidkaneba).
    */
   ["recon", /розвідувальн|розвідник|орлан|zala|supercam/i],
+  /*
+   * Імітатори — раніше за «шахед»: пишуть «Гербера (БпЛА-імітатор)», «дрони-
+   * імітатори», «Пародія». Окремий тип на прохання користувача (опитувальник
+   * 01.11: «Гербера та інші імітатори» мають виглядати інакше). На небезпеку
+   * не впливає в бік спокою: імітатор від шахеда в небі не відрізнити, тож
+   * поради ті самі, а тип — лише те, що назвав канал.
+   */
+  ["decoy", /гербер|gerbera|імітатор|имитатор|пародія|пародия/i],
   // FPV — раніше за загальний «дрон»: «FPV-дрон» інакше ставав «шахедом».
   ["fpv", new RegExp(`fpv|${NB}фпв${NA}`, "i")],
   /*
@@ -124,6 +133,7 @@ const THREAT_TYPES: ReadonlySet<string> = new Set<ThreatType>([
   "shahed",
   "reactive",
   "banderol",
+  "decoy",
   "fpv",
   "cruise",
   "missile",
@@ -161,6 +171,7 @@ const TYPE_SEVERITY: Record<ThreatType, number> = {
   banderol: 4.5,
   reactive: 4,
   shahed: 3,
+  decoy: 2.8,
   fpv: 2.5,
   aircraft: 2,
   recon: 1,
@@ -248,6 +259,13 @@ export interface Threat {
   source: string;
   /** Тип цілі, визначений з тексту Telegram (може бути `unknown`). */
   type?: ThreatType;
+  /**
+   * Підтип (реактивний, «Бандероль») узято зі СЛІВ каналу моніторингу, а не
+   * від самого джерела треку: Нептун такий дрон бачить як «БпЛА». На карті —
+   * «можливо реактивний», доки його не підтвердить заміряна швидкість
+   * (див. `subtypeConfirmed`). Опитувальник 01.11: «окрема позначка».
+   */
+  typeFromChannels?: boolean;
   count: number;
   since: string;
   expires: string;
@@ -447,4 +465,16 @@ export interface WeatherNow {
   windDir: number;
   precip: number;
   degraded: boolean;
+}
+
+/**
+ * Чи підтверджено підтип, названий каналом. Реактивний — коли джерело саме
+ * заміряло швидкість, якої поршневий шахед не має (≥ 250 км/год: поршнева
+ * «Герань» — до ~185). Без заміру — лише слова каналу, тобто «можливо».
+ */
+export const JET_CONFIRM_KMH = 250;
+export function subtypeConfirmed(t: Threat): boolean {
+  if (!t.typeFromChannels) return true;
+  const kmh = t.quality?.speedKmh ?? t.quality?.reportedSpeedKmh ?? null;
+  return typeof kmh === "number" && kmh >= JET_CONFIRM_KMH;
 }

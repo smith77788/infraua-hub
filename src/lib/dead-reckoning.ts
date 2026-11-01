@@ -19,6 +19,7 @@ import { SPEED_RANGE_KMH } from "./threat-eta";
 // Повільні типи з прямим курсом, які можна протягувати. Решта — ні.
 const PROJECTABLE: ReadonlySet<ThreatType> = new Set([
   "shahed",
+  "decoy",
   "reactive",
   "banderol",
   "recon",

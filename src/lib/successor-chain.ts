@@ -44,6 +44,7 @@ import { displayRadiusKm, EMPTY_QUALITY } from "./threat-quality";
 /** Типи, які можна зливати між собою: ударні й невідомі БпЛА. */
 const DRONE_CLASS: ReadonlySet<ThreatType> = new Set<ThreatType>([
   "shahed",
+  "decoy",
   "reactive",
   "banderol",
   "unknown",

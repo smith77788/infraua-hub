@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  classifyThreatType,
+  subtypeConfirmed,
   fuseThreats,
   normalizeThreatType,
   observationsTooOldForAlerts,
@@ -10,6 +12,7 @@ import {
   finiteOr,
 } from "./air";
 import { renderChannelPost } from "./channel-post";
+import { EMPTY_QUALITY } from "./threat-quality";
 
 function t(id: string, lat: number, lon: number, extra: Partial<Threat> = {}): Threat {
   return {
@@ -255,5 +258,49 @@ describe("finiteOr — величини, які бувають відʼємни�
     expect(finiteOr("-5", 0)).toBe(0);
     expect(finiteOr(undefined, 3)).toBe(3);
     expect(finiteOr(null, 3)).toBe(3);
+  });
+});
+
+describe("імітатори — окремий тип (опитувальник 01.11)", () => {
+  it("«Гербера», «імітатор», «Пародія» — decoy, а не шахед", () => {
+    expect(classifyThreatType("2 Гербери курсом на Київ")).toBe("decoy");
+    expect(classifyThreatType("БпЛА-імітатори над Житомирщиною")).toBe("decoy");
+    expect(classifyThreatType("Пародія на Біла Церква")).toBe("decoy");
+  });
+
+  it("звичайний «БпЛА» лишається шахедом, реактивний — реактивним", () => {
+    expect(classifyThreatType("БпЛА курсом на Олевськ")).toBe("shahed");
+    expect(classifyThreatType("Реактивний на Боярку")).toBe("reactive");
+  });
+});
+
+describe("subtypeConfirmed — «можливо реактивний» (опитувальник 01.11)", () => {
+  const base = {
+    id: "a",
+    name: "Боярка",
+    lat: 50.3,
+    lon: 30.3,
+    source: "neptun.in.ua",
+    count: 1,
+    since: "",
+    expires: "",
+  };
+
+  it("тип від самого джерела — підтверджений", () => {
+    expect(subtypeConfirmed({ ...base, type: "reactive" })).toBe(true);
+  });
+
+  it("лише слова каналу, швидкості нема — «можливо»", () => {
+    expect(subtypeConfirmed({ ...base, type: "reactive", typeFromChannels: true })).toBe(false);
+  });
+
+  it("заміряна швидкість реактивного — підтверджено; поршнева — ні", () => {
+    const q = (speedKmh: number) => ({ ...EMPTY_QUALITY, speedKmh });
+    expect(
+      subtypeConfirmed({ ...base, type: "reactive", typeFromChannels: true, quality: q(380) }),
+    ).toBe(true);
+    expect(
+      subtypeConfirmed({ ...base, type: "reactive", typeFromChannels: true, quality: q(170) }),
+    ).toBe(false);
   });
 });
