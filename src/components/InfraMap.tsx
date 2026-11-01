@@ -43,6 +43,7 @@ import { trackLatLngs, updateHistory, type FixPoint } from "@/lib/track-history"
 import { fixedAtMs, nowRadiusKm } from "@/lib/position-age";
 import { driftSector, spreadFor } from "@/lib/drift-sector";
 import { spreadOffsets } from "@/lib/spread-offsets";
+import ReportButton from "@/components/ReportButton";
 import {
   CATEGORIES,
   EVENT_KINDS,
@@ -1202,6 +1203,7 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                       ) : null}
                     </div>
                   </details>
+                  <ReportButton t={t} />
                 </div>
               </Popup>
             </Marker>

@@ -202,6 +202,13 @@ import {
   type OblastDanger,
 } from "./lib/oblast-watch";
 import {
+  appendReport,
+  parseReport,
+  renderReportForOwner,
+  ReportLimiter,
+  type MapReport,
+} from "./lib/map-reports";
+import {
   packPointAlarms,
   parseAlertZones,
   pointKey,
@@ -3596,6 +3603,49 @@ export function alertDetectLagReport(): ReturnType<LagLog["summary"]> {
   return alertDetectLag.summary();
 }
 
+/* ─── Скарги з карти «тут неправильно» ─────────────────────────────────── */
+
+const MAP_REPORTS_MARKER = "map-reports";
+const reportLimiter = new ReportLimiter(20);
+let mapReports: MapReport[] | null = null;
+
+async function loadMapReports(): Promise<MapReport[]> {
+  if (mapReports) return mapReports;
+  try {
+    const raw = await readMarker(MAP_REPORTS_MARKER);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    mapReports = Array.isArray(parsed) ? (parsed as MapReport[]) : [];
+  } catch {
+    mapReports = [];
+  }
+  return mapReports;
+}
+
+async function handleMapReport(request: Request): Promise<Response> {
+  const now = Date.now();
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+    });
+  if (!reportLimiter.allow(ip, now)) return json(429, { ok: false, error: "забагато скарг" });
+  const report = parseReport(await request.json().catch(() => null), now);
+  if (!report) return json(400, { ok: false, error: "незрозуміла скарга" });
+  mapReports = appendReport(await loadMapReports(), report);
+  await writeMarker(MAP_REPORTS_MARKER, JSON.stringify(mapReports));
+  // Власнику — одразу в Telegram: так скарга не губиться в журналі.
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const owner = Number(process.env["TELEGRAM_OWNER_ID"]?.trim());
+  if (token && Number.isFinite(owner) && owner !== 0) {
+    void telegramSend(token, owner, renderReportForOwner(report)).catch(() => {});
+  }
+  return json(200, { ok: true });
+}
+
 /** Тривога в районі кожної точки підписника — памʼять між обходами (на томі). */
 let pointAlarms = new Map<string, PointAlarm>();
 let pointAlarmsLoaded = false;
@@ -6148,6 +6198,17 @@ export default {
 
     // Публічний знімок повітряної обстановки — щоб радар вбудовували інші.
     // Відкритий, з CORS: дані ті самі, що на публічній мапі.
+    // «Тут неправильно» з карти — див. `map-reports.ts`.
+    if (pathname === "/api/report" && request.method === "POST") {
+      return handleMapReport(request);
+    }
+    if (pathname === "/api/reports") {
+      const log = await loadMapReports();
+      return new Response(JSON.stringify({ count: log.length, reports: log.slice(-100) }), {
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+    }
+
     if (pathname === "/api/air/replay") {
       const now = Date.now();
       // ?hours=3 — «Наліт», ?hours=24 — «Історія» (усталено — 3).
