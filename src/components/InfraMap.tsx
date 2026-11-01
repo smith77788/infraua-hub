@@ -210,6 +210,15 @@ const ICON_PATHS: Record<CategoryId, string> = {
 // Розміри підняті під телефон: на маленькому екрані позначка має читатися й
 // бути придатною для дотику. Свіжі — найбільші, застарілі — дрібніші й тьмяні.
 // Невідомий час — як застарілий: позначка без часу не має виглядати впевнено.
+/** Ракетні класи: у картці — позначка, офіційне джерело чи канал. */
+const MISSILE_CLASS: ReadonlySet<ThreatType> = new Set<ThreatType>([
+  "ballistic",
+  "missile",
+  "cruise",
+  "banderol",
+  "kab",
+]);
+
 /** Колір втраченої цілі. */
 const LOST_COLOR = "#8b949e";
 /** На скільки хвилин уперед малюємо конус прогнозу. */
@@ -1159,6 +1168,21 @@ function ThreatLayer({ threats }: { threats: Threat[] }) {
                     <p className="opacity-80">Підтверджено заміряною швидкістю.</p>
                   ) : null}
                   <p className="opacity-80">{t.name}</p>
+                  {/*
+                    Ракети — і з офіційних повідомлень, і з каналів моніторингу,
+                    «з позначкою джерела» (опитувальник 01.11). Позначка — для
+                    всіх ракетних класів, бо від неї залежить, наскільки вірити.
+                  */}
+                  {MISSILE_CLASS.has(type) ? (
+                    <p className="opacity-80">
+                      Джерело:{" "}
+                      {(t.sources ?? [t.source]).some((x) => roleOfSource(x) === "official")
+                        ? "офіційне (Повітряні сили)"
+                        : t.source === "neptun.in.ua"
+                          ? "Нептун (зведення каналів моніторингу)"
+                          : "канал моніторингу, не офіційно"}
+                    </p>
+                  ) : null}
                   {hasCourse ? (
                     <p className="opacity-70">
                       Курс: {compass(courseDeg as number)} ({Math.round(courseDeg as number)}°)
