@@ -187,6 +187,41 @@ export function renderAlertStarted(
 }
 
 /**
+ * Тривога в РАЙОНІ точки — див. `raion-alerts.ts`. Окремо від обласної: та
+ * каже «десь в області», ця — «саме там, де ви».
+ */
+export function renderRaionAlarmStarted(
+  zone: string,
+  places: readonly string[],
+  danger?: OblastDanger | null,
+): string {
+  const where = places.length ? `\nВаше місце: ${places.map(safe).join(", ")}` : "";
+  return [
+    `🔴 <b>Повітряна тривога — ${safe(zone)}</b>`,
+    "",
+    `Оголошено офіційно там, де ви.${where}`,
+    ...(danger ? dangerLines(danger) : []),
+    "",
+    "<i>Це офіційна тривога, а не наша оцінка. Пройдіть в укриття.</i>",
+  ].join("\n");
+}
+
+export function renderRaionAlarmCleared(
+  zone: string,
+  places: readonly string[],
+  durationText: string | null,
+): string {
+  const where = places.length ? ` (${places.map(safe).join(", ")})` : "";
+  return [
+    `🟢 <b>Відбій — ${safe(zone)}</b>${where}`,
+    "",
+    durationText ? `Тривога тривала ${safe(durationText)}.` : "Офіційну тривогу знято.",
+    "",
+    "<i>Відбій офіційний.</i>",
+  ].join("\n");
+}
+
+/**
  * Текст відбою.
  *
  * Єдине місце в усій системі, де слово «відбій» вживається без застережень, —

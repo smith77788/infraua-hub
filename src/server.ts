@@ -195,10 +195,22 @@ import {
   oblastTransitions,
   renderAlertCleared,
   renderAlertStarted,
+  renderRaionAlarmCleared,
+  renderRaionAlarmStarted,
   renderEscalation,
   updateAlertStarts,
   type OblastDanger,
 } from "./lib/oblast-watch";
+import {
+  packPointAlarms,
+  parseAlertZones,
+  pointKey,
+  pointTransition,
+  unpackPointAlarms,
+  zoneAt,
+  type AlertZone,
+  type PointAlarm,
+} from "./lib/raion-alerts";
 import { dangerNotice } from "./lib/danger-notice";
 import { packAlertMemory, unpackAlertMemory } from "./lib/alert-memory";
 import { appendBoot, bootReport, parseBootLog, type Boot } from "./lib/boot-log";
@@ -468,6 +480,13 @@ async function health(request: Request): Promise<Response> {
     // з каналів) поруч із довідковою: так видно, чи довідка бреше. Див.
     // `speed-ledger`.
     measuredSpeed: speedLedger.summary(Date.now()),
+    // Тривога в районі точок підписників (`raion-alerts`): скільки точок
+    // відстежуємо, скільки з них зараз під тривогою і чи живе джерело районів.
+    raionAlarms: {
+      points: pointAlarms.size,
+      underAlarm: [...pointAlarms.values()].filter((p) => p.zone !== null).length,
+      zonesAgeSec: raionZonesCache ? Math.round((Date.now() - raionZonesCache.at) / 1000) : null,
+    },
     typeMemory: {
       tracks: (await import("./lib/infra.functions")).typeMemoryState().length,
       restoredOnStart: typeMemoryStats.restored,
@@ -938,6 +957,17 @@ async function fetchAlertLevels(maxAgeMs = 25_000): Promise<AlertLevels | null> 
   }
 }
 
+/** Повні полігони районів під тривогою; оновлюються разом із заливкою карти. */
+let raionZonesCache: { at: number; zones: AlertZone[] } | null = null;
+/** Старші за це — вже не «зараз»: обхід повертається до обласного переліку. */
+const RAION_ZONES_MAX_STALE_MS = 2 * 60_000;
+
+async function fetchRaionZones(maxAgeMs: number): Promise<AlertZone[] | null> {
+  await fetchAlertZones(maxAgeMs);
+  const c = raionZonesCache;
+  return c && Date.now() - c.at <= RAION_ZONES_MAX_STALE_MS ? c.zones : null;
+}
+
 async function fetchAlertZones(maxAgeMs = 25_000): Promise<AlertRing[]> {
   const now = Date.now();
   if (alertZonesCache && now - alertZonesCache.at < maxAgeMs) return alertZonesCache.polygons;
@@ -952,6 +982,9 @@ async function fetchAlertZones(maxAgeMs = 25_000): Promise<AlertRing[]> {
     const data = (await res.json()) as {
       alerts?: { region_name?: string; geometry?: { type?: string; coordinates?: unknown } }[];
     };
+    // Повні полігони — для «чи точка підписника в тривозі» (`raion-alerts`).
+    const full = parseAlertZones(data);
+    if (full) raionZonesCache = { at: now, zones: full };
     const toLatLon = (ring: number[][]): [number, number][] => {
       const step = Math.max(1, Math.ceil(ring.length / 120));
       const out: [number, number][] = [];
@@ -3541,6 +3574,26 @@ export function alertDetectLagReport(): ReturnType<LagLog["summary"]> {
   return alertDetectLag.summary();
 }
 
+/** Тривога в районі кожної точки підписника — памʼять між обходами (на томі). */
+let pointAlarms = new Map<string, PointAlarm>();
+let pointAlarmsLoaded = false;
+const POINT_ALARM_MARKER = "raion-alarm-memory";
+
+async function hydratePointAlarms(): Promise<void> {
+  if (pointAlarmsLoaded) return;
+  pointAlarmsLoaded = true;
+  const restored = unpackPointAlarms(await readMarker(POINT_ALARM_MARKER));
+  if (restored && pointAlarms.size === 0) pointAlarms = restored;
+}
+
+interface RaionEvent {
+  sub: Subscriber;
+  place: string;
+  lat: number;
+  lon: number;
+  transition: ReturnType<typeof pointTransition>["transition"] & {};
+}
+
 /** Памʼять між перезапусками підтягується один раз на життя процесу. */
 let alertMemoryLoaded = false;
 async function hydrateAlertMemory(now: number): Promise<void> {
@@ -3602,7 +3655,50 @@ async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void>
    */
   await writeMarker("alert-memory", packAlertMemory(active, levelsNow, alertStarts, now));
 
-  if (transitions.length === 0 && escalated.length === 0) return;
+  /*
+   * Тривога в РАЙОНІ точки (див. `raion-alerts`). Коли перелік районів живий,
+   * особисті «тривога/відбій» ідуть лише з нього: обласний перелік каже
+   * «тривога в області», коли тривога хоч в одному її районі, — і будив людей
+   * у Рівному тривогою в Сарненському районі, а тривогу в самому Рівному
+   * (01.11 02:13 UTC) пропускав, бо область і так уже була «під тривогою».
+   * Збій джерела районів — повертаємось до обласного, як було.
+   */
+  const zones = await fetchRaionZones(opts.fresh ? 0 : 20_000);
+  const raionMode = zones !== null;
+  const raionQueue: RaionEvent[] = [];
+  if (zones) {
+    await hydratePointAlarms();
+    const subsForRaion = await allSubscribers();
+    const seen = new Set<string>();
+    let changed = false;
+    for (const sub of subsForRaion) {
+      for (const place of placesFromLegacy(sub.point, sub.places, now)) {
+        const key = pointKey(sub.chatId, place.lat, place.lon);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const prev = pointAlarms.get(key);
+        const { next, transition } = pointTransition(
+          prev,
+          zoneAt(place.lat, place.lon, zones),
+          now,
+        );
+        if (!prev || prev.zone !== next.zone || prev.since !== next.since) changed = true;
+        pointAlarms.set(key, next);
+        if (transition)
+          raionQueue.push({ sub, place: place.label, lat: place.lat, lon: place.lon, transition });
+      }
+    }
+    // Точки, яких більше нема (людина прибрала місце), — з памʼяті геть.
+    for (const key of [...pointAlarms.keys()]) {
+      if (!seen.has(key)) {
+        pointAlarms.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) await writeMarker(POINT_ALARM_MARKER, packPointAlarms(pointAlarms));
+  }
+
+  if (transitions.length === 0 && escalated.length === 0 && raionQueue.length === 0) return;
 
   /*
    * Цілі потрібні не для сповіщення, а для ЧЕСНОСТІ: якщо оголошено ракетну
@@ -3645,8 +3741,47 @@ async function officialAlertSweep(opts: { fresh?: boolean } = {}): Promise<void>
     circleMembers.set(sub.circle, list);
   }
 
+  // Кілька місць людини в одному районі — одне повідомлення з усіма назвами.
+  const grouped = new Map<string, RaionEvent & { places: string[] }>();
+  for (const ev of raionQueue) {
+    const k = `${ev.sub.chatId}|${ev.transition.kind}|${ev.transition.zone}`;
+    const g = grouped.get(k);
+    if (g) g.places.push(ev.place);
+    else grouped.set(k, { ...ev, places: [ev.place] });
+  }
+  for (const ev of grouped.values()) {
+    const sub = ev.sub;
+    if (sub.muted || sub.officialAlerts === false) continue;
+    const t = ev.transition;
+    const oblast = oblastOf(ev.lat, ev.lon);
+    queue.push({
+      chatId: sub.chatId,
+      priority: t.kind === "started" ? Priority.Shelter : Priority.Routine,
+      expiresAt: now + USEFUL_WINDOW_MS,
+      payload: {
+        chatId: sub.chatId,
+        text:
+          t.kind === "started"
+            ? renderRaionAlarmStarted(t.zone, ev.places, dangerFor(oblast))
+            : renderRaionAlarmCleared(
+                t.zone,
+                ev.places,
+                t.durationMs !== null ? formatDuration(t.durationMs) : null,
+              ),
+        stats:
+          t.kind === "started"
+            ? { sub, kind: "started" as const, minutes: 0 }
+            : t.durationMs !== null
+              ? { sub, kind: "cleared" as const, minutes: t.durationMs / 60_000 }
+              : null,
+      },
+    });
+  }
+
   for (const t of transitions) {
     for (const sub of subs) {
+      // Особисте «тривога/відбій» — з районів, коли вони є (див. вище).
+      if (raionMode) break;
       if (sub.muted || sub.officialAlerts === false) continue;
       const mine = placesFromLegacy(sub.point, sub.places, now).filter(
         // Обидві назви короткі (`parseOfficialAlerts` зводить їх через
