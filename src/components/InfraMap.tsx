@@ -1200,7 +1200,7 @@ export default function InfraMap({
         <Polyline
           key={`oblast-${i}`}
           positions={ring}
-          pathOptions={{ color: "#3b5566", weight: 0.8, opacity: 0.5, interactive: false }}
+          pathOptions={{ color: "#3b5566", weight: 0.6, opacity: 0.35, interactive: false }}
         />
       ))}
       <Polyline
@@ -1304,11 +1304,14 @@ export default function InfraMap({
                 pathOptions={{
                   color,
                   fillColor: color,
-                  fillOpacity: level === "red" ? 0.1 : 0.05,
-                  weight: 1.2,
+                  // Тонше й тьмяніше (опитувальник користувача, 01.11): межі
+                  // тривоги — тло, а не головне на карті; головне — цілі.
+                  fillOpacity: level === "red" ? 0.08 : 0.04,
+                  weight: 0.8,
+                  opacity: 0.45,
                   // Пунктир — стан, що минає. Суцільна лінія нижче належить
                   // території, яку тримають місяцями.
-                  dashArray: "5 4",
+                  dashArray: "3 4",
                 }}
               >
                 <Popup>

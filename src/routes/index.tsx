@@ -22,6 +22,7 @@ import {
   Loader2,
   Map as MapIcon,
   Network,
+  Radar,
   RefreshCw,
   Filter,
   HelpCircle,
@@ -391,6 +392,8 @@ function Console() {
   const [view, setView] = useState<"map" | "analytics">("map");
   const [showTable, setShowTable] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  // Телефон: банери, стан джерел і плитки — в окремій панелі, а не на карті.
+  const [showSituation, setShowSituation] = useState(false);
   const [showPlatform, setShowPlatform] = useState(false);
   const [focus, setFocus] = useState<Focus>(null);
   const [operatorId, setOperatorId] = useState<string | null>(null);
@@ -1075,7 +1078,14 @@ function Console() {
         а консоль мовчала: рівень тривоги фарбував полігон на карті й ніде
         більше не зʼявлявся.
       */}
-      <DangerBanner notice={danger} />
+      {/*
+        На телефоні банер і смуга стану переїхали в панель «Обстановка»
+        (кнопка в шапці): користувач (опитувальник, 01.11) — «прибрати з карти
+        верхні банери й рядок „Джерела“, але лишити доступними окремо».
+      */}
+      <div className="hidden lg:contents">
+        <DangerBanner notice={danger} />
+      </div>
       {/*
         Смуга стану замість декоративного банера класифікації. У консолях
         такого класу зверху стоїть рядок, який каже, з чим саме ти працюєш; тут
@@ -1083,14 +1093,16 @@ function Console() {
         звʼязків, що спираються на факт. Три речі, від яких залежить, чи можна
         діяти на побаченому.
       */}
-      <StatusStrip
-        worstSource={worstSource}
-        observedShare={groundedness.observedShare}
-        showInfra={!infraDisabled}
-        spaceWeather={feeds.spaceWeather}
-        outages={feeds.outages}
-        weather={feeds.weather}
-      />
+      <div className="hidden lg:contents">
+        <StatusStrip
+          worstSource={worstSource}
+          observedShare={groundedness.observedShare}
+          showInfra={!infraDisabled}
+          spaceWeather={feeds.spaceWeather}
+          outages={feeds.outages}
+          weather={feeds.weather}
+        />
+      </div>
 
       <header className="z-20 grid h-11 shrink-0 sm:h-14 grid-cols-[minmax(0,auto)_1fr] items-center gap-2 border-b border-border px-3 sm:flex sm:justify-between sm:gap-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -1143,6 +1155,23 @@ function Console() {
               <Table2 className="size-3" /> <span className="hidden sm:inline">Таблиця</span>
             </Button>
           ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            title="Обстановка: попередження, джерела, хвилі"
+            aria-label="Обстановка"
+            className="relative shrink-0 px-2 text-[12px] font-medium lg:hidden"
+            onClick={() => setShowSituation(true)}
+          >
+            <Radar className="size-3" />
+            {danger.level !== "none" ? (
+              <span
+                className={`absolute -right-0.5 -top-0.5 size-2 rounded-full ${
+                  danger.level === "danger" ? "bg-red-500" : "bg-amber-400"
+                }`}
+              />
+            ) : null}
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -1853,7 +1882,7 @@ function Console() {
               затуляє. Панелі згорнуті за замовчуванням, тож смуга компактна;
               `empty:hidden` прибирає її зовсім, коли показувати нічого.
             */}
-            <div className="flex flex-wrap gap-2 px-2 pt-1.5 empty:hidden">
+            <div className="hidden flex-wrap gap-2 px-2 pt-1.5 empty:hidden lg:flex">
               {(airConn.link === "live" || airConn.link === "delayed") && raidCursor === null ? (
                 <>
                   <WaveForecast threats={threats} />
@@ -2250,6 +2279,53 @@ function Console() {
         </div>
       )}
 
+      {showSituation ? (
+        <div
+          className="fixed inset-0 z-[1100] flex flex-col justify-end bg-black/50 lg:hidden"
+          onClick={() => setShowSituation(false)}
+        >
+          <section
+            role="dialog"
+            aria-label="Обстановка"
+            className="max-h-[85svh] overflow-y-auto rounded-t-2xl border-t border-border bg-background pb-[env(safe-area-inset-bottom,0px)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background px-4 py-3">
+              <span className="text-sm font-semibold">Обстановка</span>
+              <button
+                type="button"
+                aria-label="Закрити"
+                className="rounded p-1 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowSituation(false)}
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <DangerBanner notice={danger} />
+            <StatusStrip
+              worstSource={worstSource}
+              observedShare={groundedness.observedShare}
+              showInfra={!infraDisabled}
+              spaceWeather={feeds.spaceWeather}
+              outages={feeds.outages}
+              weather={feeds.weather}
+            />
+            <div className="flex flex-col gap-2 p-3">
+              {raidCursor === null ? (
+                <>
+                  <WaveForecast threats={threats} />
+                  <ActiveWaves waves={waves} threats={threats} />
+                  <HotOblasts threats={threats} />
+                </>
+              ) : (
+                <p className="text-[13px] text-muted-foreground">
+                  Йде перемотка: хвилі й області показуються для поточної картини.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
       {showHelp ? (
         <OrientationCard onClose={() => setShowHelp(false)} showInfra={!infraDisabled} />
       ) : null}
