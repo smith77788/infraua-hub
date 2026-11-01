@@ -368,3 +368,33 @@ describe("нічний режим не має мовчати, коли ціль 
     expect(decide(s, [inbound("a", "shahed", 80)], 1_000_000, DAY).send).toBe(true);
   });
 });
+
+describe("cadence «лише загострення» (опитувальник 01.11)", () => {
+  const T0 = 10_000_000;
+
+  it("перше сповіщення — завжди: рівень зріс із «нічого»", () => {
+    const d = decide(sub({ cadence: "escalation" }), [inbound("a", "shahed", 40)], T0);
+    expect(d.send).toBe(true);
+  });
+
+  it("нова ціль на тій самій відстані — мовчимо; ближче (у тіснішому кільці) — пишемо", () => {
+    const s0 = sub({ cadence: "escalation" });
+    const first = decide(s0, [inbound("a", "shahed", 40)], T0);
+    const s1 = markAlerted(s0, first, T0);
+    const later = T0 + ALERT_COOLDOWN_MS + 60_000;
+    const same = decide(s1, [inbound("a", "shahed", 40), inbound("b", "shahed", 42)], later);
+    expect(same.send).toBe(false);
+    const closer = decide(s1, [inbound("a", "shahed", 8)], later);
+    expect(closer.send).toBe(true);
+  });
+
+  it("усталено — як було: про кожну нову ціль", () => {
+    const s0 = sub();
+    const first = decide(s0, [inbound("a", "shahed", 40)], T0);
+    const s1 = markAlerted(s0, first, T0);
+    const later = T0 + ALERT_COOLDOWN_MS + 60_000;
+    expect(decide(s1, [inbound("a", "shahed", 40), inbound("b", "shahed", 42)], later).send).toBe(
+      true,
+    );
+  });
+});

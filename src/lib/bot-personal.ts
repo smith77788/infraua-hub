@@ -411,6 +411,7 @@ export function renderSettings(sub: Subscriber): string {
     `Радіус: <b>${sub.radiusKm} км</b>`,
     `Поріг часу: <b>${sub.leadMin != null ? `будити за ≤${sub.leadMin} хв льоту` : "за радіусом"}</b>`,
     `Будити: <b>${TIER_LABEL[sub.tier]}</b>`,
+    `Писати: <b>${(sub.cadence ?? "every") === "every" ? "про кожну нову ціль" : "лише коли стає небезпечніше (ціль ближче 50 → 25 → 10 км або вищий рівень)"}</b>`,
     `Уночі (23:00–07:00): <b>${NIGHT_LABEL[sub.night]}</b>`,
     `Сповіщення: <b>${sub.muted ? "на паузі" : "увімкнені"}</b>`,
     `Жива картка: <b>${sub.liveCardMode ? "увімкнена" : "вимкнена"}</b> (/картка)`,
@@ -432,6 +433,7 @@ export const PERSONAL_ACTIONS = {
   tierPrefix: "t:",
   nightPrefix: "n:",
   radiusPrefix: "km:",
+  cadencePrefix: "cd:",
   leadPrefix: "ld:",
   mute: "mu:1",
   unmute: "mu:0",
@@ -446,7 +448,8 @@ const LEAD_OPTIONS: (number | "off")[] = ["off", 5, 10, 15];
 export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalButton[][] } {
   const tiers: AlertTier[] = ["critical", "inbound", "all"];
   const nights: NightMode[] = ["silent", "critical", "all"];
-  const radii = [25, 50, 100];
+  // 10 км — опитувальник 01.11: «ціль поруч» для людини — це 10 км.
+  const radii = [10, 25, 50, 100];
   return {
     inline_keyboard: [
       tiers.map((t) => ({
@@ -462,6 +465,10 @@ export function settingsKeyboard(sub: Subscriber): { inline_keyboard: PersonalBu
       radii.map((km) => ({
         text: `${sub.radiusKm === km ? "✅ " : ""}${km} км`,
         callback_data: `${PERSONAL_ACTIONS.radiusPrefix}${km}`,
+      })),
+      (["every", "escalation"] as const).map((c) => ({
+        text: `${(sub.cadence ?? "every") === c ? "✅ " : ""}${c === "every" ? "Про кожну ціль" : "Лише загострення"}`,
+        callback_data: `${PERSONAL_ACTIONS.cadencePrefix}${c}`,
       })),
       LEAD_OPTIONS.map((opt) => {
         const current = (sub.leadMin ?? null) === (opt === "off" ? null : opt);
@@ -493,6 +500,7 @@ export function parsePersonalAction(
   | { kind: "tier"; value: AlertTier }
   | { kind: "night"; value: NightMode }
   | { kind: "radius"; value: number }
+  | { kind: "cadence"; value: "every" | "escalation" }
   | { kind: "lead"; value: number | null }
   | { kind: "mute"; value: boolean }
   | { kind: "shelter" }
@@ -521,6 +529,10 @@ export function parsePersonalAction(
   if (data.startsWith(PERSONAL_ACTIONS.nightPrefix)) {
     const v = data.slice(PERSONAL_ACTIONS.nightPrefix.length);
     return v === "critical" || v === "all" || v === "silent" ? { kind: "night", value: v } : null;
+  }
+  if (data.startsWith(PERSONAL_ACTIONS.cadencePrefix)) {
+    const v = data.slice(PERSONAL_ACTIONS.cadencePrefix.length);
+    return v === "every" || v === "escalation" ? { kind: "cadence", value: v } : null;
   }
   if (data.startsWith(PERSONAL_ACTIONS.radiusPrefix)) {
     const n = Number(data.slice(PERSONAL_ACTIONS.radiusPrefix.length));

@@ -28,6 +28,13 @@ export type AlertTier = "critical" | "inbound" | "all";
 
 /** Що дозволено вночі (23:00–07:00 за Києвом). */
 export type NightMode = "critical" | "all" | "silent";
+/**
+ * Як часто писати під час нальоту: `every` — про кожну нову ціль на точку;
+ * `escalation` — лише коли стає небезпечніше: рівень зріс або найближча
+ * вхідна ціль увійшла в тісніше кільце (50 → 25 → 10 км). Опитувальник
+ * 01.11: «лише коли стає небезпечніше».
+ */
+export type AlertCadence = "every" | "escalation";
 
 export interface SubscriberPoint {
   lat: number;
@@ -78,6 +85,10 @@ export interface Subscriber {
   leadMin?: number | null;
   tier: AlertTier;
   night: NightMode;
+  /** Відсутнє — `every`, як було до появи налаштування. */
+  cadence?: AlertCadence;
+  /** Кільце найближчої вхідної цілі в останньому сповіщенні (див. `nearestBand`). */
+  lastBand?: number | null;
   /** Пауза без втрати налаштувань: `/stop` вимикає, `/my` вмикає назад. */
   muted: boolean;
   /** Власний код запрошення. */
@@ -258,6 +269,19 @@ export interface AlertDecision {
   /** Цілі, про які йдеться (ідентифікатори — для дедупу наступного разу). */
   ids: string[];
   level: DangerLevel;
+  /** Кільце найближчої вхідної цілі (див. `nearestBand`); `null` — цілей нема. */
+  band?: number | null;
+}
+
+/** Кільця близькості, км: що ближче — то більший номер кільця. */
+export const BANDS_KM = [50, 25, 10] as const;
+/** 0 — далі за 50 км, 1 — ≤50, 2 — ≤25, 3 — ≤10. */
+export function nearestBand(km: number): number {
+  let band = 0;
+  BANDS_KM.forEach((edge, i) => {
+    if (km <= edge) band = i + 1;
+  });
+  return band;
 }
 
 /**
@@ -369,8 +393,20 @@ export function decideAlert(
   const fresh = ids.filter((id) => !known.has(id));
   const escalated = rank(level) > rank(sub.lastLevel);
   const cooling = now - sub.lastAlertAt < ALERT_COOLDOWN_MS;
+  const band = nearestBand(Math.min(...pool.map((n) => n.distanceKm)));
+  const closer = band > (sub.lastBand ?? 0);
 
-  if (escalated) return { send: true, reason: "обстановка загострилась", ids, level };
+  if (escalated) return { send: true, reason: "обстановка загострилась", ids, level, band };
+
+  /*
+   * «Лише коли стає небезпечніше»: нова ціль на тій самій відстані — не
+   * привід писати; привід — ціль увійшла в тісніше кільце.
+   */
+  if (sub.cadence === "escalation") {
+    return closer
+      ? { send: true, reason: "ціль наблизилась", ids, level, band }
+      : { send: false, reason: "небезпечніше не стало", ids, level, band };
+  }
 
   if (now - sub.lastAlertAt < ALERT_FLOOR_MS) {
     return { send: false, reason: "щойно надсилали сповіщення", ids, level };
@@ -381,7 +417,7 @@ export function decideAlert(
   if (fresh.length === 0) {
     return { send: false, reason: "нових цілей на вашу точку немає", ids, level };
   }
-  return { send: true, reason: "нова вхідна ціль", ids, level };
+  return { send: true, reason: "нова вхідна ціль", ids, level, band };
 }
 
 /**
@@ -408,7 +444,13 @@ function rank(level: DangerLevel | null): number {
 
 /** Стан після надісланого сповіщення — щоб наступне рішення бачило історію. */
 export function markAlerted(sub: Subscriber, decision: AlertDecision, now: number): Subscriber {
-  return { ...sub, lastAlertAt: now, lastAlertIds: decision.ids, lastLevel: decision.level };
+  return {
+    ...sub,
+    lastAlertAt: now,
+    lastAlertIds: decision.ids,
+    lastLevel: decision.level,
+    lastBand: decision.band ?? null,
+  };
 }
 
 /**
@@ -421,7 +463,7 @@ export function markAlerted(sub: Subscriber, decision: AlertDecision, now: numbe
 export const ALERT_FORGET_MS = 45 * 60 * 1000;
 export function forgetStale(sub: Subscriber, now: number): Subscriber {
   if (sub.lastAlertAt && now - sub.lastAlertAt > ALERT_FORGET_MS) {
-    return { ...sub, lastAlertIds: [], lastLevel: null };
+    return { ...sub, lastAlertIds: [], lastLevel: null, lastBand: null };
   }
   return sub;
 }

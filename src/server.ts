@@ -1072,6 +1072,25 @@ async function hydrateTypeMemory(): Promise<void> {
 // Відновлюємо одразу при старті, не чекаючи першого обходу.
 void hydrateTypeMemory();
 
+/*
+ * Відповіді власника в опитувальнику (01.11) — про НЬОГО САМОГО: «ціль поруч»
+ * — 10 км, уночі будити завжди, писати лише коли стає небезпечніше.
+ * Застосовуємо до його профілю один раз (маркер), далі він керує кнопками.
+ * Інших підписників не чіпаємо: це їхні налаштування.
+ */
+const OWNER_PREFS_MARKER = "owner-survey-prefs-2026-11-01";
+async function applyOwnerSurveyPrefs(): Promise<void> {
+  const owner = Number(process.env["TELEGRAM_OWNER_ID"]?.trim());
+  if (!Number.isFinite(owner) || owner === 0) return;
+  if (await readMarker(OWNER_PREFS_MARKER)) return;
+  const sub = await getSubscriber(owner);
+  if (!sub) return; // ще не підписаний — нема чого міняти, спробуємо після рестарту
+  await putSubscriber({ ...sub, radiusKm: 10, night: "all", cadence: "escalation" });
+  await writeMarker(OWNER_PREFS_MARKER, new Date().toISOString());
+  console.log("налаштування власника за опитувальником застосовано");
+}
+void applyOwnerSurveyPrefs().catch((e) => console.error("owner prefs failed", e));
+
 async function saveTypeMemory(now: number): Promise<void> {
   const day = kyivDate(new Date(now));
   const daily = day !== typeMemoryStats.cleanupDay;
@@ -3246,6 +3265,9 @@ async function handlePersonalPress(
   } else if (action.kind === "radius") {
     updated = { ...sub, radiusKm: clampRadius(action.value) };
     toast = `Радіус: ${updated.radiusKm} км`;
+  } else if (action.kind === "cadence") {
+    updated = { ...sub, cadence: action.value };
+    toast = action.value === "every" ? "Писати про кожну ціль" : "Писати лише при загостренні";
   } else if (action.kind === "lead") {
     updated = { ...sub, leadMin: action.value == null ? null : clampLead(action.value) };
     toast =

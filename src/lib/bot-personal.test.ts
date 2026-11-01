@@ -461,3 +461,12 @@ describe("підпис нічного режиму каже, що він роб�
     expect(renderSettings(sub({ night: "silent" }))).toContain("тиша");
   });
 });
+
+describe("налаштування за опитувальником 01.11", () => {
+  it("кнопки «10 км» і «лише загострення» розбираються", () => {
+    expect(parsePersonalAction("km:10")).toEqual({ kind: "radius", value: 10 });
+    expect(parsePersonalAction("cd:escalation")).toEqual({ kind: "cadence", value: "escalation" });
+    expect(parsePersonalAction("cd:every")).toEqual({ kind: "cadence", value: "every" });
+    expect(parsePersonalAction("cd:xxx")).toBeNull();
+  });
+});
