@@ -266,6 +266,8 @@ export interface Threat {
    * (див. `subtypeConfirmed`). Опитувальник 01.11: «окрема позначка».
    */
   typeFromChannels?: boolean;
+  /** Треки джерела, злиті в цю ціль як паралельні дублі (`parallel-merge`). */
+  mergedIds?: string[];
   count: number;
   since: string;
   expires: string;

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { RU_LAUNCH_SOURCES, roleOfSource, TG_CHANNELS } from "./osint-sources";
+import { mergeParallelDuplicates } from "./parallel-merge";
 import { TypeMemory } from "./type-memory";
 
 const RU_CHANNELS = new Set(RU_LAUNCH_SOURCES.map((s) => s.channel));
@@ -877,7 +878,9 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
    * Тип потрібен уже тут (реактивний летить утричі далі), тому після
    * `withJetTypes`. Див. `successor-chain.ts`.
    */
-  const merged = mergeSuccessorChains(withJetTypes(raw, now));
+  // Спершу послідовні звіти (старий замовк — новий поруч), потім одночасні
+  // паралельні дублі того самого дрона — див. `parallel-merge.ts`.
+  const merged = mergeParallelDuplicates(mergeSuccessorChains(withJetTypes(raw, now)));
   // Голова ланцюжка успадкувала тип попередників — запамʼятовуємо її id.
   typeMemory.note(merged, now);
   return withChannelTracks(merged, now);
