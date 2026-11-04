@@ -576,3 +576,38 @@ describe("«Запоріжжя:» — рубрика, а не село на Ки
     expect(ms.every((m) => m.kind === "course")).toBe(true);
   });
 });
+
+describe("місцевий канал: тезки — у його області (RADAR.RIVNE, 04.11)", () => {
+  const now = Date.parse("2026-11-04T02:30:00Z");
+  const fix = (text: string, channel = "rivne_1283") =>
+    channelFixes([{ at: now - 60_000, text, channel }], gaz, [], now);
+
+  it("«Березне 1», «Олександрія 2», «Городок» — на Рівненщині, а не на Хмельниччині чи Львівщині", () => {
+    for (const t of ["Березне 1", "Олександрія 2", "Городок", "Грабів⚠️"]) {
+      const f = fix(t)[0]!;
+      expect(f.place.lat).toBeGreaterThan(50.4);
+      expect(f.place.lat).toBeLessThan(51.4);
+      expect(f.place.lon).toBeGreaterThan(25.8);
+      expect(f.place.lon).toBeLessThan(27.2);
+    }
+  });
+
+  it("«Рівне увага» — місто Рівне; «в напрямку міста» — курс на Рівне", () => {
+    const r = fix("Рівне увага")[0]!;
+    expect(r.place.lat).toBeCloseTo(50.62, 1);
+    const c = fix("Ще 1 з півночі в напрямку міста")[0]!;
+    expect(c.kind).toBe("course");
+    expect(c.place.name).toBe("Рівне");
+  });
+
+  it("«Олексин» — це Великий/Малий Олексин біля Рівного (так у довіднику), а не Олексине на Сумщині", () => {
+    const f = fix("Олексин")[0]!;
+    expect(f.place.lat).toBeCloseTo(50.66, 1);
+    expect(f.place.lon).toBeCloseTo(26.24, 1);
+  });
+
+  it("тезка за сотні км без назви області — не ціль; інший канал — як і було", () => {
+    expect(fix("Чорнобаївка")).toHaveLength(0);
+    expect(fix("Ще 1 з півночі в напрямку міста", "someone_else")).toHaveLength(0);
+  });
+});

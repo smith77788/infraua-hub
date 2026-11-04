@@ -198,7 +198,68 @@ const FILLER = new Set([
   "бпла",
   "шахед",
   "мопед",
+  // Позначки місцевих трекерів поруч із назвою: «Рівне увага», «Грабів ⚠️»,
+  // «Північний зниження» (RADAR.RIVNE, 04.11).
+  "увага",
+  "уважно",
+  "зниження",
+  "знижується",
+  "низько",
+  "новии",
+  "нова",
 ]);
+
+/**
+ * «Рідне» місто місцевого каналу. Трекер на кшталт RADAR.RIVNE пише голими
+ * назвами сіл — «Березне 1», «Олександрія 2», «Олексин», «Городок», — а
+ * однойменних сіл в Україні десятки. Без знання, звідки канал, «Березне»
+ * ставало Березним на Хмельниччині, «Олександрія» — на Львівщині, «Олексин» —
+ * на Сумщині, а «курсом на Рівне» — селом Рівне на Сумщині (заміряно 04.11).
+ * Для такого каналу однойменні беремо в ЙОГО області, коли там такий пункт є;
+ * «місто» в дописі — це його місто.
+ */
+/** Прикметники перед назвою пункту в довіднику («Великий Олексин»), нормалізовані. */
+const PREFIXES = [
+  "великии",
+  "малии",
+  "новии",
+  "старии",
+  "верхнии",
+  "нижнии",
+  "велика",
+  "мала",
+  "нова",
+  "стара",
+  "велике",
+  "мале",
+  "нове",
+  "старе",
+];
+
+/** Далі за це від міста місцевого каналу пункт без рубрики області — тезка. */
+export const HOME_MAX_KM = 250;
+
+export const CHANNEL_HOME: Readonly<Record<string, { lat: number; lon: number; city: string }>> = {
+  rivne_1283: { lat: 50.62, lon: 26.25, city: "Рівне" },
+  radarrv2025: { lat: 50.62, lon: 26.25, city: "Рівне" },
+  radarkherson: { lat: 46.64, lon: 32.61, city: "Херсон" },
+  RadarDnepr: { lat: 48.46, lon: 35.05, city: "Дніпро" },
+  Radar_Dnipra: { lat: 48.46, lon: 35.05, city: "Дніпро" },
+  dnipro_alerts: { lat: 48.46, lon: 35.05, city: "Дніпро" },
+  radar_zp: { lat: 47.84, lon: 35.14, city: "Запоріжжя" },
+  vin_info_ppo: { lat: 49.23, lon: 28.47, city: "Вінниця" },
+  nikalert: { lat: 47.57, lon: 34.39, city: "Нікополь" },
+  kramatorsk_radar: { lat: 48.72, lon: 37.56, city: "Краматорськ" },
+  korostentoday: { lat: 50.95, lon: 28.64, city: "Коростень" },
+  kievinform_ua1: { lat: 50.45, lon: 30.52, city: "Київ" },
+  kyiv_airdef: { lat: 50.45, lon: 30.52, city: "Київ" },
+  monitoring_kyiv: { lat: 50.45, lon: 30.52, city: "Київ" },
+  krop_vanek: { lat: 48.51, lon: 32.26, city: "Кропивницький" },
+  PoltavaRadar: { lat: 49.59, lon: 34.55, city: "Полтава" },
+  ppopoltavanightfighters: { lat: 49.59, lon: 34.55, city: "Полтава" },
+  cherkasy_nebbo: { lat: 49.44, lon: 32.06, city: "Черкаси" },
+  RadarChernihiv: { lat: 51.49, lon: 31.29, city: "Чернігів" },
+};
 
 /** Слова фрази: як написано (для показу) і нормалізовані (для пошуку). */
 function words(s: string): { orig: string[]; norm: string[] } {
@@ -435,7 +496,31 @@ export function channelFixes(
       mine.length = 0;
       continue;
     }
+    const home = CHANNEL_HOME[m.channel!] ?? null;
+    const homeAdmin = home ? gaz.adminNear(home.lat, home.lon) : null;
     const ms = mentionsOf(m.text, gaz);
+    /*
+     * «Ще 1 з півночі в напрямку міста», «Місто увага» — для місцевого каналу
+     * «місто» означає його місто. Курс, а не позиція: де ціль саме зараз, такий
+     * допис не каже.
+     */
+    if (
+      !ms.length &&
+      home &&
+      m.text.length <= 80 &&
+      /(?:^|[^\p{L}])міст[оаіу](?:[^\p{L}]|$)/iu.test(m.text)
+    ) {
+      out.push({
+        channel: m.channel!,
+        at: m.at,
+        kind: "course",
+        place: { name: home.city, lat: home.lat, lon: home.lon, admin: homeAdmin ?? "" },
+        said: "місто",
+        type: classifyThreatType(m.text),
+        line: 0,
+      });
+      continue;
+    }
     if (!ms.length) continue;
     const msgType = classifyThreatType(m.text);
     const lines = [...new Set(ms.map((x) => x.line))];
@@ -462,8 +547,36 @@ export function channelFixes(
           ...sameLine,
           ...threats,
         ];
-        const place = nearestTo(x.places, anchors);
+        // Місцевий канал: однойменні — у його області, коли там такий є.
+        let local = homeAdmin ? x.places.filter((p) => p.admin === homeAdmin) : [];
+        /*
+         * У довіднику пункт часто записаний з прикметником: RADAR.RIVNE пише
+         * «Олексин», а біля Рівного це Великий і Малий Олексин (користувач,
+         * 04.11). Коли точного тезки в області каналу нема — шукаємо такі.
+         */
+        if (homeAdmin && !local.length && x.kind === "position") {
+          const said = normName(x.said);
+          local = PREFIXES.flatMap((a) => gaz.find(`${a} ${said}`)).filter(
+            (p) => p.admin === homeAdmin,
+          );
+        }
+        const place = nearestTo(local.length ? local : x.places, [
+          ...anchors,
+          ...(home ? [home] : []),
+        ]);
         if (!place) continue;
+        /*
+         * Пункт місцевого каналу за сотні кілометрів від його міста, без
+         * рубрики іншої області, — майже напевно тезка, якого нема в довіднику:
+         * «Олексин» RADAR.RIVNE ставав Олексиним на Сумщині (04.11).
+         */
+        if (
+          home &&
+          !local.length &&
+          distanceKm(place, home) > HOME_MAX_KM &&
+          !oblastAdminIn(m.text, gaz)
+        )
+          continue;
         if (x.kind === "position") positions.push({ place, said: x.said });
         else
           out.push({
