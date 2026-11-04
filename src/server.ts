@@ -1065,7 +1065,9 @@ async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
  * Пишемо не частіше за хвилину; раз на добу (зміна київської дати) прибираємо
  * відлетілі треки й переписуємо файл, щоб він не накопичував учорашні нальоти.
  */
-const TYPE_MEMORY_MARKER = "type-memory";
+// «-v2»: памʼять, зібрану до 04.11 за хибними правилами (тип із рядка, строк
+// від кадру), не відновлюємо — вона й тримала «реактивними» половину неба.
+const TYPE_MEMORY_MARKER = "type-memory-v2";
 const TYPE_MEMORY_SAVE_EVERY_MS = 60_000;
 let typeMemoryLoaded = false;
 let typeMemorySavedAt = 0;

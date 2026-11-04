@@ -140,3 +140,20 @@ describe("refuteJetBySpeed — «Бандероль» і злиті звіти (
     expect(m.apply([t("old", "shahed")], T0 + 60_000)[0]!.type).toBe("shahed");
   });
 });
+
+describe("строк памʼяті — від згадки каналу, а не від кадру (04.11)", () => {
+  it("голова ланцюжка успадковує час згадки попередника, а не «зараз»", () => {
+    const m = new TypeMemory();
+    m.note([t("old", "reactive")], T0);
+    m.inherit([{ ...t("head", "reactive"), mergedIds: ["old"] }]);
+    expect(m.apply([t("head", "shahed")], T0 + 60_000)[0]!.type).toBe("reactive");
+    // Через TTL після ЗГАДКИ — забуто, хоч голову бачили щойно.
+    expect(m.apply([t("head", "shahed")], T0 + TTL_MS + 60_000)[0]!.type).toBe("shahed");
+  });
+
+  it("успадкування без памʼяті попередника нічого не записує", () => {
+    const m = new TypeMemory();
+    m.inherit([{ ...t("head", "reactive"), mergedIds: ["nobody"] }]);
+    expect(m.size).toBe(0);
+  });
+});

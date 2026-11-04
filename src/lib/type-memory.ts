@@ -24,16 +24,17 @@ import type { Threat, ThreatType } from "./air";
  *   наступного ж кадру.
  * - Лише підвищення: шахед/невідомий → реактивний, а не навпаки. Памʼять не
  *   робить ціль менш небезпечною, ніж її називає джерело.
- * - `TTL_MS` від ОСТАННЬОГО кадру, у якому ціль мала цей тип: довше за
- *   найдовший політ, щоб не загубити тип посеред маршруту, але трек, що зник
- *   з неба, не тягне памʼять у наступну ніч.
+ * - `TTL_MS` від ОСТАННЬОЇ ЗГАДКИ каналу (не від останнього кадру): до 04.11
+ *   строк оновлювався щокадру, і одна давня хибна згадка тримала ціль
+ *   реактивною всю ніч. Злиття звітів передає час згадки, а не продовжує його.
  * - Памʼять — на томі (`toState`/`fromState`): без цього кожен деплой посеред
  *   нальоту робив усі реактивні шахедами (заміряно 31.10 22:32 UTC: перший
  *   кадр після рестарту — 48 із 48 шахеди). Раз на добу сервер прибирає
  *   відлетілі треки й переписує файл (`cleanup`).
  */
 
-export const TTL_MS = 3 * 60 * 60_000;
+/** Від ОСТАННЬОЇ згадки каналу (не від останнього кадру): реактивний летить 1–2 год. */
+export const TTL_MS = 2 * 60 * 60_000;
 
 /** Що памʼятаємо і що з чого можна підняти. */
 const REMEMBERED: Partial<Record<ThreatType, ReadonlySet<ThreatType>>> = {
@@ -60,6 +61,24 @@ export class TypeMemory {
     for (const t of threats) {
       if (!t.id || !t.type || !REMEMBERED[t.type]) continue;
       this.byId.set(t.id, { type: t.type, at: now });
+    }
+  }
+
+  /**
+   * Голова злитого ланцюжка (`mergedIds`) отримує підтип попередників із
+   * їхнім часом згадки — найсвіжішим серед них. Нового часу не дає: строк
+   * памʼяті тримає лише слово каналу.
+   */
+  inherit(threats: readonly Threat[]): void {
+    for (const t of threats) {
+      if (!t.id || !t.type || !REMEMBERED[t.type] || !t.mergedIds?.length) continue;
+      let at = -Infinity;
+      for (const id of t.mergedIds) {
+        const m = this.byId.get(id);
+        if (m && m.type === t.type && m.at > at) at = m.at;
+      }
+      const mine = this.byId.get(t.id);
+      if (Number.isFinite(at) && (!mine || mine.at < at)) this.byId.set(t.id, { type: t.type, at });
     }
   }
 

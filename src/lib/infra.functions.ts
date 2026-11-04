@@ -835,18 +835,21 @@ function withJetTypes(threats: Threat[], now: number): Threat[] {
   // Після уточнення типу — бо неправдоподібність швидкості залежить від нього.
   // Памʼять підтипу — до перевірки швидкості: реактивному дозволено летіти
   // втричі швидше за шахед. Див. `type-memory.ts`.
+  // Підтип за СВІЖОЮ згадкою каналу — лише ці цілі памʼять і запамʼятовує
+  // (з часом згадки): строк памʼяті рахується від останнього слова каналу, а
+  // не від останнього кадру. Інакше одна давня хибна згадка тримала ціль
+  // реактивною всю ніч (04.11: після виправлення розбору — досі 23 з 44).
+  const mentioned = applyBanderolType(
+    applyJetType(threats, jetMentions(ua, now)),
+    typeMentions(ua, now, "banderol"),
+  );
+  typeMemory.note(
+    mentioned.filter((t, i) => t.type !== threats[i]!.type),
+    now,
+  );
   return dropImplausibleSpeed(
     // Замір швидкості сильніший за слово каналу: поршневий дрон не реактивний.
-    refuteJetBySpeed(
-      typeMemory.apply(
-        applyBanderolType(
-          applyJetType(threats, jetMentions(ua, now)),
-          typeMentions(ua, now, "banderol"),
-        ),
-        now,
-      ),
-      typeMemory,
-    ),
+    refuteJetBySpeed(typeMemory.apply(mentioned, now), typeMemory),
   );
 }
 
@@ -890,8 +893,9 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
     mergeParallelDuplicates(mergeSuccessorChains(withJetTypes(raw, now))),
     typeMemory,
   );
-  // Голова ланцюжка успадкувала тип попередників — запамʼятовуємо її id.
-  typeMemory.note(merged, now);
+  // Голова ланцюжка успадкувала тип попередників — запамʼятовуємо її id з
+  // часом ТІЄЇ згадки, а не «зараз»: успадкування не продовжує строк.
+  typeMemory.inherit(merged);
   return withChannelTracks(merged, now);
 }
 
