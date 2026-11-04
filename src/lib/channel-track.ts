@@ -241,6 +241,8 @@ export const HOME_MAX_KM = 250;
 
 export const CHANNEL_HOME: Readonly<Record<string, { lat: number; lon: number; city: string }>> = {
   rivne_1283: { lat: 50.62, lon: 26.25, city: "Рівне" },
+  radarrivne26: { lat: 50.62, lon: 26.25, city: "Рівне" },
+  // Колишня адреса RADAR.RIVNE (див. osint-sources) — для старих дописів у тестах.
   radarrv2025: { lat: 50.62, lon: 26.25, city: "Рівне" },
   radarkherson: { lat: 46.64, lon: 32.61, city: "Херсон" },
   RadarDnepr: { lat: 48.46, lon: 35.05, city: "Дніпро" },
@@ -259,6 +261,38 @@ export const CHANNEL_HOME: Readonly<Record<string, { lat: number; lon: number; c
   ppopoltavanightfighters: { lat: 49.59, lon: 34.55, city: "Полтава" },
   cherkasy_nebbo: { lat: 49.44, lon: 32.06, city: "Черкаси" },
   RadarChernihiv: { lat: 51.49, lon: 31.29, city: "Чернігів" },
+  /*
+   * Решта місцевих трекерів переліку — за містом у назві каналу (коментарі в
+   * osint-sources). Користувач (04.11): «так ведуть більшість каналів
+   * джерел» — голими назвами сіл своєї області. Канали без однозначного міста
+   * («Очі Всюди», «Шо там в небі», «Вартові Півдня») сюди не внесено:
+   * вигадана «домівка» гірша за її брак.
+   */
+  dnepr_nagladach: { lat: 48.46, lon: 35.05, city: "Дніпро" },
+  info_zp: { lat: 47.84, lon: 35.14, city: "Запоріжжя" },
+  zaborzp: { lat: 47.84, lon: 35.14, city: "Запоріжжя" },
+  kyiv_nebo: { lat: 50.45, lon: 30.52, city: "Київ" },
+  odessa_knight: { lat: 46.48, lon: 30.72, city: "Одеса" },
+  odessaveter: { lat: 46.48, lon: 30.72, city: "Одеса" },
+  ReniHub: { lat: 45.46, lon: 28.28, city: "Рені" },
+  kremen_sv: { lat: 49.07, lon: 33.42, city: "Кременчук" },
+  PoltavaRanger: { lat: 49.59, lon: 34.55, city: "Полтава" },
+  krolevetsnews: { lat: 51.55, lon: 33.38, city: "Кролевець" },
+  sumygo: { lat: 50.91, lon: 34.8, city: "Суми" },
+  sumyregion: { lat: 50.91, lon: 34.8, city: "Суми" },
+  svessainfo: { lat: 51.78, lon: 33.7, city: "Свеса" },
+  cxidua: { lat: 49.99, lon: 36.23, city: "Харків" },
+  Karkivw: { lat: 49.99, lon: 36.23, city: "Харків" },
+  kharkov_media: { lat: 49.99, lon: 36.23, city: "Харків" },
+  kuptg: { lat: 49.71, lon: 37.62, city: "Куп'янськ" },
+  monitor1654: { lat: 49.99, lon: 36.23, city: "Харків" },
+  place_kharkiv: { lat: 49.99, lon: 36.23, city: "Харків" },
+  kherson_monitoring: { lat: 46.64, lon: 32.61, city: "Херсон" },
+  kherson_non_drone: { lat: 46.64, lon: 32.61, city: "Херсон" },
+  my_safety_Chernigiv: { lat: 51.49, lon: 31.29, city: "Чернігів" },
+  PhantomChe: { lat: 51.49, lon: 31.29, city: "Чернігів" },
+  ShahedChernihiv: { lat: 51.49, lon: 31.29, city: "Чернігів" },
+  taktychna_rukavuchkaa: { lat: 51.05, lon: 31.89, city: "Ніжин" },
 };
 
 /** Слова фрази: як написано (для показу) і нормалізовані (для пошуку). */
