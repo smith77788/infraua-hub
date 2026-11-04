@@ -884,7 +884,12 @@ export async function neptunThreatsCached(maxAgeMs = 10_000): Promise<Threat[]> 
    */
   // Спершу послідовні звіти (старий замовк — новий поруч), потім одночасні
   // паралельні дублі того самого дрона — див. `parallel-merge.ts`.
-  const merged = mergeParallelDuplicates(mergeSuccessorChains(withJetTypes(raw, now)));
+  // Замір швидкості — і після злиття: злиття знову брало «найнебезпечніший»
+  // тип ланцюжка, тобто відновлювало спростований підтип (див. type-memory).
+  const merged = refuteJetBySpeed(
+    mergeParallelDuplicates(mergeSuccessorChains(withJetTypes(raw, now))),
+    typeMemory,
+  );
   // Голова ланцюжка успадкувала тип попередників — запамʼятовуємо її id.
   typeMemory.note(merged, now);
   return withChannelTracks(merged, now);

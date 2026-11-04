@@ -114,7 +114,7 @@ describe("refuteJetBySpeed — замір швидкості сильніший 
     expect(m.apply([t("borsch", "shahed")], T0 + 60_000)[0]!.type).toBe("shahed");
   });
 
-  it("швидкий замір, нема заміру чи тип від самого джерела — не чіпає", () => {
+  it("швидкий замір чи нема заміру — не чіпає; успадкований злиттям реактивний із повільним заміром — спростовано", () => {
     const m = new TypeMemory();
     const fast = { ...t("a", "reactive"), typeFromChannels: true, quality: q(390) };
     const none = { ...t("b", "reactive"), typeFromChannels: true, quality: q(null) };
@@ -122,7 +122,21 @@ describe("refuteJetBySpeed — замір швидкості сильніший 
     expect(refuteJetBySpeed([fast, none, own], m).map((x) => x.type)).toEqual([
       "reactive",
       "reactive",
-      "reactive",
+      "shahed",
     ]);
+  });
+});
+
+describe("refuteJetBySpeed — «Бандероль» і злиті звіти (04.11)", () => {
+  const q = (speedKmh: number | null) => ({ ...EMPTY_QUALITY, speedKmh });
+  it("«Бандероль» із заміряними 95 км/год — шахед; памʼять забуває і злиті id", () => {
+    const m = new TypeMemory();
+    m.note([t("old", "banderol")], T0);
+    const [out] = refuteJetBySpeed(
+      [{ ...t("head", "banderol"), quality: q(95), mergedIds: ["old"] }],
+      m,
+    );
+    expect(out!.type).toBe("shahed");
+    expect(m.apply([t("old", "shahed")], T0 + 60_000)[0]!.type).toBe("shahed");
   });
 });

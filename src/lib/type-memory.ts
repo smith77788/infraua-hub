@@ -132,13 +132,28 @@ export class TypeMemory {
  * Борщагівка — «реактивний (канал)» при заміряних Нептуном 108 км/год.
  */
 export const JET_REFUTE_KMH = 200;
+/** «Бандероль» — ~500 км/год; заміряні 95 км/год (медіана 04.11) — це не вона. */
+export const BANDEROL_REFUTE_KMH = 250;
 
+/*
+ * Застосовується двічі: до злиття звітів і ПІСЛЯ нього. Злиття
+ * (`successor-chain`, `parallel-merge`) бере найнебезпечніший тип ланцюжка,
+ * тобто знову робило реактивним те, що замір щойно спростував. Заміряно
+ * 04.11: за тиждень 127 «реактивних» із заміряною Нептуном швидкістю —
+ * медіана 109 км/год, як у шахедів (105); «Бандероль» — 95.
+ *
+ * Підтип від самого джерела треку не чіпаємо: Нептун його не дає, тож усе
+ * реактивне й «Бандероль» тут — зі слів каналів.
+ */
 export function refuteJetBySpeed(threats: readonly Threat[], memory: TypeMemory): Threat[] {
   return threats.map((t) => {
-    if (t.type !== "reactive" || !t.typeFromChannels) return t;
-    const kmh = t.quality?.speedKmh;
-    if (typeof kmh !== "number" || !(kmh > 0) || kmh >= JET_REFUTE_KMH) return t;
+    const limit =
+      t.type === "reactive" ? JET_REFUTE_KMH : t.type === "banderol" ? BANDEROL_REFUTE_KMH : 0;
+    if (!limit) return t;
+    const kmh = t.quality?.speedKmh ?? t.quality?.reportedSpeedKmh;
+    if (typeof kmh !== "number" || !(kmh > 0) || kmh >= limit) return t;
     memory.forget(t.id);
+    for (const id of t.mergedIds ?? []) memory.forget(id);
     const { typeFromChannels: _drop, ...rest } = t;
     return { ...rest, type: "shahed" };
   });

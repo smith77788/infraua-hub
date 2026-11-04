@@ -154,6 +154,42 @@ describe("тип — з рядка, а не з усього допису (про
   });
 });
 
+describe("тип — з фрази, а не з рядка (прод, 04.11)", () => {
+  const msg = (text: string) =>
+    jetMentions(parseChannelPage(page([{ at: NOW - 60_000, text }])), NOW);
+
+  it("«реактивний на Любеч, 5х БпЛА на Прилуки, ще один у бік Линовиці» — реактивний лише Любеч", () => {
+    const m = msg(
+      "⚠️ Чернігівщина: реактивний курсом на Любеч, 5х БпЛА на Прилуки , ще один у бік Линовиці.",
+    );
+    expect(applyJetType([drone("Любеч")], m)[0]!.type).toBe("reactive");
+    expect(applyJetType([drone("Прилуки")], m)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Линовиця")], m)[0]!.type).toBe("shahed");
+  });
+
+  it("«3х БпЛА на Харків! ще 2х на Слобожанське, … реактивний на Бірки» — Слобожанське не реактивне", () => {
+    const m = msg(
+      "Харківщина: 3х БпЛА на Харків! ще 2х на Слобожанське, 2х на Берестин, реактивний на Бірки",
+    );
+    expect(applyJetType([drone("Слобожанське")], m)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Берестин")], m)[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Бірки")], m)[0]!.type).toBe("reactive");
+  });
+
+  it("основа назви: «Березань» — не «Березне»; але «Броварах» — це Бровари, «Харкова» — Харків", () => {
+    expect(applyJetType([drone("Березне")], msg("реактивний на Березань"))[0]!.type).toBe("shahed");
+    expect(applyJetType([drone("Бровари")], msg("реактивний над Броварах"))[0]!.type).toBe(
+      "reactive",
+    );
+    expect(applyJetType([drone("Харків")], msg("реактивний біля Харкова"))[0]!.type).toBe(
+      "reactive",
+    );
+    expect(applyJetType([drone("Овруч")], msg("3х реактивні БпЛА курсом на Овруч"))[0]!.type).toBe(
+      "reactive",
+    );
+  });
+});
+
 describe("FPV — окремий тип, а не «шахед»", () => {
   it("текст «FPV-дрон» класифікується як FPV, хоч і містить слово «дрон»", async () => {
     const { classifyThreatType } = await import("./air");
