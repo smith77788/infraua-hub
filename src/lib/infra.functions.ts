@@ -64,6 +64,7 @@ import { COVERAGE_CAVEAT, shelterQuery, toShelter, type Shelter } from "./shelte
 import { OBLASTS, type AlertRegion } from "./alerts";
 import { categorize } from "./osm-categorize";
 import { infraLayersEnabled, publicOnly } from "./infra-gate";
+import { oblastsFromLevels, shortOblastName, ubillingFresh } from "./official-alerts";
 import {
   distanceKm,
   UA_BBOX,
@@ -639,12 +640,42 @@ function sharedCache<T>(ttlMs: number, fn: () => Promise<T>): () => Promise<T> {
 }
 
 const fetchAlertsPayload = sharedCache(15_000, async (): Promise<AlertsPayload> => {
+  /*
+   * Спершу — районні тривоги Нептуна: область «під тривогою», коли тривога на
+   * неї всю або хоч в одному її районі. ubilling застиг 02.11 19:46 (понад 30
+   * год), і карта та бот показували Рівненщину без тривоги, коли в Рівному
+   * вибухало (04.11). ubilling — лише запасний і лише свіжий.
+   */
+  const fromLevels = await fetchAlertLevelsPayload().catch(() => null);
+  const lv = fromLevels?.levels;
+  if (lv && (lv.oblasts.length || lv.raions.length || lv.updatedAt)) {
+    const active = new Set(oblastsFromLevels(lv));
+    const sinceOf = new Map<string, string>();
+    for (const a of [...lv.oblasts, ...lv.raions]) {
+      const k = shortOblastName(a.oblast || a.name);
+      const prev = sinceOf.get(k);
+      if (a.since && (!prev || a.since < prev)) sinceOf.set(k, a.since);
+    }
+    const regions = idleRegions().map((r) =>
+      active.has(r.name)
+        ? { ...r, active: true, ...(sinceOf.get(r.name) ? { since: sinceOf.get(r.name)! } : {}) }
+        : r,
+    );
+    return {
+      regions,
+      activeCount: regions.filter((r) => r.active).length,
+      fetchedAt: new Date().toISOString(),
+      degraded: false,
+    } satisfies AlertsPayload;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
     const res = await fetch(ALERT_ENDPOINT, { signal: controller.signal });
     if (!res.ok) throw new Error(`alerts ${res.status}`);
-    const data = (await res.json()) as {
+    const raw = (await res.json()) as unknown;
+    if (!ubillingFresh(raw, Date.now())) throw new Error("ubilling застиг");
+    const data = raw as {
       states?: Record<string, { alertnow?: boolean; changed?: string }>;
     };
     const states = data.states ?? {};

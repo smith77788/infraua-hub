@@ -398,3 +398,19 @@ describe("cadence «лише загострення» (опитувальник 
     );
   });
 });
+
+describe("швидкі цілі будять за часом, а не за радіусом (04.11, Рівне)", () => {
+  it("реактивний за 60 км курсом на точку при радіусі 10 км — будимо", () => {
+    const s = sub({ radiusKm: 10 });
+    const threats = [inbound("jet", "reactive", 60)];
+    const assess = personalAssessment(threats, s.point!, { radiusKm: 160, concernKm: 10 });
+    expect(decideAlert(s, assess, dangerIndex(assess), 1_000_000, 3).send).toBe(true);
+  });
+
+  it("шахед за 60 км при радіусі 10 км — як і було, не будимо", () => {
+    const s = sub({ radiusKm: 10 });
+    const threats = [inbound("sh", "shahed", 60)];
+    const assess = personalAssessment(threats, s.point!, { radiusKm: 160, concernKm: 10 });
+    expect(decideAlert(s, assess, dangerIndex(assess), 1_000_000, 12).send).toBe(false);
+  });
+});

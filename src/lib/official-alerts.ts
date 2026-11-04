@@ -68,3 +68,46 @@ export function stillAlerting(touched: readonly string[], active: readonly strin
   const set = new Set(active);
   return touched.filter((o) => set.has(o)).sort();
 }
+
+/**
+ * Області під тривогою — з районних тривог Нептуна (`AlertLevels`).
+ *
+ * Чому не ubilling. 04.11 о 04:23 за Києвом бот написав «ПЕРЕДТРИВОГА —
+ * офіційну ще не оголошували — Рівненщина», хоча тривога в Рівненському
+ * районі тривала з 03:30, а о 04:21 у Рівному були вибухи. Причина: кеш
+ * ubilling застиг — `cachedat: 2026-11-02 19:46`, понад 30 годин, і
+ * Рівненська в ньому була «без тривоги». Нептун віддає тривоги по районах із
+ * часом початку в реальному часі (той самий потік, що й цілі).
+ *
+ * Область — «під тривогою», коли тривога на всю область АБО хоч в одному її
+ * районі: так само рахував ubilling, і на цьому тримаються відбій у каналі й
+ * «у мами тривога».
+ */
+export function oblastsFromLevels(levels: {
+  oblasts: readonly { oblast: string; name: string }[];
+  raions: readonly { oblast: string }[];
+}): string[] {
+  const out = new Set<string>();
+  for (const o of levels.oblasts) out.add(shortOblastName(o.oblast || o.name));
+  for (const r of levels.raions) if (r.oblast) out.add(shortOblastName(r.oblast));
+  return [...out].sort();
+}
+
+/** Скільки може бути старим знімок ubilling, щоб йому ще вірити. */
+export const UBILLING_MAX_STALE_MS = 20 * 60_000;
+
+/**
+ * Чи свіжий знімок ubilling: `cachedat` — київський час без зони
+ * («2026-11-02 19:46:42»). Нема поля чи не розібрали — вважаємо несвіжим:
+ * застиглий перелік тривог, прочитаний як справжній, і дав «офіційну ще не
+ * оголошували» під час тривоги.
+ */
+export function ubillingFresh(payload: unknown, now: number): boolean {
+  const at = (payload as { cachedat?: unknown } | null)?.cachedat;
+  if (typeof at !== "string") return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(at);
+  if (!m) return false;
+  // Київ — UTC+2 або UTC+3; беремо гірший (давніший) варіант, UTC+2.
+  const utc = Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]! - 2, +m[5]!, +(m[6] ?? 0));
+  return now - utc <= UBILLING_MAX_STALE_MS + 3_600_000;
+}

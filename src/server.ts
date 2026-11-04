@@ -67,6 +67,7 @@ import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { concernRadiusKm } from "./lib/advisory";
+import { FAST_SCAN_KM, FAST_TYPES, FAST_WARN_MIN } from "./lib/subscribers";
 import { SpeedLedger } from "./lib/speed-ledger";
 import { RaidHistory } from "./lib/raid-history";
 import { AlertOutcomes } from "./lib/alert-outcome";
@@ -285,7 +286,12 @@ import {
 import { alertPhase, leadMinutes, renderOfficialConfirmed, type AlertPhase } from "./lib/pre-alert";
 import { roleOfSource } from "./lib/osint-sources";
 import { updateHistory, type FixPoint } from "./lib/track-history";
-import { parseOfficialAlerts, stillAlerting } from "./lib/official-alerts";
+import {
+  oblastsFromLevels,
+  parseOfficialAlerts,
+  stillAlerting,
+  ubillingFresh,
+} from "./lib/official-alerts";
 import { channelLink, inviteLink, parseStartPayload, renderInvite } from "./lib/referral";
 import {
   clampRadius,
@@ -915,6 +921,18 @@ let alertsCache: { at: number; regions: string[] } | null = null;
 async function fetchOfficialAlerts(maxAgeMs = 25_000): Promise<string[] | null> {
   const now = Date.now();
   if (alertsCache && now - alertsCache.at < maxAgeMs) return alertsCache.regions;
+  /*
+   * Спершу — районні тривоги Нептуна (живий потік або REST): вони в реальному
+   * часі й з районами. ubilling — лише запасний і лише свіжий: 04.11 його кеш
+   * застиг на 30+ годин, і бот писав «офіційну ще не оголошували» під час
+   * тривоги в Рівному (див. `oblastsFromLevels`).
+   */
+  const levels = await fetchAlertLevels(maxAgeMs).catch(() => null);
+  if (levels && (levels.oblasts.length || levels.raions.length || levels.updatedAt)) {
+    const regions = oblastsFromLevels(levels);
+    alertsCache = { at: now, regions };
+    return regions;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
@@ -922,7 +940,9 @@ async function fetchOfficialAlerts(maxAgeMs = 25_000): Promise<string[] | null> 
       signal: controller.signal,
     });
     if (!res.ok) return null;
-    const regions = parseOfficialAlerts(await res.json());
+    const body = (await res.json()) as unknown;
+    if (!ubillingFresh(body, now)) return null; // застиглий перелік — «не знаємо»
+    const regions = parseOfficialAlerts(body);
     if (regions === null) return null;
     alertsCache = { at: now, regions };
     return regions;
@@ -4539,7 +4559,28 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
       continue;
     }
 
-    const assess = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
+    // Огляд ширший за радіус людини: швидкі цілі будять за часом до підльоту
+    // (`FAST_WARN_MIN`), тож їх треба бачити далі. Коридор «на мене» — за
+    // радіусом людини, як і було.
+    const near = personalAssessment(threats, point, { radiusKm: sub.radiusKm, motionOf });
+    const wide =
+      sub.radiusKm < FAST_SCAN_KM
+        ? personalAssessment(threats, point, {
+            radiusKm: FAST_SCAN_KM,
+            concernKm: concernRadiusKm(sub.radiusKm),
+            motionOf,
+          })
+        : near;
+    const fastComing = wide.nearest.some(
+      (n) =>
+        n.inbound &&
+        n.distanceKm > sub.radiusKm &&
+        FAST_TYPES.has(n.threat.type ?? "unknown") &&
+        (n.etaRangeMin?.[0] ?? n.etaMin ?? Infinity) <= FAST_WARN_MIN,
+    );
+    // Широкий огляд — лише коли в ньому є швидка ціль на точку: шахед за
+    // 100 км не має піднімати рівень людині з радіусом 10 км.
+    const assess = fastComing ? wide : near;
     const danger = dangerIndex(assess);
     ownLevel.set(sub.chatId, danger.level);
     if (danger.level === "shelter") {

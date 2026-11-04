@@ -273,6 +273,19 @@ export interface AlertDecision {
   band?: number | null;
 }
 
+/** Швидкі цілі: будимо за часом до підльоту, а не за радіусом. */
+export const FAST_TYPES: ReadonlySet<string> = new Set([
+  "reactive",
+  "banderol",
+  "cruise",
+  "missile",
+  "ballistic",
+]);
+/** За скільки хвилин до підльоту швидка ціль будить незалежно від радіуса. */
+export const FAST_WARN_MIN = 15;
+/** Радіус огляду для швидких: реактивний за 15 хв пролітає ~140 км. */
+export const FAST_SCAN_KM = 160;
+
 /** Кільця близькості, км: що ближче — то більший номер кільця. */
 export const BANDS_KM = [50, 25, 10] as const;
 /** 0 — далі за 50 км, 1 — ≤50, 2 — ≤25, 3 — ≤10. */
@@ -324,7 +337,21 @@ export function decideAlert(
 
   // Беремо лише те, що йде НА точку і в межах радіуса: ціль, що віддаляється,
   // не привід будити, навіть якщо вона поруч.
-  const inbound = assess.nearest.filter((n) => n.inbound && n.distanceKm <= sub.radiusKm);
+  /*
+   * Радіус — у кілометрах, але для швидкої цілі кілометри не дають часу. 04.11
+   * у Рівному: радіус власника 10 км, реактивний (~550 км/год) проходить 10 км
+   * за хвилину, і попередження прийшло з «0 км, 0–7 хв» — коли ціль уже над
+   * містом, хоча система вела її від Сарн/Костополя за пів години до того.
+   * Тому швидкі типи будять за ЧАСОМ: ≤ `FAST_WARN_MIN` хв до підльоту, хоч
+   * би якою була відстань. Шахеди — як і було, за радіусом.
+   */
+  const inbound = assess.nearest.filter(
+    (n) =>
+      n.inbound &&
+      (n.distanceKm <= sub.radiusKm ||
+        (FAST_TYPES.has(n.threat.type ?? "unknown") &&
+          (n.etaRangeMin?.[0] ?? n.etaMin ?? Infinity) <= FAST_WARN_MIN)),
+  );
   if (inbound.length === 0) {
     return { send: false, reason: "нічого не йде на вашу точку", ids: [], level };
   }

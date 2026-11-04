@@ -53,3 +53,26 @@ describe("stillAlerting", () => {
     expect(stillAlerting(["Сумщина", "Харківщина"], [])).toEqual([]);
   });
 });
+
+describe("тривоги з районів Нептуна; застиглий ubilling (04.11, Рівне)", () => {
+  it("область під тривогою, коли тривога хоч в одному її районі", async () => {
+    const { oblastsFromLevels } = await import("./official-alerts");
+    const out = oblastsFromLevels({
+      oblasts: [{ oblast: "Луганська область", name: "Луганська область" }],
+      raions: [
+        { oblast: "Рівненська область" },
+        { oblast: "Рівненська область" },
+        { oblast: "Житомирська область" },
+      ],
+    });
+    expect(out).toEqual(["Житомирщина", "Луганщина", "Рівненщина"]);
+  });
+
+  it("ubilling із кешем 30-годинної давнини — не свіжий; щойно оновлений — свіжий", async () => {
+    const { ubillingFresh } = await import("./official-alerts");
+    const now = Date.parse("2026-11-04T02:29:00Z");
+    expect(ubillingFresh({ cachedat: "2026-11-02 19:46:42" }, now)).toBe(false);
+    expect(ubillingFresh({ cachedat: "2026-11-04 04:25:00" }, now)).toBe(true);
+    expect(ubillingFresh({}, now)).toBe(false);
+  });
+});
