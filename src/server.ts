@@ -444,7 +444,7 @@ async function health(request: Request): Promise<Response> {
    * одиночне повідомлення «непідтвердженим». Перелік каналів у ніші живий, тож
    * без цього рядка через місяць буде те саме. Порожній масив — усе впізнано.
    */
-  const { unknownChannelReport } = await import("./lib/infra.functions");
+  const { unknownChannelReport } = (await import("./lib/infra.functions")).infraShared();
   /*
    * Звідки взявся шлях до сховища — і чи переживе він редеплой.
    *
@@ -484,7 +484,7 @@ async function health(request: Request): Promise<Response> {
     boots: bootLogReport(),
     neptunStream: neptunStreamStatus(),
     // Порожній Нептун на тлі живих каналів — його збій, а не тиша (#133).
-    neptunGap: (await import("./lib/infra.functions")).neptunGap(),
+    neptunGap: (await import("./lib/infra.functions")).infraShared().neptunGap(),
     // Чи знайдено шрифт картинок: без нього з постів зникав увесь текст.
     imageFonts: await (await import("./lib/image-fonts")).fontStatus(),
     // Яка частка доставлених попереджень справдилась: ціль пролетіла в радіусі
@@ -502,7 +502,7 @@ async function health(request: Request): Promise<Response> {
       zonesAgeSec: raionZonesCache ? Math.round((Date.now() - raionZonesCache.at) / 1000) : null,
     },
     typeMemory: {
-      tracks: (await import("./lib/infra.functions")).typeMemoryState().length,
+      tracks: (await import("./lib/infra.functions")).infraShared().typeMemoryState().length,
       restoredOnStart: typeMemoryStats.restored,
       lastCleanupAt: typeMemoryStats.lastCleanupAt,
       lastCleanupRemoved: typeMemoryStats.lastCleanupRemoved,
@@ -538,7 +538,7 @@ async function health(request: Request): Promise<Response> {
  * спільний кеш (`threatsPayloadCached`) не дає N вкладок множити роботу.
  */
 async function threatStream(request: Request): Promise<Response> {
-  const { threatsPayloadCached } = await import("./lib/infra.functions");
+  const { threatsPayloadCached } = (await import("./lib/infra.functions")).infraShared();
   const encoder = new TextEncoder();
   let closed = false;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -569,7 +569,12 @@ async function threatStream(request: Request): Promise<Response> {
         try {
           const payload = await threatsPayloadCached(1_500);
           const sig = payload.threats
-            .map((t) => `${t.id}:${t.lat.toFixed(4)}:${t.lon.toFixed(4)}`)
+            // Тип теж: уточнення «шахед → реактивний» без руху цілі має дійти
+            // до карти одразу, а не з наступним зрушенням.
+            .map(
+              (t) =>
+                `${t.id}:${t.lat.toFixed(4)}:${t.lon.toFixed(4)}:${t.type ?? ""}:${t.typeFromChannels ? 1 : 0}`,
+            )
             .join("|");
           if (sig !== lastSig) {
             lastSig = sig;
@@ -1041,7 +1046,7 @@ async function fetchAlertZones(maxAgeMs = 25_000): Promise<AlertRing[]> {
 async function fetchThreatsCached(maxAgeMs: number): Promise<Threat[]> {
   // ЄДИНЕ джерело з застосунком: той самий кеш, що читає карта (getThreats) і
   // публічний віджет. Так канал і мапа бачать один знімок, а не кожен свій.
-  const { neptunThreatsCached } = await import("./lib/infra.functions");
+  const { neptunThreatsCached } = (await import("./lib/infra.functions")).infraShared();
   // Памʼять підтипів — ДО першого кадру: інакше після деплою реактивні
   // малювались би шахедами, доки канали не назвуть їх знову.
   await hydrateTypeMemory();
@@ -1077,7 +1082,7 @@ async function hydrateTypeMemory(): Promise<void> {
   const raw = await readMarker(TYPE_MEMORY_MARKER);
   if (!raw) return;
   try {
-    const { restoreTypeMemory } = await import("./lib/infra.functions");
+    const { restoreTypeMemory } = (await import("./lib/infra.functions")).infraShared();
     typeMemoryStats.restored = restoreTypeMemory(JSON.parse(raw), Date.now());
   } catch {
     // Битий файл — порожня памʼять: тип знову дадуть згадки каналів.
@@ -1111,7 +1116,9 @@ async function saveTypeMemory(now: number): Promise<void> {
   const daily = day !== typeMemoryStats.cleanupDay;
   if (!daily && now - typeMemorySavedAt < TYPE_MEMORY_SAVE_EVERY_MS) return;
   typeMemorySavedAt = now;
-  const { cleanupTypeMemory, typeMemoryState } = await import("./lib/infra.functions");
+  const { cleanupTypeMemory, typeMemoryState } = (
+    await import("./lib/infra.functions")
+  ).infraShared();
   if (daily) {
     const { removed, kept } = cleanupTypeMemory(now);
     typeMemoryStats.cleanupDay = day;
@@ -3120,7 +3127,7 @@ async function sendShelters(
   try {
     // Динамічний імпорт, як і для решти даних інфраструктури: модуль тягне за
     // собою чимало, а вебхук має лишатися легким, поки цього не попросили.
-    const { fetchShelters } = await import("./lib/infra.functions");
+    const { fetchShelters } = (await import("./lib/infra.functions")).infraShared();
     const payload = await fetchShelters(point.lat, point.lon);
     const near = nearestShelters(point, payload.shelters, { limit: 4 });
 

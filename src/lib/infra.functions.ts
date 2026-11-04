@@ -1321,13 +1321,14 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
 }
 
 export const getThreats = createServerFn({ method: "GET" }).handler(async () => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-  try {
-    return await buildThreatsPayload(controller.signal);
-  } finally {
-    clearTimeout(timer);
-  }
+  /*
+   * Через СПІЛЬНИЙ екземпляр (`infraShared`), а не через локальні змінні
+   * цієї копії модуля: збірка дає server function окрему копію файлу зі
+   * своєю памʼяттю підтипів і кешами, і опитування карти та живий потік (SSE)
+   * віддавали різні типи тих самих цілей (знімки користувача 03.11 0:36:
+   * та сама ціль — «Ш» в одному кадрі, «РШ?»/«Б?» в наступному).
+   */
+  return infraShared().threatsPayloadCached(1_500);
 });
 
 /**
@@ -2242,3 +2243,35 @@ export const getShelters = createServerFn({ method: "GET" })
     };
   })
   .handler(async ({ data }): Promise<SheltersPayload> => fetchSheltersBox(data));
+
+/*
+ * ── Один стан на процес ─────────────────────────────────────────────────────
+ *
+ * Збірка TanStack Start кладе цей файл у бандл ДВІЧІ: звичайним модулем (його
+ * імпортує `server.ts` — SSE, бот, канал) і копією для server functions
+ * (`createServerRpc`). У кожної копії — свої `let`: памʼять підтипів, згадки
+ * каналів, кеш Нептуна, треки каналів. Заміряно 03.11: дві копії в
+ * `.output/server/_ssr/infra.functions-*.mjs`, і карта, що отримує кадри то з
+ * SSE, то з опитування, показувала ту саму ціль то шахедом, то «РШ?».
+ *
+ * Перша копія, що завантажилась, реєструє свої функції в процесі; усі
+ * споживачі конвеєра цілей ідуть через `infraShared()`, тож стан — один.
+ */
+const SHARED_API = {
+  threatsPayloadCached,
+  buildThreatsPayload,
+  neptunThreatsCached,
+  neptunGap,
+  channelAirActivity,
+  typeMemoryState,
+  restoreTypeMemory,
+  cleanupTypeMemory,
+  unknownChannelReport,
+  fetchShelters,
+};
+export type InfraSharedApi = typeof SHARED_API;
+const REGISTRY = globalThis as { __infrauaInfraApi?: InfraSharedApi };
+REGISTRY.__infrauaInfraApi ??= SHARED_API;
+export function infraShared(): InfraSharedApi {
+  return REGISTRY.__infrauaInfraApi ?? SHARED_API;
+}
