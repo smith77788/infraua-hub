@@ -67,7 +67,7 @@ import { decideAllClear, renderPersonalAllClear } from "./lib/all-clear";
 import { buildCalmProfile, renderCalmHours } from "./lib/calm-hours";
 import { fixedAtMs } from "./lib/position-age";
 import { concernRadiusKm } from "./lib/advisory";
-import { FAST_SCAN_KM, FAST_TYPES, FAST_WARN_MIN } from "./lib/subscribers";
+import { FAST_SCAN_KM, fastWarnEligible } from "./lib/subscribers";
 import { SpeedLedger } from "./lib/speed-ledger";
 import { RaidHistory } from "./lib/raid-history";
 import { AlertOutcomes } from "./lib/alert-outcome";
@@ -4572,11 +4572,7 @@ async function personalAlertSweep(): Promise<AlertSweepResult> {
           })
         : near;
     const fastComing = wide.nearest.some(
-      (n) =>
-        n.inbound &&
-        n.distanceKm > sub.radiusKm &&
-        FAST_TYPES.has(n.threat.type ?? "unknown") &&
-        (n.etaRangeMin?.[0] ?? n.etaMin ?? Infinity) <= FAST_WARN_MIN,
+      (n) => n.inbound && n.distanceKm > sub.radiusKm && fastWarnEligible(n, now),
     );
     // Широкий огляд — лише коли в ньому є швидка ціль на точку: шахед за
     // 100 км не має піднімати рівень людині з радіусом 10 км.

@@ -399,6 +399,34 @@ describe("cadence «лише загострення» (опитувальник 
   });
 });
 
+describe("швидка ціль із застиглою позицією не будить (06.11, Рівне)", () => {
+  const NOW = Date.parse("2026-11-06T18:18:00Z");
+  const staleReactive = (kmSouth: number, ageMin: number): Threat => ({
+    ...inbound("jet", "reactive", kmSouth),
+    lastSeen: new Date(NOW - ageMin * 60_000).toISOString(),
+  });
+
+  it("реактивний за 18 км поза радіусом 10 км, позиція 7 хв тому — не будимо", () => {
+    const s = sub({ radiusKm: 10 });
+    const assess = personalAssessment([staleReactive(18, 7)], s.point!, {
+      radiusKm: 160,
+      concernKm: 10,
+      now: NOW,
+    });
+    expect(decideAlert(s, assess, dangerIndex(assess), NOW, 20).send).toBe(false);
+  });
+
+  it("той самий реактивний зі свіжою позицією (1 хв) — будимо", () => {
+    const s = sub({ radiusKm: 10 });
+    const assess = personalAssessment([staleReactive(18, 1)], s.point!, {
+      radiusKm: 160,
+      concernKm: 10,
+      now: NOW,
+    });
+    expect(decideAlert(s, assess, dangerIndex(assess), NOW, 20).send).toBe(true);
+  });
+});
+
 describe("швидкі цілі будять за часом, а не за радіусом (04.11, Рівне)", () => {
   it("реактивний за 60 км курсом на точку при радіусі 10 км — будимо", () => {
     const s = sub({ radiusKm: 10 });

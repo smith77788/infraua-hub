@@ -19,6 +19,7 @@ import type { DangerIndex, DangerLevel, PersonalAssessment, PersonalThreat } fro
 import type { ThreatType } from "./air";
 import { kyivHour } from "./kyiv";
 import { withinLead } from "./lead-threshold";
+import { fixAgeMs } from "./position-age";
 import type { MyPlace, PlaceAlertState } from "./places-mine";
 import type { PersonalStats } from "./personal-stats";
 import type { LiveCard } from "./live-card";
@@ -283,6 +284,20 @@ export const FAST_TYPES: ReadonlySet<string> = new Set([
 ]);
 /** За скільки хвилин до підльоту швидка ціль будить незалежно від радіуса. */
 export const FAST_WARN_MIN = 15;
+/*
+ * Будити за часом — лише на СВІЖІЙ позиції. Реактивний (~550 км/год) за
+ * хвилину проходить ~9 км, тож позиція 7 хв тому — це ±64 км невідомості, і
+ * «18 км, 0–10 хв, в укриття» на ній фікція (хибне «в укриття» по Рівному,
+ * 06.11: ціль каналу ±5 км, позиція 7 хв тому). За межами радіуса швидка
+ * ціль піднімає рівень, лише коли її позиція не старша за це.
+ */
+export const FAST_FRESH_MS = 3 * 60_000;
+export function fastWarnEligible(n: PersonalThreat, now: number): boolean {
+  if (!FAST_TYPES.has(n.threat.type ?? "unknown")) return false;
+  if ((n.etaRangeMin?.[0] ?? n.etaMin ?? Infinity) > FAST_WARN_MIN) return false;
+  const age = fixAgeMs(n.threat, now);
+  return age === null || age <= FAST_FRESH_MS;
+}
 /** Радіус огляду для швидких: реактивний за 15 хв пролітає ~140 км. */
 export const FAST_SCAN_KM = 160;
 
@@ -346,11 +361,7 @@ export function decideAlert(
    * би якою була відстань. Шахеди — як і було, за радіусом.
    */
   const inbound = assess.nearest.filter(
-    (n) =>
-      n.inbound &&
-      (n.distanceKm <= sub.radiusKm ||
-        (FAST_TYPES.has(n.threat.type ?? "unknown") &&
-          (n.etaRangeMin?.[0] ?? n.etaMin ?? Infinity) <= FAST_WARN_MIN)),
+    (n) => n.inbound && (n.distanceKm <= sub.radiusKm || fastWarnEligible(n, now)),
   );
   if (inbound.length === 0) {
     return { send: false, reason: "нічого не йде на вашу точку", ids: [], level };
