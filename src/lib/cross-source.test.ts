@@ -4,6 +4,8 @@ import type { Threat } from "./air";
 import {
   corroborate,
   corroborationLine,
+  independentTargets,
+  INDEP_MIN_CHANNELS,
   MATCH_WINDOW_MS,
   MAX_MATCH_KM,
   withCorroboration,
@@ -154,5 +156,49 @@ describe("corroborationLine", () => {
     expect(line).toContain("3");
     expect(line).toContain("12 км");
     expect(line).toContain("другого агрегатора");
+  });
+});
+
+describe("independentTargets — окремі цілі з другого агрегатора (18.11)", () => {
+  // Точка ~200 км від Києва, де цілі Нептуна немає.
+  const FAR = { lat: 48.5, lon: 35.0 };
+  const far = (channel: string, kmNorth = 0, agoMin = 5) => ({
+    lat: FAR.lat + kmNorth / 111.32,
+    lon: FAR.lon,
+    channel,
+    at: NOW - agoMin * 60_000,
+    name: "Павлоград",
+  });
+
+  it("≥2 різні канали в одному місці без цілі Нептуна поруч → окрема ціль", () => {
+    const out = independentTargets([], [far("kudy_letyt"), far("radar_top_ua", 3)], NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe("Павлоград");
+    expect(out[0]!.sources).toEqual(["kudy_letyt", "radar_top_ua"]);
+    expect(out[0]!.type).toBe("unknown");
+    // Без курсу — щоб не породжувати особистих «в укриття».
+    expect(out[0]!.heading).toBeUndefined();
+  });
+
+  it("один канал цілі не створює (поріг ≥2)", () => {
+    expect(INDEP_MIN_CHANNELS).toBe(2);
+    expect(independentTargets([], [far("kudy_letyt"), far("kudy_letyt", 2)], NOW)).toHaveLength(0);
+  });
+
+  it("поруч уже є ціль Нептуна — не дублюємо", () => {
+    const neptun = threat({ lat: FAR.lat, lon: FAR.lon, id: "n1" });
+    expect(independentTargets([neptun], [far("a"), far("b", 3)], NOW)).toHaveLength(0);
+  });
+
+  it("застарілі повідомлення (поза вікном) не стають ціллю", () => {
+    const old = MATCH_WINDOW_MS / 60_000 + 10;
+    expect(independentTargets([], [far("a", 0, old), far("b", 3, old)], NOW)).toHaveLength(0);
+  });
+
+  it("тип збагачується з тексту Telegram, коли відомий", () => {
+    const out = independentTargets([], [far("a"), far("b", 3)], NOW, (n) =>
+      n === "Павлоград" ? "reactive" : undefined,
+    );
+    expect(out[0]!.type).toBe("reactive");
   });
 });

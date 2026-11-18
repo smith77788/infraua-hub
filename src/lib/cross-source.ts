@@ -40,7 +40,7 @@
  * в кількості каналів, які взагалі існують.
  */
 
-import type { Threat } from "./air";
+import type { Threat, ThreatType } from "./air";
 import { distanceKm } from "./infra-types";
 import { nowRadiusKm } from "./position-age";
 
@@ -52,6 +52,8 @@ export interface ChannelReport {
   channel: string;
   /** Коли повідомлено, мс. */
   at: number;
+  /** Назва пункту (з detoyshahed `location_name`), для підпису окремої цілі. */
+  name?: string;
 }
 
 export interface Corroboration {
@@ -140,4 +142,113 @@ export function corroborationLine(c: Corroboration | undefined): string | null {
   const n = c.channels.length;
   const word = n === 1 ? "канал" : n < 5 ? "канали" : "каналів";
   return `${n} незалежн${n === 1 ? "ий" : "і"} ${word} другого агрегатора в радіусі ${c.withinKm} км`;
+}
+
+/*
+ * ── Окремі цілі з ДРУГОГО агрегатора, яких немає в першому ───────────────────
+ *
+ * `corroborate` лише дописує канали до цілей Нептуна, а `withCorroboration`
+ * їх домішує — нової цілі не створюють. Тому картина трималась ВИКЛЮЧНО на
+ * Нептуні: коли його покриття провисає, consola показує жменю цілей, хоч
+ * detoyshahed у ту саму мить зводить з каналів сотню повідомлень (заміряно
+ * 18.11 01:34 UTC: Нептун 18 цілей, detoyshahed 126 інцидентів, і 5 місць
+ * бачили ≥2 незалежні канали, а Нептун — жодного). Користувач: «система
+ * давить тільки два джерела і не відображає всієї картини».
+ *
+ * Тут із тих повідомлень роблимо ОКРЕМІ цілі, але суворо:
+ *
+ * 1. кластер повідомлень за `INDEP_CLUSTER_KM` — одне місце;
+ * 2. у ньому ≥ `INDEP_MIN_CHANNELS` РІЗНИХ канали (так само, як `corroborated`
+ *    у channel-track): один канал цілі не створює — відсікає і шум, і
+ *    alert-ботів, що пишуть самотужки;
+ * 3. жодної наявної цілі (Нептуна чи треку каналів) у `INDEP_MATCH_KM` — щоб
+ *    не дублювати вже показане.
+ *
+ * Курсу в цих цілей немає (detoyshahed його не дає), тож особистих «в укриття»
+ * вони не породжують — лише доповнюють карту для ситуаційної обізнаності.
+ */
+export const INDEP_CLUSTER_KM = 10;
+export const INDEP_MATCH_KM = 15;
+export const INDEP_MIN_CHANNELS = 2;
+
+export function independentTargets(
+  existing: readonly Threat[],
+  reports: readonly ChannelReport[],
+  now: number,
+  typeOf?: (name: string) => ThreatType | undefined,
+): Threat[] {
+  const fresh = reports.filter(
+    (r) =>
+      Number.isFinite(r.lat) &&
+      Number.isFinite(r.lon) &&
+      Number.isFinite(r.at) &&
+      r.at <= now &&
+      now - r.at <= MATCH_WINDOW_MS &&
+      r.channel.length > 0,
+  );
+  interface Cluster {
+    lat: number;
+    lon: number;
+    channels: Set<string>;
+    names: Map<string, number>;
+    latest: number;
+    first: number;
+    n: number;
+  }
+  const clusters: Cluster[] = [];
+  for (const r of fresh) {
+    let c = clusters.find((cl) => distanceKm(cl, r) <= INDEP_CLUSTER_KM);
+    if (!c) {
+      c = {
+        lat: r.lat,
+        lon: r.lon,
+        channels: new Set(),
+        names: new Map(),
+        latest: r.at,
+        first: r.at,
+        n: 0,
+      };
+      clusters.push(c);
+    }
+    c.channels.add(r.channel);
+    if (r.name) c.names.set(r.name, (c.names.get(r.name) ?? 0) + 1);
+    c.latest = Math.max(c.latest, r.at);
+    c.first = Math.min(c.first, r.at);
+    // Центр — середнє, щоб кластер не «тягнувся» за першим повідомленням.
+    c.lat = (c.lat * c.n + r.lat) / (c.n + 1);
+    c.lon = (c.lon * c.n + r.lon) / (c.n + 1);
+    c.n++;
+  }
+  const out: Threat[] = [];
+  for (const c of clusters) {
+    if (c.channels.size < INDEP_MIN_CHANNELS) continue;
+    if (existing.some((t) => Number.isFinite(t.lat) && distanceKm(t, c) <= INDEP_MATCH_KM))
+      continue;
+    if (out.some((t) => distanceKm(t, c) <= INDEP_MATCH_KM)) continue;
+    const name = [...c.names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Ціль";
+    const channels = [...c.channels].sort();
+    const iso = new Date(c.latest).toISOString();
+    out.push({
+      id: `osint:${c.lat.toFixed(2)}:${c.lon.toFixed(2)}:${c.first}`,
+      name,
+      lat: c.lat,
+      lon: c.lon,
+      source: channels[0]!,
+      sources: channels,
+      count: 1,
+      since: iso,
+      lastSeen: iso,
+      expires: "",
+      type: typeOf?.(name) ?? "unknown",
+      quality: {
+        // Незалежний OSINT без треку — ширший розкид, позиція приблизна.
+        uncertaintyKm: 12,
+        position: "approx",
+        lifecycle: "uncertain",
+        presumptiveCourse: true,
+        speedKmh: null,
+      },
+    });
+  }
+  return out;
 }

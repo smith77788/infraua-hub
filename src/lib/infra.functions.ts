@@ -15,7 +15,12 @@ function launchSourceOf(channel: string | undefined): { ru: boolean; home?: stri
 import { parsePowerLines, powerLineQuery, toEndpoints, type PowerLine } from "./power-grid";
 import { formatVoltage, highestVoltage, plantOutputMw } from "./osm-tags";
 import { pendingTiles, tileBBox, tileGrid, tileKey, type Tile } from "./tiles";
-import { corroborate, withCorroboration, type ChannelReport } from "./cross-source";
+import {
+  corroborate,
+  independentTargets,
+  withCorroboration,
+  type ChannelReport,
+} from "./cross-source";
 
 import {
   classifyThreatType,
@@ -1189,6 +1194,7 @@ export async function fetchChannelReports(signal?: AbortSignal): Promise<Channel
         coordinates?: { lat: number; lng: number };
         channel_name?: string;
         created_at?: string;
+        location_name?: string;
       }[];
     };
     const out: ChannelReport[] = [];
@@ -1203,7 +1209,7 @@ export async function fetchChannelReports(signal?: AbortSignal): Promise<Channel
       }
       const at = Date.parse(it.created_at ?? "");
       if (!Number.isFinite(at)) continue;
-      out.push({ lat, lon, channel, at });
+      out.push({ lat, lon, channel, at, ...(it.location_name ? { name: it.location_name } : {}) });
     }
     rememberUnknownChannels(out);
     reportsCache = { at: now, reports: out };
@@ -1247,9 +1253,21 @@ export async function buildThreatsPayload(signal: AbortSignal): Promise<ThreatsP
          */
         const reports = await fetchChannelReports(signal);
         const now = Date.now();
-        const threats = reports.length
+        const corr = reports.length
           ? withCorroboration(neptun, corroborate(neptun, reports, now))
           : neptun;
+        // Окремі цілі з детойшахеда, яких Нептун не бачить, але ≥2 канали
+        // бачать (див. `independentTargets`): так картина не тримається лише
+        // на Нептуні. Тип збагачуємо з тексту Telegram за назвою пункту.
+        const typeByPlace = reports.length
+          ? await fetchThreatTypesByPlace(
+              [...new Set(reports.map((r) => r.name ?? ""))].filter(Boolean),
+            )
+          : new Map();
+        const extra = reports.length
+          ? independentTargets(corr, reports, now, (n) => typeByPlace.get(n))
+          : [];
+        const threats = [...corr, ...extra];
         return {
           threats, // вже дедупльовано джерелом — не зливаємо повторно
           fetchedAt: new Date().toISOString(),
