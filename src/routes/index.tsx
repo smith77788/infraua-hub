@@ -575,6 +575,41 @@ function Console() {
     };
   }, [queryClient]);
 
+  /*
+   * Повернення в застосунок освіжає ВСІ джерела.
+   *
+   * Міні-застосунок у Telegram (і будь-який мобільний webview) «засинає», коли
+   * його згортають чи блокують телефон: таймери react-query (`refetchInterval`)
+   * стають на паузу, а подія повернення фокуса в Telegram спрацьовує не
+   * завжди. Через це при поверненні всі фонові джерела показували старий час
+   * оновлення — крім повітряних цілей, що йдуть окремим потоком (SSE) і
+   * перепідключаються самі. Користувач читав панель як «працює лише одне-два
+   * джерела, решта не оновлюється» (18.11), хоча на боці сервера всі фіди живі.
+   *
+   * Тому при кожному поверненні видимості силувано перезапитуємо всі активні
+   * запити — не частіше ніж раз на 15 с, щоб швидке перемикання не било по
+   * джерелах роєм запитів.
+   */
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let last = 0;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - last < 15_000) return;
+      last = now;
+      void queryClient.invalidateQueries();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("pageshow", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("pageshow", refresh);
+    };
+  }, [queryClient]);
+
   const effectiveAir = airPayload ?? cachedAir?.data;
   const threats = useMemo(() => effectiveAir?.threats ?? [], [effectiveAir]);
   // Пуски — ще на тій території: звідки й куди вже могло долетіти.
